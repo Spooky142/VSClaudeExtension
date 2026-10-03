@@ -6,7 +6,7 @@
     <LangVersion>12</LangVersion>
     <Nullable>enable</Nullable>
     <RootNamespace>ClaudeForVS</RootNamespace>
-    <AssemblyVersion>0.3.8.0</AssemblyVersion>
+    <AssemblyVersion>0.3.9.0</AssemblyVersion>
     <FileVersion>0.3.5.0</FileVersion>
 
     <!-- VSIX packaging -->

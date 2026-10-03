@@ -42,6 +42,30 @@
       </Setter>
     </Style>
 
+    <!-- Whole-card button for a saved chat in the History tab. -->
+    <Style x:Key="SessionRow" TargetType="Button">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="10,8">
+              <ContentPresenter HorizontalAlignment="Stretch" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <!-- One line of tool output or diff. -->
     <DataTemplate x:Key="DiffLineTemplate">
       <Border x:Name="Bg" Padding="8,0">
@@ -62,8 +86,8 @@
 
     <!-- ===== Transcript templates ===== -->
     <DataTemplate x:Key="UserTemplate">
-      <!-- Right-aligned so the bubble shrinks to fit short messages and grows (up to the margin) for long ones. -->
-      <Border Margin="48,10,0,6" HorizontalAlignment="Right" CornerRadius="12,12,4,12" Padding="12,8"
+      <!-- Left-anchored 48px in from the edge; shrinks to fit short messages and grows rightward for long ones. -->
+      <Border Margin="48,10,0,6" HorizontalAlignment="Left" CornerRadius="12,12,4,12" Padding="12,8"
               Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
         <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
                          Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
@@ -209,12 +233,7 @@
   <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
-      <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
     <!-- Header: repository and model chips, actions; then the always-visible usage strip -->
@@ -292,7 +311,86 @@
         </DockPanel>
       </Grid>
     </Border>
+
+    <!-- Tabs: the current chat, or previously saved ones -->
+    <Border Margin="10,0,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+            Background="{StaticResource SubtleFill}" Padding="1">
+      <UniformGrid Rows="1">
+        <RadioButton GroupName="ChatTabs" Style="{StaticResource SegmentRadio}" Content="Chat" IsChecked="{Binding ShowChat, Mode=TwoWay}" />
+        <RadioButton GroupName="ChatTabs" Style="{StaticResource SegmentRadio}" Content="History" IsChecked="{Binding ShowHistory, Mode=TwoWay}" />
+      </UniformGrid>
+    </Border>
     </StackPanel>
+
+    <!-- History tab: saved chats, newest first. Click one to continue it; the bin removes it. -->
+    <Grid Grid.Row="1" Visibility="{Binding ShowHistory, Converter={StaticResource BoolToVis}}">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
+      <DockPanel Margin="14,0,12,6">
+        <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Padding="10,3" Content="Delete all" Click="OnDeleteAllSessions"
+                ToolTip="Delete every saved chat" Visibility="{Binding HasSessions, Converter={StaticResource BoolToVis}}" />
+        <TextBlock Text="Previous chats" FontWeight="SemiBold" VerticalAlignment="Center" />
+      </DockPanel>
+      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ItemsControl ItemsSource="{Binding Sessions}" Margin="10,0,10,8">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border x:Name="Card" Margin="0,0,0,6" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+                      Background="{StaticResource SubtleFill}">
+                <DockPanel>
+                  <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE74D;" Margin="0,0,4,0"
+                          VerticalAlignment="Center" ToolTip="Delete this chat" Click="OnDeleteSession" />
+                  <Button Style="{StaticResource SessionRow}" Click="OnOpenSession" ToolTip="{Binding Tooltip}">
+                    <DockPanel>
+                      <TextBlock DockPanel.Dock="Right" Text="{Binding TimeText}" Style="{StaticResource Muted}" FontSize="11"
+                                 VerticalAlignment="Top" Margin="8,2,0,0" />
+                      <StackPanel>
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                   Margin="0,2,0,0" />
+                      </StackPanel>
+                    </DockPanel>
+                  </Button>
+                </DockPanel>
+              </Border>
+              <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                  <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent}" />
+                </DataTrigger>
+              </DataTemplate.Triggers>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+      <DockPanel Grid.Row="1" Margin="16,8,16,0" VerticalAlignment="Top">
+        <DockPanel.Style>
+          <Style TargetType="DockPanel">
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding HasSessions}" Value="True">
+                <Setter Property="Visibility" Value="Collapsed" />
+              </DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </DockPanel.Style>
+        <TextBlock Style="{StaticResource Icon}" Text="&#xE81C;" FontSize="12" Margin="0,0,8,0" />
+        <TextBlock Text="No saved chats yet. Chats are saved automatically once you send a message." Style="{StaticResource Muted}"
+                   TextWrapping="Wrap" />
+      </DockPanel>
+    </Grid>
+
+    <!-- Chat tab: the rows below are laid out as before (row 0 is empty) -->
+    <Grid Grid.Row="1" Visibility="{Binding ShowChat, Converter={StaticResource BoolToVis}}">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
 
     <!-- Shown until the selected engine is ready (API key saved, or Claude Code installed and signed in) -->
     <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"
@@ -451,10 +549,9 @@
     <!-- Footer: status and keyboard hint -->
     <DockPanel Grid.Row="6" Margin="14,0,14,8">
       <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="11" Text="Enter to send · Shift+Enter for new line" />
-      <TextBlock DockPanel.Dock="Left" Style="{StaticResource Muted}" FontSize="11" Text="{Binding LiveTokenText}"
-                 FontWeight="SemiBold" Margin="0,0,12,0" />
       <TextBlock Style="{StaticResource Muted}" FontSize="11" Text="{Binding Status}" TextTrimming="CharacterEllipsis"
                  ToolTip="{Binding Status}" Margin="0,0,12,0" />
     </DockPanel>
+    </Grid>
   </Grid>
 </UserControl>

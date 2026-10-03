@@ -102,7 +102,9 @@ internal sealed class MarkdownView : RichTextBox
         if (this.measuringNaturalWidth)
         {
 #pragma warning disable VSTHRD001, VSTHRD110 // pure UI-thread layout work, no JTF needed
-            this.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(this.CaptureNaturalWidth));
+            // Normal (above Render) so the natural width is captured and re-measured before the frame is drawn;
+            // at a lower priority the full-width intermediate layout gets painted, which shows as flicker.
+            this.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(this.CaptureNaturalWidth));
 #pragma warning restore VSTHRD001, VSTHRD110
         }
 

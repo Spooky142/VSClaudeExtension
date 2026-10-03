@@ -117,6 +117,34 @@ public partial class ClaudeChatControl : UserControl
 
     private void OnNewChat(object sender, RoutedEventArgs e) => this.viewModel.NewChat();
 
+    private void OnOpenSession(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SessionItem item)
+        {
+            this.viewModel.OpenSession(item);
+            this.PromptBox.Focus();
+        }
+    }
+
+    private void OnDeleteSession(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SessionItem item)
+        {
+            this.viewModel.DeleteSession(item);
+        }
+    }
+
+    private void OnDeleteAllSessions(object sender, RoutedEventArgs e)
+    {
+        int count = this.viewModel.Sessions.Count;
+        if (count > 0 && MessageBox.Show(
+                $"Delete all {count} saved {(count == 1 ? "chat" : "chats")}? This can't be undone.",
+                "Claude", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes)
+        {
+            this.viewModel.DeleteAllSessions();
+        }
+    }
+
     private void OnOpenSettings(object sender, RoutedEventArgs e)
     {
         ThreadHelper.ThrowIfNotOnUIThread();

@@ -105,6 +105,12 @@ internal sealed class ChatEntry : INotifyPropertyChanged
         this.Text = this.buffer.ToString();
     }
 
+    public void SetText(string value)
+    {
+        this.buffer.Clear().Append(value);
+        this.Text = value;
+    }
+
     private void OnPropertyChanged([CallerMemberName] string? name = null)
         => this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

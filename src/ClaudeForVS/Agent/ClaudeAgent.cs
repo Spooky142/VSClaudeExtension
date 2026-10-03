@@ -76,6 +76,55 @@ internal sealed class ClaudeAgent : IChatEngine
     /// <summary>Can change between turns; takes effect on the next request.</summary>
     public AgentMode Mode { get; set; }
 
+    /// <summary>
+    /// Seeds an empty conversation from a saved transcript. Only the text of each turn comes back: thinking and
+    /// tool calls aren't kept, so what Claude did is carried by its replies.
+    /// </summary>
+    public void RestoreHistory(IEnumerable<(bool FromUser, string Text)> turns)
+    {
+        this.history.Clear();
+        Role? last = null;
+        var text = new StringBuilder();
+
+        void Flush()
+        {
+            if (last is Role role && text.Length > 0)
+            {
+                this.history.Add(new() { Role = role, Content = text.ToString() });
+            }
+
+            text.Clear();
+        }
+
+        foreach ((bool fromUser, string body) in turns)
+        {
+            if (body.Length == 0)
+            {
+                continue;
+            }
+
+            Role role = fromUser ? Role.User : Role.Assistant;
+            if (last is null && !fromUser)
+            {
+                continue; // a conversation has to open with the user
+            }
+
+            if (last != role)
+            {
+                Flush();
+                last = role;
+            }
+            else
+            {
+                text.Append("\n\n");
+            }
+
+            text.Append(body);
+        }
+
+        Flush();
+    }
+
     public async Task SendAsync(string prompt, IChatSink sink, CancellationToken cancellationToken)
     {
         this.history.Add(new() { Role = Role.User, Content = prompt });

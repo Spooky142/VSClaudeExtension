@@ -233,13 +233,25 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     private long liveTokens;
 
-    /// <summary>"1,234 tokens" for the prompt in progress; empty when idle or nothing has streamed yet.</summary>
-    public string LiveTokenText => this.liveTokens > 0 ? $"{this.liveTokens:N0} tokens" : string.Empty;
+    // The usage entry of the prompt in progress; its text is the realtime "1,234 tokens" count.
+    private ChatEntry? liveUsageEntry;
 
     private void SetLiveTokens(long tokens)
     {
         this.liveTokens = tokens;
-        this.OnPropertyChanged(nameof(this.LiveTokenText));
+        if (tokens > 0)
+        {
+            string text = $"{tokens:N0} tokens";
+            if (this.liveUsageEntry is null)
+            {
+                this.liveUsageEntry = new ChatEntry(ChatEntryKind.Usage, text);
+                this.Messages.Add(this.liveUsageEntry);
+            }
+            else
+            {
+                this.liveUsageEntry.SetText(text);
+            }
+        }
     }
 
     void IChatSink.ReportLiveTokens(long totalTokens) => this.SetLiveTokens(totalTokens);
@@ -427,7 +439,214 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.Stop();
         this.DisposeEngine();
         this.Messages.Clear();
+        this.chatId = null;
+        this.resumeFrom = null;
         this.Status = string.Empty;
+        this.ShowHistory = false;
+    }
+
+    // ===== Saved chats (History tab) =====
+
+    private string? chatId;
+    private DateTimeOffset chatCreated;
+    private string chatTitle = string.Empty;
+
+    /// <summary>A saved chat that was opened but hasn't sent a message yet; its context is given to the next engine.</summary>
+    private SessionInfo? resumeFrom;
+
+    private bool showHistory;
+
+    /// <summary>Saved chats, most recently used first. Refreshed whenever the History tab is shown.</summary>
+    public ObservableCollection<SessionItem> Sessions { get; } = [];
+
+    public bool HasSessions => this.Sessions.Count > 0;
+
+    public bool ShowHistory
+    {
+        get => this.showHistory;
+        set
+        {
+            this.Set(ref this.showHistory, value);
+            this.OnPropertyChanged(nameof(this.ShowChat));
+            if (value)
+            {
+                this.RefreshSessions();
+            }
+        }
+    }
+
+    public bool ShowChat
+    {
+        get => !this.showHistory;
+        set => this.ShowHistory = !value;
+    }
+
+    public void RefreshSessions()
+    {
+        this.Sessions.Clear();
+        foreach (SessionInfo info in SessionStore.List())
+        {
+            this.Sessions.Add(new SessionItem(info, info.Id == this.chatId));
+        }
+
+        this.OnPropertyChanged(nameof(this.HasSessions));
+    }
+
+    /// <summary>Writes the current chat to disk so it can be reopened later.</summary>
+    private void SaveChat()
+    {
+        if (!this.Messages.Any(m => m.Kind == ChatEntryKind.User))
+        {
+            return;
+        }
+
+        if (this.chatId is null)
+        {
+            this.chatId = Guid.NewGuid().ToString("N");
+            this.chatCreated = DateTimeOffset.Now;
+            string first = this.Messages.First(m => m.Kind == ChatEntryKind.User).Text;
+            string oneLine = string.Join(" ", first.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            this.chatTitle = oneLine.Length > 80 ? oneLine.Substring(0, 80) + "…" : oneLine;
+        }
+
+        var info = new SessionInfo
+        {
+            Id = this.chatId,
+            Title = this.chatTitle,
+            RepoPath = this.engine?.RepoRoot ?? this.RepoPath,
+            Engine = this.engine?.Kind ?? this.settings.Engine,
+            Model = this.engine?.Model ?? this.settings.Model,
+            Created = this.chatCreated,
+            Updated = DateTimeOffset.Now,
+            MessageCount = this.Messages.Count(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant),
+            ClaudeCodeSessionId = (this.engine as ClaudeCodeEngine)?.SessionId,
+        };
+
+        List<SavedEntry> entries = this.Messages
+            .Select(m => new SavedEntry
+            {
+                Kind = m.Kind,
+                Header = m.Header,
+                Text = m.Text,
+                Detail = string.Join("\n", m.DetailLines.Select(l => l.Text)),
+                Activity = m.Activity,
+            })
+            .ToList();
+
+        try
+        {
+            SessionStore.Save(info, entries);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            this.Status = "Couldn't save this chat to history: " + ex.Message;
+            return;
+        }
+
+        if (this.ShowHistory)
+        {
+            this.RefreshSessions();
+        }
+    }
+
+    /// <summary>Replaces the current chat with a saved one. The next message continues it.</summary>
+    public void OpenSession(SessionItem item)
+    {
+        if (this.IsBusy)
+        {
+            this.Status = "Stop the running prompt before opening another chat.";
+            return;
+        }
+
+        SessionInfo info = item.Info;
+        if (!Directory.Exists(info.RepoPath))
+        {
+            this.Status = $"The repository for this chat no longer exists: {info.RepoPath}";
+            return;
+        }
+
+        if (SessionStore.LoadEntries(info.Id) is not { } entries)
+        {
+            this.Status = "This chat's saved transcript couldn't be read.";
+            return;
+        }
+
+        this.DisposeEngine();
+        this.Messages.Clear();
+        foreach (SavedEntry e in entries)
+        {
+            this.Messages.Add(new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity));
+        }
+
+        this.chatId = info.Id;
+        this.chatCreated = info.Created;
+        this.chatTitle = info.Title;
+        this.resumeFrom = info;
+        this.RepoPath = info.RepoPath;
+
+        // A Claude Code session can only be continued by Claude Code, so follow the chat's engine.
+        string status = $"Opened \"{info.Title}\".";
+        if (info.Engine != this.settings.Engine)
+        {
+            AgentSettings switched = this.settings with { Engine = info.Engine };
+            switched.Save();
+            this.Settings = switched;
+            status += info.Engine == ChatEngineKind.ClaudeCode ? " Switched to Claude Code to continue it." : " Switched to the Claude API to continue it.";
+        }
+
+        this.Status = status;
+        this.ShowHistory = false;
+        this.PromptSent?.Invoke(this, EventArgs.Empty); // scroll to the end of the opened chat
+    }
+
+    public void DeleteSession(SessionItem item)
+    {
+        SessionStore.Delete(item.Info.Id);
+        if (item.Info.Id == this.chatId)
+        {
+            this.NewChat();
+            this.ShowHistory = true;
+        }
+
+        this.RefreshSessions();
+    }
+
+    public void DeleteAllSessions()
+    {
+        foreach (SessionInfo info in SessionStore.List())
+        {
+            SessionStore.Delete(info.Id);
+        }
+
+        if (this.chatId != null)
+        {
+            this.NewChat();
+            this.ShowHistory = true;
+        }
+
+        this.RefreshSessions();
+    }
+
+    /// <summary>Gives a freshly created engine the context of the chat that was opened from History.</summary>
+    private void ApplyResume(IChatEngine created)
+    {
+        SessionInfo? info = this.resumeFrom;
+        this.resumeFrom = null;
+        if (info is null || !string.Equals(info.RepoPath, created.RepoRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (created is ClaudeCodeEngine code)
+        {
+            code.SessionId = info.ClaudeCodeSessionId;
+        }
+        else if (created is ClaudeAgent agent)
+        {
+            agent.RestoreHistory(this.Messages
+                .Where(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant)
+                .Select(m => (m.Kind == ChatEntryKind.User, m.Text)));
+        }
     }
 
     private void DisposeEngine()
@@ -478,10 +697,12 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             this.DisposeEngine();
             this.engine = created;
             this.RepoPath = root;
+            this.ApplyResume(created); // before the new prompt joins the transcript
         }
 
         this.Messages.Add(new ChatEntry(ChatEntryKind.User, "You", text));
         this.PromptSent?.Invoke(this, EventArgs.Empty);
+        this.SaveChat();
         run = this.RunAsync(this.engine, text);
         return true;
     }
@@ -549,12 +770,29 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
         finally
         {
-            if (this.promptTokens != default)
+            // The live entry was added mid-run; settle it with the final figure and move it below the reply.
+            string finalUsage = this.FormatPromptUsage();
+            if (this.liveUsageEntry is ChatEntry usageEntry)
             {
-                this.Messages.Add(new ChatEntry(ChatEntryKind.Usage, this.FormatPromptUsage()));
+                usageEntry.SetText(finalUsage);
+                int at = this.Messages.IndexOf(usageEntry);
+                if (at >= 0 && at < this.Messages.Count - 1)
+                {
+                    this.Messages.Move(at, this.Messages.Count - 1);
+                }
+            }
+            else if (this.promptTokens != default)
+            {
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Usage, finalUsage));
             }
 
-            this.SetLiveTokens(0); // the footer entry above keeps the final figure
+            this.liveUsageEntry = null;
+
+            if (ReferenceEquals(this.engine, runEngine))
+            {
+                this.SaveChat(); // skipped if the chat was replaced or reset while this prompt was stopping
+            }
+
             this.currentAssistant = null;
             this.currentThinking = null;
             this.runCts = null;
@@ -674,8 +912,8 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private string FormatPromptUsage()
     {
         TokenUsage t = this.promptTokens;
-        long input = t.Input + t.CacheWrite + t.CacheRead;
-        string text = $"{input:N0} in ({t.CacheRead:N0} cached) · {t.Output:N0} out";
+        long total = this.liveTokens > 0 ? this.liveTokens : t.Input + t.CacheWrite + t.CacheRead + t.Output;
+        string text = $"{total:N0} tokens";
         return this.promptHasCost ? $"{text} · ≈ ${this.promptCost:0.00}" : text;
     }
 

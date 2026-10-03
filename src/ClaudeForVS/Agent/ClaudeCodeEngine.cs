@@ -31,7 +31,6 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     private readonly SemaphoreSlim approvalGate = new(1, 1);
     private readonly Dictionary<string, (string Name, JsonElement Input)> pendingTools = new();
 
-    private string? sessionId;
     private bool editsPreApproved;
     private IChatSink? sink;
     private CancellationToken runToken;
@@ -68,6 +67,9 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
     public AgentMode Mode { get; set; }
 
+    /// <summary>The Claude Code session this conversation runs in; set before the first message to continue an earlier one.</summary>
+    public string? SessionId { get; set; }
+
     public async Task SendAsync(string prompt, IChatSink chatSink, CancellationToken cancellationToken)
     {
         this.sink = chatSink;
@@ -99,10 +101,10 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             });
         }
 
-        if (this.sessionId != null)
+        if (this.SessionId != null)
         {
             args.Add("--resume");
-            args.Add(this.sessionId);
+            args.Add(this.SessionId);
         }
 
         var psi = new ProcessStartInfo(this.executable, string.Join(" ", args.Select(GitRunner.QuoteArgument)))
@@ -218,7 +220,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 switch (Str(ev, "subtype"))
                 {
                     case "init":
-                        this.sessionId = Str(ev, "session_id") ?? this.sessionId;
+                        this.SessionId = Str(ev, "session_id") ?? this.SessionId;
                         chatSink.SetStatus("Claude Code is working…");
                         break;
                     case "api_retry":
