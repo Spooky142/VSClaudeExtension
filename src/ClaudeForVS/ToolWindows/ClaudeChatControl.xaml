@@ -62,25 +62,29 @@
 
     <!-- ===== Transcript templates ===== -->
     <DataTemplate x:Key="UserTemplate">
-      <Grid Margin="48,10,0,6">
-        <Border CornerRadius="12,12,4,12" Background="{StaticResource UserBubble}" />
-        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" Margin="12,8,12,8" FontSize="13"
+      <!-- Right-aligned so the bubble shrinks to fit short messages and grows (up to the margin) for long ones. -->
+      <Border Margin="48,10,0,6" HorizontalAlignment="Right" CornerRadius="12,12,4,12" Padding="12,8"
+              Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
+        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
                          Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-      </Grid>
+      </Border>
     </DataTemplate>
 
     <DataTemplate x:Key="AssistantTemplate">
-      <StackPanel Margin="0,10,0,6">
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-          <Border Width="20" Height="20" CornerRadius="10" Background="{StaticResource Accent}">
-            <TextBlock Text="✻" Foreground="White" FontSize="12" FontFamily="Segoe UI Symbol"
-                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0" />
-          </Border>
-          <TextBlock Text="Claude" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
+      <Border Margin="0,10,24,6" HorizontalAlignment="Left" CornerRadius="12,12,12,4" Padding="12,10"
+              Background="{StaticResource SubtleFill}" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}">
+        <StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+            <Border Width="20" Height="20" CornerRadius="10" Background="{StaticResource Accent}">
+              <TextBlock Text="✻" Foreground="White" FontSize="12" FontFamily="Segoe UI Symbol"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0" />
+            </Border>
+            <TextBlock Text="Claude" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
+          </StackPanel>
+          <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
+                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
         </StackPanel>
-        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
-                         Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-      </StackPanel>
+      </Border>
     </DataTemplate>
 
     <DataTemplate x:Key="ThinkingTemplate">
@@ -187,13 +191,18 @@
       </Grid>
     </DataTemplate>
 
+    <DataTemplate x:Key="UsageTemplate">
+      <TextBlock Text="{Binding Header}" Style="{StaticResource Muted}" FontSize="11" HorizontalAlignment="Right" Margin="0,0,0,8" />
+    </DataTemplate>
+
     <local:ChatEntryTemplateSelector x:Key="EntrySelector"
                                      User="{StaticResource UserTemplate}"
                                      Assistant="{StaticResource AssistantTemplate}"
                                      Thinking="{StaticResource ThinkingTemplate}"
                                      Tool="{StaticResource ToolTemplate}"
                                      Error="{StaticResource ErrorTemplate}"
-                                     Notice="{StaticResource NoticeTemplate}" />
+                                     Notice="{StaticResource NoticeTemplate}"
+                                     Usage="{StaticResource UsageTemplate}" />
     </ResourceDictionary>
   </UserControl.Resources>
 

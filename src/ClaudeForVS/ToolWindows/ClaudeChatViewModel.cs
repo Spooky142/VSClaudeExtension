@@ -45,6 +45,11 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private TokenUsage sessionTokens;
     private double sessionCost;
     private ApiRateLimits? apiLimits;
+
+    // Tokens (and, for the API, estimated cost) used by the prompt currently running; shown as its footer.
+    private TokenUsage promptTokens;
+    private double promptCost;
+    private bool promptHasCost;
     private string usageEmptyText = string.Empty;
 
     public ClaudeChatViewModel()
@@ -502,6 +507,9 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private async Task RunAsync(IChatEngine runEngine, string text)
     {
         this.IsBusy = true;
+        this.promptTokens = default;
+        this.promptCost = 0;
+        this.promptHasCost = false;
         using var cts = new CancellationTokenSource();
         this.runCts = cts;
         try
@@ -527,6 +535,11 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
         finally
         {
+            if (this.promptTokens != default)
+            {
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Usage, this.FormatPromptUsage()));
+            }
+
             this.currentAssistant = null;
             this.currentThinking = null;
             this.runCts = null;
@@ -631,9 +644,24 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     void IChatSink.ReportTokenUsage(ClaudeModel model, TokenUsage usage)
     {
+        double cost = ModelPricing.EstimateCost(model, usage);
         this.sessionTokens += usage;
-        this.sessionCost += ModelPricing.EstimateCost(model, usage);
+        this.sessionCost += cost;
+        this.promptTokens += usage;
+        this.promptCost += cost;
+        this.promptHasCost = true;
         this.RefreshUsage();
+    }
+
+    // Claude Code usage comes out of the plan, so there's no per-token cost to show.
+    void IChatSink.ReportPromptUsage(TokenUsage usage) => this.promptTokens += usage;
+
+    private string FormatPromptUsage()
+    {
+        TokenUsage t = this.promptTokens;
+        long input = t.Input + t.CacheWrite + t.CacheRead;
+        string text = $"{input:N0} in ({t.CacheRead:N0} cached) · {t.Output:N0} out";
+        return this.promptHasCost ? $"{text} · ≈ ${this.promptCost:0.00}" : text;
     }
 
     void IChatSink.ReportApiRateLimits(ApiRateLimits limits)

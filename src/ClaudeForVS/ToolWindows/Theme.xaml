@@ -9,6 +9,7 @@
   <SolidColorBrush x:Key="AccentHover" Color="#C7684A" />
   <SolidColorBrush x:Key="AccentPressed" Color="#B05A3E" />
   <SolidColorBrush x:Key="UserBubble" Color="#24D97757" />
+  <SolidColorBrush x:Key="UserBubbleBorder" Color="#50D97757" />
   <SolidColorBrush x:Key="HoverTint" Color="#1F808080" />
   <SolidColorBrush x:Key="PressTint" Color="#38808080" />
   <SolidColorBrush x:Key="SubtleFill" Color="#10808080" />

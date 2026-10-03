@@ -17,6 +17,9 @@ internal enum ChatEntryKind
 
     /// <summary>A small centred note, e.g. "New conversation".</summary>
     Notice,
+
+    /// <summary>A small footer with the tokens used by the prompt above.</summary>
+    Usage,
 }
 
 internal enum DiffLineKind

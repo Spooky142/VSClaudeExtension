@@ -288,6 +288,15 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             case "result":
                 double seconds = Num(ev, "duration_ms") / 1000.0;
                 chatSink.SetStatus($"Done in {seconds:0.#}s · {Num(ev, "num_turns")} turn(s) · via Claude Code");
+                if (ev.TryGetProperty("usage", out JsonElement usage) && usage.ValueKind == JsonValueKind.Object)
+                {
+                    chatSink.ReportPromptUsage(new TokenUsage(
+                        (long)Num(usage, "input_tokens"),
+                        (long)Num(usage, "cache_creation_input_tokens"),
+                        (long)Num(usage, "cache_read_input_tokens"),
+                        (long)Num(usage, "output_tokens")));
+                }
+
                 bool failed = ev.TryGetProperty("is_error", out JsonElement isErr) && isErr.ValueKind == JsonValueKind.True;
                 return new RunOutcome(failed ? (Str(ev, "result") is { Length: > 0 } msg ? msg : $"Claude Code reported an error ({Str(ev, "subtype")}).") : null);
         }

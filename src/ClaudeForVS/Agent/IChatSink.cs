@@ -60,6 +60,9 @@ internal interface IChatSink
     /// <summary>Tokens used by one API response (Claude API engine).</summary>
     void ReportTokenUsage(ClaudeModel model, TokenUsage usage);
 
+    /// <summary>Total tokens used answering one prompt (Claude Code engine, which doesn't report per response).</summary>
+    void ReportPromptUsage(TokenUsage usage);
+
     /// <summary>Per-minute rate-limit headroom from the latest API response (Claude API engine).</summary>
     void ReportApiRateLimits(ApiRateLimits limits);
 
