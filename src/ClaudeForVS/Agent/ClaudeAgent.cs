@@ -24,8 +24,14 @@ internal sealed class ClaudeAgent : IChatEngine
     private const int MaxFileChars = 100_000;
     private const int PreviewLines = 60;
 
+    private const long MaxOutputTokens = 64000;
+
     // At this share of the context window the conversation is summarized and restarted from the summary.
     private const double CompactAt = 0.95;
+
+    // Input plus max_tokens has to fit in the window, so compact earlier if a full-length reply (plus this much
+    // headroom for the next prompt or tool results) would no longer fit.
+    private const long CompactHeadroom = 8_000;
 
     private const string CompactInstruction =
         """
@@ -221,14 +227,15 @@ internal sealed class ClaudeAgent : IChatEngine
     public void Dispose() => this.client.Dispose();
 
     /// <summary>
-    /// Once the context passes <see cref="CompactAt"/>, has Claude summarize the conversation and restarts it from that
+    /// Once the context passes <see cref="CompactAt"/> (or a full-length reply would no longer fit), has Claude summarize the conversation and restarts it from that
     /// summary. The request reuses the normal request with the instruction appended, so the history is read from the
     /// cache. Returns the new tokens it used (counted towards the prompt's total), or 0 if it didn't compact.
     /// </summary>
     private async Task<long> CompactIfNeededAsync(IChatSink sink, bool midTask, CancellationToken cancellationToken)
     {
         long window = AgentSettings.ContextWindow(this.Model);
-        if (this.contextTokens < window * CompactAt || this.history.Count == 0)
+        double threshold = Math.Min(window * CompactAt, window - MaxOutputTokens - CompactHeadroom);
+        if (this.contextTokens < threshold || this.history.Count == 0)
         {
             return 0;
         }
@@ -287,7 +294,7 @@ internal sealed class ClaudeAgent : IChatEngine
 
     /// <param name="extra">A message to send after the history without adding it to the history.</param>
     /// <param name="maxTokens">Overrides the output limit; doesn't affect caching.</param>
-    private MessageCreateParams BuildRequest(MessageParam? extra = null, long maxTokens = 64000)
+    private MessageCreateParams BuildRequest(MessageParam? extra = null, long maxTokens = MaxOutputTokens)
     {
         bool haiku = this.Model == ClaudeModel.Haiku;
         int? haikuBudget = AgentSettings.HaikuThinkingBudget(this.Effort);
