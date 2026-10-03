@@ -49,6 +49,12 @@ internal sealed record AgentSettings
 
     public EffortLevel Effort { get; init; } = EffortLevel.High;
 
+    /// <summary>
+    /// A repository the user chose by hand. Null means "follow the open solution": the chat switches
+    /// repository when a different solution or folder is opened.
+    /// </summary>
+    public string? PinnedRepoPath { get; init; }
+
     public static AgentSettings Load()
     {
         try

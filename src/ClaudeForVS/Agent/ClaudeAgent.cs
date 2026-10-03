@@ -25,6 +25,7 @@ internal sealed class ClaudeAgent : IChatEngine
     private const int PreviewLines = 60;
 
     private readonly AnthropicClient client;
+    private readonly RateLimitHeaderHandler rateLimits = new();
     private readonly List<MessageParam> history = [];
     private readonly RepoFiles files;
     private readonly string systemPrompt;
@@ -32,7 +33,7 @@ internal sealed class ClaudeAgent : IChatEngine
 
     public ClaudeAgent(string apiKey, string repoRoot, ClaudeModel model, EffortLevel effort)
     {
-        this.client = new AnthropicClient { ApiKey = apiKey };
+        this.client = new AnthropicClient { ApiKey = apiKey, Handlers = [this.rateLimits] };
         this.RepoRoot = repoRoot;
         this.Model = model;
         this.Effort = effort;
@@ -78,6 +79,11 @@ internal sealed class ClaudeAgent : IChatEngine
 
             sink.SetStatus(
                 $"Tokens: {turn.InputTokens:N0} in ({turn.CacheReadTokens:N0} cached), {turn.OutputTokens:N0} out");
+            sink.ReportTokenUsage(this.Model, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens));
+            if (this.rateLimits.Latest is ApiRateLimits limits)
+            {
+                sink.ReportApiRateLimits(limits);
+            }
 
             if (turn.StopReason == "refusal")
             {
@@ -190,6 +196,8 @@ internal sealed class ClaudeAgent : IChatEngine
                     + (start.Message.Usage.CacheReadInputTokens ?? 0)
                     + (start.Message.Usage.CacheCreationInputTokens ?? 0);
                 turn.CacheReadTokens = start.Message.Usage.CacheReadInputTokens ?? 0;
+                turn.CacheWriteTokens = start.Message.Usage.CacheCreationInputTokens ?? 0;
+                turn.UncachedInputTokens = start.Message.Usage.InputTokens;
             }
             else if (ev.TryPickContentBlockStart(out RawContentBlockStartEvent? blockStart))
             {
@@ -619,6 +627,8 @@ internal sealed class ClaudeAgent : IChatEngine
         public string? StopReason;
         public long InputTokens;
         public long CacheReadTokens;
+        public long CacheWriteTokens;
+        public long UncachedInputTokens;
         public long OutputTokens;
     }
 }

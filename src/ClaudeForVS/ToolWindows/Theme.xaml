@@ -182,6 +182,24 @@
     <Setter Property="Template" Value="{StaticResource FieldTemplate}" />
   </Style>
 
+  <!-- Thin rounded meter for the usage strip. Foreground sets the fill colour. -->
+  <Style x:Key="MeterBar" TargetType="ProgressBar">
+    <Setter Property="Height" Value="4" />
+    <Setter Property="Minimum" Value="0" />
+    <Setter Property="Maximum" Value="100" />
+    <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ProgressBar">
+          <Grid>
+            <Border x:Name="PART_Track" CornerRadius="2" Background="{StaticResource SubtleBorder}" />
+            <Border x:Name="PART_Indicator" CornerRadius="2" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" />
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Radio button drawn as a selectable card (model picker). Content is the card body. -->
   <Style x:Key="CardRadio" TargetType="RadioButton">
     <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />

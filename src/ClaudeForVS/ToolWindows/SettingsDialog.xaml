@@ -126,8 +126,14 @@
     <!-- Repository -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Repository" />
     <DockPanel>
-      <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Content="Use solution" Click="OnUseSolution" />
-      <TextBox x:Name="RepoBox" Style="{StaticResource Field}" />
+      <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Content="Use solution" Click="OnUseSolution"
+              ToolTip="Use the git repository of the open solution" />
+      <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Content="Browse…" Click="OnBrowse" />
+      <TextBox x:Name="RepoBox" Style="{StaticResource Field}" TextChanged="OnRepoChanged" />
+    </DockPanel>
+    <DockPanel Margin="2,6,0,0">
+      <TextBlock x:Name="RepoHintIcon" DockPanel.Dock="Left" Style="{StaticResource Icon}" FontSize="11" Margin="0,1,6,0" VerticalAlignment="Top" />
+      <TextBlock x:Name="RepoHint" Style="{StaticResource CardNote}" Margin="0" />
     </DockPanel>
 
     <!-- API key (Claude API engine only) -->

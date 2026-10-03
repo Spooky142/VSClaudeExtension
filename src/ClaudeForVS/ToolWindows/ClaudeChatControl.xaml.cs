@@ -1,8 +1,11 @@
-﻿using System.Threading.Tasks;
+﻿using System;
+using System.Threading.Tasks;
+using System.Windows.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using ClaudeForVS.Agent;
+using ClaudeForVS.Git;
 using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeForVS.ToolWindows;
@@ -18,6 +21,11 @@ public partial class ClaudeChatControl : UserControl
     /// <summary>True while the transcript is scrolled to the bottom; new output then keeps it there.</summary>
     private bool followOutput = true;
 
+    /// <summary>Set after the first Loaded event, when the open solution's repository is picked up.</summary>
+    private bool loadedOnce;
+
+    private readonly DispatcherTimer usageTimer;
+
     public ClaudeChatControl(ClaudePackage package)
     {
         this.package = package;
@@ -28,12 +36,30 @@ public partial class ClaudeChatControl : UserControl
             this.followOutput = true;
             this.Transcript.ScrollToEnd();
         };
+
+        // The pane lives as long as Visual Studio, so this subscription never needs removing.
+        package.SolutionOpened += (_, directory) => this.viewModel.OnSolutionOpened(directory);
+
+        // Keep the usage strip's "resets in" countdowns current.
+        this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(30), DispatcherPriority.Background, (_, _) => this.viewModel.RefreshUsage(), this.Dispatcher);
+
         this.Loaded += (_, _) =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (this.viewModel.RepoPath.Length == 0)
+            if (!this.loadedOnce)
             {
-                this.UseSolutionRepo();
+                // Loaded fires each time the window is shown; only pick up the open solution the first time,
+                // so re-showing the window doesn't undo a repository chosen in Settings since.
+                this.loadedOnce = true;
+                string? solutionDir = this.package.GetSolutionDirectory();
+                if (GitRunner.FindRepoRoot(solutionDir) != null)
+                {
+                    this.viewModel.OnSolutionOpened(solutionDir!);
+                }
+                else if (this.viewModel.RepoPath.Length == 0)
+                {
+                    this.viewModel.SetRepoFromDirectory(solutionDir);
+                }
             }
 
             this.PromptBox.Focus();
@@ -42,12 +68,6 @@ public partial class ClaudeChatControl : UserControl
                 this.viewModel.RefreshClaudeCodeStatusAsync().FileAndForget("ClaudeForVS/CodeStatus");
             }
         };
-    }
-
-    private void UseSolutionRepo()
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        this.viewModel.SetRepoFromDirectory(this.package.GetSolutionDirectory());
     }
 
     private void SendPrompt()
@@ -110,6 +130,11 @@ public partial class ClaudeChatControl : UserControl
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
                 return this.package.GetSolutionDirectory();
+            },
+            (owner, start) =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                return this.package.BrowseForFolder(owner, "Choose a folder inside a git repository", start);
             });
 
         if (dialog.ShowModal() == true)

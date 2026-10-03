@@ -266,6 +266,14 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
                 break;
 
+            case "rate_limit_event" when ev.TryGetProperty("rate_limit_info", out JsonElement info):
+                if (ToPlanLimit(info) is PlanLimit limit)
+                {
+                    chatSink.ReportPlanLimit(limit);
+                }
+
+                break;
+
             case "result":
                 double seconds = Num(ev, "duration_ms") / 1000.0;
                 chatSink.SetStatus($"Done in {seconds:0.#}s · {Num(ev, "num_turns")} turn(s) · via Claude Code");
@@ -373,6 +381,32 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
         string root = this.RepoRoot.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
         return path!.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? path.Substring(root.Length) : path;
+    }
+
+    /// <summary>Converts Claude Code's rate_limit_info (claude.ai plan usage) into a <see cref="PlanLimit"/>.</summary>
+    private static PlanLimit? ToPlanLimit(JsonElement info)
+    {
+        if (Str(info, "rateLimitType") is not string window)
+        {
+            return null;
+        }
+
+        double? utilization = null;
+        if (info.TryGetProperty("utilization", out JsonElement u) && u.ValueKind == JsonValueKind.Number)
+        {
+            // The event doesn't document its scale (the /usage data is 0-100); treat values up to 1 as a fraction.
+            double value = u.GetDouble();
+            utilization = Math.Max(0, Math.Min(100, value <= 1 ? value * 100 : value));
+        }
+
+        DateTimeOffset? resetsAt = null;
+        if (info.TryGetProperty("resetsAt", out JsonElement r) && r.ValueKind == JsonValueKind.Number)
+        {
+            long epoch = r.GetInt64();
+            resetsAt = epoch > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds(epoch) : DateTimeOffset.FromUnixTimeSeconds(epoch);
+        }
+
+        return new PlanLimit(window, utilization, resetsAt, Str(info, "status") ?? "allowed", DateTimeOffset.Now);
     }
 
     private static string EditDiff(JsonElement input) => Diff(Str(input, "old_string") ?? string.Empty, Str(input, "new_string") ?? string.Empty);

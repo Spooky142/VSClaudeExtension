@@ -203,14 +203,15 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <!-- Header: repository and model chips, actions -->
-    <DockPanel Grid.Row="0" Margin="10,8,10,6">
+    <!-- Header: repository and model chips, actions; then the always-visible usage strip -->
+    <StackPanel Grid.Row="0">
+    <DockPanel Margin="10,8,10,6">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
         <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="New chat" Click="OnNewChat" />
         <Button Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" Click="OnOpenSettings" />
       </StackPanel>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-        <Button Style="{StaticResource OutlineButton}" Margin="0" Padding="10,4" ToolTip="{Binding RepoPath}" Click="OnOpenSettings">
+        <Button Style="{StaticResource OutlineButton}" Margin="0" Padding="10,4" ToolTip="{Binding RepoTooltip}" Click="OnOpenSettings">
           <StackPanel Orientation="Horizontal">
             <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="12" Foreground="{StaticResource Accent}" />
             <TextBlock Text="{Binding RepoName}" FontWeight="SemiBold" Margin="7,0,0,0" VerticalAlignment="Center" />
@@ -224,6 +225,60 @@
         </Button>
       </StackPanel>
     </DockPanel>
+
+    <!-- Usage strip: plan limits (Claude Code) or session tokens and rate limits (Claude API). Always shown. -->
+    <Border Margin="10,0,10,8">
+      <Grid>
+        <ItemsControl ItemsSource="{Binding UsageMeters}" Visibility="{Binding HasUsageMeters, Converter={StaticResource BoolToVis}}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <UniformGrid Rows="1" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border Margin="0,0,6,0" Padding="10,6,10,6" CornerRadius="8" BorderThickness="1"
+                      BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}"
+                      ToolTip="{Binding Detail}">
+                <StackPanel>
+                  <DockPanel>
+                    <TextBlock x:Name="ValueText" DockPanel.Dock="Right" Text="{Binding Value}" FontWeight="SemiBold" FontSize="11.5" />
+                    <TextBlock Text="{Binding Label}" Style="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,0,6,0" />
+                  </DockPanel>
+                  <ProgressBar x:Name="Bar" Style="{StaticResource MeterBar}" Value="{Binding BarValue, Mode=OneWay}" Margin="0,5,0,3"
+                               Visibility="{Binding HasBar, Converter={StaticResource BoolToVis}}" />
+                  <TextBlock Text="{Binding Detail}" Style="{StaticResource Muted}" FontSize="10.5" TextTrimming="CharacterEllipsis" Margin="0,2,0,0" />
+                </StackPanel>
+              </Border>
+              <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                  <Setter TargetName="Bar" Property="Foreground" Value="{StaticResource Amber}" />
+                  <Setter TargetName="ValueText" Property="Foreground" Value="{StaticResource Amber}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Severity}" Value="Critical">
+                  <Setter TargetName="Bar" Property="Foreground" Value="{StaticResource ErrorRed}" />
+                  <Setter TargetName="ValueText" Property="Foreground" Value="{StaticResource ErrorRed}" />
+                </DataTrigger>
+              </DataTemplate.Triggers>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <DockPanel Margin="2,0,0,0">
+          <DockPanel.Style>
+            <Style TargetType="DockPanel">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding HasUsageMeters}" Value="True">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </DockPanel.Style>
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE9D9;" FontSize="11" Margin="0,0,6,0" />
+          <TextBlock Text="{Binding UsageEmptyText}" Style="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" />
+        </DockPanel>
+      </Grid>
+    </Border>
+    </StackPanel>
 
     <!-- Shown until the selected engine is ready (API key saved, or Claude Code installed and signed in) -->
     <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"

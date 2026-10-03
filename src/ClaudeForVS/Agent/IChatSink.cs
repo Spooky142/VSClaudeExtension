@@ -53,6 +53,15 @@ internal interface IChatSink
 
     void SetStatus(string? status);
 
+    /// <summary>Tokens used by one API response (Claude API engine).</summary>
+    void ReportTokenUsage(ClaudeModel model, TokenUsage usage);
+
+    /// <summary>Per-minute rate-limit headroom from the latest API response (Claude API engine).</summary>
+    void ReportApiRateLimits(ApiRateLimits limits);
+
+    /// <summary>A plan usage window reported by Claude Code (Claude Code engine).</summary>
+    void ReportPlanLimit(PlanLimit limit);
+
     /// <summary>Asks the user to allow an action that changes the repository.</summary>
     /// <param name="kind">Git for git commands; Edit or Create for file changes (controls the preview's diff colouring).</param>
     /// <param name="title">One-line summary, e.g. the git command line or "Edit src/Foo.cs".</param>

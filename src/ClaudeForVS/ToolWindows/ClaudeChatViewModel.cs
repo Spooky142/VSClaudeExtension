@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,11 +39,122 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private ClaudeCodeStatus? codeStatus;
     private string setupMessage = string.Empty;
 
+    // Usage strip state. Plan windows persist across restarts; API totals cover this Visual Studio session.
+    private readonly Dictionary<string, PlanLimit> planLimits = PlanUsageStore.Load();
+    private TokenUsage sessionTokens;
+    private double sessionCost;
+    private ApiRateLimits? apiLimits;
+    private string usageEmptyText = string.Empty;
+
     public ClaudeChatViewModel()
     {
         this.settings = AgentSettings.Load();
         this.needsApiKey = ApiKeyStore.Load() is null;
         this.status = GitRunner.GitPath is null ? "git.exe not found - git tools will fail." : string.Empty;
+
+        // A repository chosen by hand is remembered; otherwise the view fills this in from the open solution.
+        if (this.settings.PinnedRepoPath is string pinned && Directory.Exists(pinned))
+        {
+            this.repoPath = pinned;
+        }
+
+        this.RefreshUsage();
+    }
+
+    /// <summary>Tiles in the always-visible usage strip, for whichever engine is selected.</summary>
+    public ObservableCollection<UsageMeter> UsageMeters { get; } = [];
+
+    public bool HasUsageMeters => this.UsageMeters.Count > 0;
+
+    /// <summary>Shown in place of the meters before there's anything to report.</summary>
+    public string UsageEmptyText { get => this.usageEmptyText; private set => this.Set(ref this.usageEmptyText, value); }
+
+    /// <summary>Rebuilds the usage tiles. Also called on a timer so "resets in" stays current.</summary>
+    public void RefreshUsage()
+    {
+        List<UsageMeter> meters = this.settings.Engine == ChatEngineKind.ClaudeCode ? this.PlanMeters() : this.ApiMeters();
+        this.UsageMeters.Clear();
+        foreach (UsageMeter meter in meters)
+        {
+            this.UsageMeters.Add(meter);
+        }
+
+        this.UsageEmptyText = meters.Count > 0 ? string.Empty
+            : this.settings.Engine == ChatEngineKind.ClaudeCode ? "Plan usage limits appear here after your first message."
+            : "Token usage and rate limits appear here after your first message.";
+        this.OnPropertyChanged(nameof(this.HasUsageMeters));
+    }
+
+    private List<UsageMeter> PlanMeters()
+    {
+        string[] order = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included", "overage"];
+        var meters = new List<UsageMeter>();
+        foreach (PlanLimit limit in this.planLimits.Values
+            .OrderBy(l => Array.IndexOf(order, l.Window) is int i && i >= 0 ? i : order.Length)
+            .Take(3))
+        {
+            string label = limit.Window switch
+            {
+                "five_hour" => "5-hour limit",
+                "seven_day" => "Weekly limit",
+                "seven_day_opus" => "Weekly · Opus",
+                "seven_day_sonnet" => "Weekly · Sonnet",
+                "seven_day_overage_included" => "Weekly · with extra",
+                "overage" => "Extra usage",
+                _ => limit.Window,
+            };
+
+            if (limit.ResetsAt is DateTimeOffset reset && reset <= DateTimeOffset.Now)
+            {
+                meters.Add(new UsageMeter(label, "0%", "Reset · updates after your next message", 0, UsageSeverity.Normal));
+                continue;
+            }
+
+            string value = limit.Utilization is double pct ? $"{pct:0}%"
+                : limit.Status switch { "rejected" => "Limit reached", "allowed_warning" => "Near limit", _ => "OK" };
+            meters.Add(new UsageMeter(label, value, FormatReset(limit.ResetsAt), limit.Utilization, UsageMeter.SeverityFor(limit.Utilization, limit.Status)));
+        }
+
+        return meters;
+    }
+
+    private List<UsageMeter> ApiMeters()
+    {
+        var meters = new List<UsageMeter>();
+        if (this.sessionTokens.Input + this.sessionTokens.Output + this.sessionTokens.CacheRead + this.sessionTokens.CacheWrite > 0)
+        {
+            TokenUsage t = this.sessionTokens;
+            string detail = $"{FormatTokens(t.Input + t.CacheWrite)} in · {FormatTokens(t.Output)} out"
+                + (t.CacheRead > 0 ? $" · {FormatTokens(t.CacheRead)} cached" : string.Empty);
+            meters.Add(new UsageMeter("This session", $"≈ ${this.sessionCost:0.00}", detail, null, UsageSeverity.Normal));
+        }
+
+        if (this.apiLimits is ApiRateLimits limits && limits.PercentUsed is double used)
+        {
+            bool reset = limits.ResetsAt is DateTimeOffset at && at <= DateTimeOffset.Now;
+            double shown = reset ? 0 : used;
+            string detail = reset ? "Per-minute window has reset" : FormatReset(limits.ResetsAt);
+            meters.Add(new UsageMeter("Rate limit (per minute)", $"{shown:0}% used", detail, shown, UsageMeter.SeverityFor(shown)));
+        }
+
+        return meters;
+    }
+
+    private static string FormatTokens(long n) =>
+        n >= 1_000_000 ? $"{n / 1_000_000.0:0.#}M" : n >= 1_000 ? $"{n / 1_000.0:0.#}k" : n.ToString("N0");
+
+    private static string FormatReset(DateTimeOffset? at)
+    {
+        if (at is not DateTimeOffset reset)
+        {
+            return string.Empty;
+        }
+
+        TimeSpan left = reset - DateTimeOffset.Now;
+        return left.TotalMinutes < 1 ? (left.TotalSeconds > 0 ? $"Resets in {left.Seconds}s" : "Resetting now")
+            : left.TotalHours < 1 ? $"Resets in {(int)left.TotalMinutes}m"
+            : left.TotalHours < 24 ? $"Resets in {(int)left.TotalHours}h {left.Minutes}m"
+            : $"Resets {reset.ToLocalTime():ddd h:mm tt}";
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -59,6 +171,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         {
             this.Set(ref this.repoPath, value);
             this.OnPropertyChanged(nameof(this.RepoName));
+            this.OnPropertyChanged(nameof(this.RepoTooltip));
         }
     }
 
@@ -132,7 +245,10 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         {
             this.Set(ref this.settings, value);
             this.OnPropertyChanged(nameof(this.ModelSummary));
+            this.OnPropertyChanged(nameof(this.RepoFollowsSolution));
+            this.OnPropertyChanged(nameof(this.RepoTooltip));
             this.UpdateSetupMessage();
+            this.RefreshUsage(); // the strip shows different meters per engine
         }
     }
 
@@ -187,6 +303,16 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     public bool HasPendingApproval { get => this.hasPendingApproval; private set => this.Set(ref this.hasPendingApproval, value); }
 
+    /// <summary>True unless the user picked a repository in Settings that no solution has replaced yet.</summary>
+    public bool RepoFollowsSolution => this.settings.PinnedRepoPath is null;
+
+    /// <summary>Header chip tooltip: the full path and whether it follows the open solution.</summary>
+    public string RepoTooltip =>
+        (this.repoPath.Length == 0 ? "No repository selected" : this.repoPath)
+        + (this.RepoFollowsSolution
+            ? "\nFollows the open solution"
+            : "\nChosen in Settings, until you open a solution or folder in a git repository");
+
     public void SetRepoFromDirectory(string? directory)
     {
         string? root = GitRunner.FindRepoRoot(directory);
@@ -202,6 +328,36 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         else
         {
             this.Status = "No solution or folder is open.";
+        }
+    }
+
+    /// <summary>
+    /// Called when Visual Studio opens a solution or folder, and when the window loads with one already open.
+    /// A solution inside a git repository always becomes the chat's repository, replacing any repository chosen
+    /// in Settings; anything else leaves the current repository alone.
+    /// </summary>
+    public void OnSolutionOpened(string directory)
+    {
+        string? root = GitRunner.FindRepoRoot(directory);
+        if (root is null)
+        {
+            this.Status = "The open solution isn't inside a git repository; keeping the current repository.";
+            return;
+        }
+
+        if (this.settings.PinnedRepoPath != null)
+        {
+            AgentSettings unpinned = this.settings with { PinnedRepoPath = null };
+            unpinned.Save();
+            this.Settings = unpinned;
+        }
+
+        if (!string.Equals(root, this.RepoPath, StringComparison.OrdinalIgnoreCase))
+        {
+            this.RepoPath = root;
+            this.Status = this.engine != null
+                ? $"Switched to {this.RepoName} from the open solution. Your next message starts a new chat."
+                : $"Repository: {this.RepoName} (from the open solution)";
         }
     }
 
@@ -412,6 +568,26 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     }
 
     void IChatSink.SetStatus(string? status) => this.Status = status ?? string.Empty;
+
+    void IChatSink.ReportTokenUsage(ClaudeModel model, TokenUsage usage)
+    {
+        this.sessionTokens += usage;
+        this.sessionCost += ModelPricing.EstimateCost(model, usage);
+        this.RefreshUsage();
+    }
+
+    void IChatSink.ReportApiRateLimits(ApiRateLimits limits)
+    {
+        this.apiLimits = limits;
+        this.RefreshUsage();
+    }
+
+    void IChatSink.ReportPlanLimit(PlanLimit limit)
+    {
+        this.planLimits[limit.Window] = limit;
+        PlanUsageStore.Save(this.planLimits.Values);
+        this.RefreshUsage();
+    }
 
     async Task<Approval> IChatSink.RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken)
     {

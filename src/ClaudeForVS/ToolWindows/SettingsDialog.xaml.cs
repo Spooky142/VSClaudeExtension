@@ -16,6 +16,7 @@ public partial class SettingsDialog : DialogWindow
     private readonly AgentSettings current;
     private readonly bool hasConversation;
     private readonly Func<string?> getSolutionDirectory;
+    private readonly Func<IntPtr, string?, string?> browseForFolder;
     private ClaudeCodeStatus? codeStatus;
     private string? lastError;
     private bool busy;
@@ -23,18 +24,29 @@ public partial class SettingsDialog : DialogWindow
     /// <summary>The install/sign-in/status step in progress, if any.</summary>
     private Microsoft.VisualStudio.Threading.JoinableTask? setupTask;
 
-    internal SettingsDialog(AgentSettings settings, string repoPath, bool hasApiKey, bool hasConversation, ClaudeCodeStatus? codeStatus, Func<string?> getSolutionDirectory)
+    /// <param name="getSolutionDirectory">Returns the open solution's or folder's directory, or null.</param>
+    /// <param name="browseForFolder">Shows a folder picker owned by the given window, starting in the given folder.</param>
+    internal SettingsDialog(
+        AgentSettings settings,
+        string repoPath,
+        bool hasApiKey,
+        bool hasConversation,
+        ClaudeCodeStatus? codeStatus,
+        Func<string?> getSolutionDirectory,
+        Func<IntPtr, string?, string?> browseForFolder)
     {
         this.current = settings;
         this.hasConversation = hasConversation;
         this.codeStatus = codeStatus;
         this.getSolutionDirectory = getSolutionDirectory;
+        this.browseForFolder = browseForFolder;
         this.InitializeComponent();
 
         (settings.Engine == ChatEngineKind.ClaudeCode ? this.CodeEngineRadio : this.ApiEngineRadio).IsChecked = true;
         this.ModelRadio(settings.Model).IsChecked = true;
         this.EffortRadio(settings.Effort).IsChecked = true;
         this.RepoBox.Text = repoPath;
+        this.UpdateRepoHint();
         this.ApiKeyHint.Text = hasApiKey
             ? "✓ A key is saved. Leave this empty to keep it, or enter a new one to replace it."
             : "Get a key at console.anthropic.com. It's stored encrypted for your Windows account.";
@@ -210,12 +222,84 @@ public partial class SettingsDialog : DialogWindow
         {
             this.RepoBox.Text = Git.GitRunner.FindRepoRoot(dir) ?? dir;
         }
+        else
+        {
+            this.ShowRepoHint(false, "No solution or folder is open in Visual Studio.");
+        }
+    }
+
+    private void OnBrowse(object sender, RoutedEventArgs e)
+    {
+        string current = this.RepoBox.Text.Trim();
+        string? start = System.IO.Directory.Exists(current) ? current : null;
+        IntPtr owner = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (this.browseForFolder(owner, start) is string chosen)
+        {
+            this.RepoBox.Text = Git.GitRunner.FindRepoRoot(chosen) ?? chosen;
+        }
+    }
+
+    private void OnRepoChanged(object sender, TextChangedEventArgs e) => this.UpdateRepoHint();
+
+    /// <summary>The open solution's repository root, if a solution is open and inside a git repository.</summary>
+    private string? SolutionRepoRoot() => Git.GitRunner.FindRepoRoot(this.getSolutionDirectory());
+
+    private void UpdateRepoHint()
+    {
+        if (this.RepoHint is null)
+        {
+            return;
+        }
+
+        string text = this.RepoBox.Text.Trim();
+        if (text.Length == 0)
+        {
+            this.ShowRepoHint(false, "Enter a folder inside a cloned git repository, or use the open solution.");
+            return;
+        }
+
+        if (!System.IO.Directory.Exists(text))
+        {
+            this.ShowRepoHint(false, "Folder not found.");
+            return;
+        }
+
+        if (Git.GitRunner.FindRepoRoot(text) is not string root)
+        {
+            this.ShowRepoHint(false, "Not inside a git repository.");
+            return;
+        }
+
+        string name = System.IO.Path.GetFileName(root.TrimEnd('\\', '/'));
+        string rootNote = string.Equals(root.TrimEnd('\\'), text.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase) ? string.Empty : $" (root {root})";
+        string follow = string.Equals(root, this.SolutionRepoRoot(), StringComparison.OrdinalIgnoreCase)
+            ? "Follows the open solution."
+            : "Used until you next open a solution or folder in a git repository.";
+        this.ShowRepoHint(true, $"Git repository: {name}{rootNote}. {follow}");
+    }
+
+    private void ShowRepoHint(bool ok, string message)
+    {
+        this.RepoHint.Text = message;
+        this.RepoHintIcon.Text = ok ? "" : ""; // checkmark / warning
+        this.RepoHintIcon.Foreground = (Brush)this.FindResource(ok ? "Accent" : "Amber");
     }
 
     private void OnSave(object sender, RoutedEventArgs e)
     {
-        this.Result = new AgentSettings { Engine = this.SelectedEngine, Model = this.SelectedModel, Effort = this.SelectedEffort };
-        this.ResultRepoPath = this.RepoBox.Text.Trim();
+        // A path that is the open solution's repository (or empty) follows the solution; anything else is pinned.
+        string text = this.RepoBox.Text.Trim();
+        string? root = Git.GitRunner.FindRepoRoot(text);
+        bool follows = text.Length == 0 || (root != null && string.Equals(root, this.SolutionRepoRoot(), StringComparison.OrdinalIgnoreCase));
+
+        this.Result = new AgentSettings
+        {
+            Engine = this.SelectedEngine,
+            Model = this.SelectedModel,
+            Effort = this.SelectedEffort,
+            PinnedRepoPath = follows ? null : root ?? text,
+        };
+        this.ResultRepoPath = text.Length == 0 ? this.SolutionRepoRoot() ?? string.Empty : root ?? text;
         this.ResultApiKey = this.ApiKeyBox.Password.Trim() is { Length: > 0 } key ? key : null;
         this.DialogResult = true;
     }

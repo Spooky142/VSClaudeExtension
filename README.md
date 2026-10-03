@@ -9,7 +9,10 @@ It calls the Anthropic API directly with your own API key and doesn't depend on 
   - **Enter** sends the prompt. **Shift+Enter** adds a new line.
   - Answers render as Markdown (headings, lists, code blocks, tables, links) while they stream, and you can select and copy them.
   - The transcript follows new output. Scroll up to read earlier messages; scrolling back to the bottom resumes following.
-- Claude works inside one repository, which **From solution** detects from the open solution. You can also type any path inside a clone.
+- Claude works inside one git repository.
+  - It's **set automatically from Visual Studio**: whenever a solution or folder inside a git repository is opened, or is already open when the chat window first loads, that repository becomes the chat's repository. If it's a different repository, your next message starts a new chat there. Solutions outside git leave the current repository alone.
+  - In Settings you can type a path, **Browse…** with Visual Studio's folder picker, or click **Use solution**. A line under the box shows whether the path is inside a git repository and whether it matches the open solution.
+  - A repository you pick in Settings is used, and remembered across restarts, until you next open a solution or folder in a git repository. Hover over the header chip to see which applies.
   - `git`: read-only commands (`status`, `diff`, `log`, `show`, `blame`, `grep`, `ls-files`, branch/tag/remote listing, …) run immediately. Anything that changes the repo or contacts a remote (`commit`, `checkout`, `reset`, `push`, `merge`, `stash`, …) shows an **Allow / Deny** prompt first.
   - `read_file`, `edit_file` and `write_file` work only on files inside the repository. Absolute paths, `..` escapes, anything under `.git`, and paths through symlinks or junctions are refused. Every edit shows a preview and needs approval; **Allow all edits** skips the prompt for the rest of that chat. Edits keep the file's encoding and line endings.
 - **Settings** (gear icon, or click either header chip) picks the engine, model, effort, repository and API key. Settings are saved in `%LOCALAPPDATA%\ClaudeForVS\settings.json`.
@@ -23,6 +26,10 @@ It calls the Anthropic API directly with your own API key and doesn't depend on 
   - Models: Opus 5.5 (`claude-opus-5-5`, default), Sonnet 5.5 (`claude-sonnet-5-5`), Haiku 4.5 (`claude-haiku-4-5`).
   - Effort: Low, Medium, High (default), Extra high or Max. A new effort applies from the next message; switching model starts a new chat.
   - Haiku 4.5 has no effort setting, so effort maps to its thinking budget: Low means no thinking, then 4K, 10K, 20K or 32K tokens.
+- **Usage strip**, always shown under the header:
+  - **Claude Code**: your plan's limits (5-hour, weekly, and any per-model weekly windows) with a bar, a percentage and a reset countdown. They come from the `rate_limit_event` messages Claude Code streams, update with each message, and are remembered in `%LOCALAPPDATA%\ClaudeForVS\usage.json` between restarts.
+  - **Claude API**: this Visual Studio session's tokens with an estimated cost at list prices, plus per-minute rate-limit headroom from the API's `anthropic-ratelimit-*` response headers. Monthly spend isn't shown; it needs an admin key.
+  - Bars turn amber at 75% and red at 90%, or when Claude Code reports a warning or a reached limit.
 - Streams responses with thinking summaries (shown in grey) and uses automatic prompt caching.
 
 ## Layout
