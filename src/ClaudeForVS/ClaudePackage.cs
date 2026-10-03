@@ -16,7 +16,7 @@ namespace ClaudeForVS;
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [Guid(PackageGuidString)]
 [ProvideMenuResource("Menus.ctmenu", 1)]
-[ProvideToolWindow(typeof(ClaudeToolWindow), Style = VsDockStyle.Tabbed, Window = "3ae79031-e1bc-11d0-8f78-00a0c9110057")] // with Solution Explorer
+[ProvideToolWindow(typeof(ClaudeToolWindow), Style = VsDockStyle.Float, Width = 560, Height = 760)] // its own floating window; can still be docked by dragging
 [ProvideBindingPath]
 public sealed class ClaudePackage : AsyncPackage
 {

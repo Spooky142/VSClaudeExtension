@@ -4,7 +4,8 @@ using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeForVS.ToolWindows;
 
-[Guid("c7a1e2d3-4b5f-4a6e-8d9c-0f1e2a3b4c5d")]
+// Changing this GUID discards any layout VS saved for the window (e.g. when it used to dock with Solution Explorer).
+[Guid("5e8f3a21-9c4d-4b7a-b16e-3d2f0a9c8e74")]
 public sealed class ClaudeToolWindow : ToolWindowPane
 {
     public ClaudeToolWindow()
