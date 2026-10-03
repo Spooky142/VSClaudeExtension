@@ -4,37 +4,358 @@
              xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
              xmlns:platform="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
              xmlns:md="clr-namespace:ClaudeForVS.Markdown"
+             xmlns:local="clr-namespace:ClaudeForVS.ToolWindows"
              Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
-             Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}">
+             Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+             FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
+             FontSize="12">
   <UserControl.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis" />
-    <Style TargetType="Button" BasedOn="{StaticResource {x:Static vsshell:VsResourceKeys.ButtonStyleKey}}">
-      <Setter Property="Margin" Value="4,0,0,0" />
-      <Setter Property="Padding" Value="8,2" />
-      <Setter Property="MinWidth" Value="0" />
-    </Style>
-    <Style TargetType="TextBox" BasedOn="{StaticResource {x:Static vsshell:VsResourceKeys.TextBoxStyleKey}}" />
+
+    <!-- Palette. Translucent grays and tints read correctly on both light and dark VS themes. -->
+    <SolidColorBrush x:Key="Accent" Color="#D97757" />
+    <SolidColorBrush x:Key="AccentHover" Color="#C7684A" />
+    <SolidColorBrush x:Key="AccentPressed" Color="#B05A3E" />
+    <SolidColorBrush x:Key="UserBubble" Color="#24D97757" />
+    <SolidColorBrush x:Key="HoverTint" Color="#1F808080" />
+    <SolidColorBrush x:Key="PressTint" Color="#38808080" />
+    <SolidColorBrush x:Key="SubtleFill" Color="#10808080" />
+    <SolidColorBrush x:Key="SubtleBorder" Color="#38808080" />
+    <SolidColorBrush x:Key="AddedTint" Color="#332EA043" />
+    <SolidColorBrush x:Key="RemovedTint" Color="#33F85149" />
+    <SolidColorBrush x:Key="Amber" Color="#E3A33A" />
+    <SolidColorBrush x:Key="AmberTint" Color="#14E3A33A" />
+    <SolidColorBrush x:Key="ErrorRed" Color="#E5484D" />
+    <SolidColorBrush x:Key="ErrorTint" Color="#1AE5484D" />
+    <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>
+
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
     </Style>
     <Style TargetType="Hyperlink">
       <Setter Property="Foreground" Value="{DynamicResource {x:Static platform:EnvironmentColors.ControlLinkTextBrushKey}}" />
     </Style>
-    <Style x:Key="MonoBox" TargetType="TextBox" BasedOn="{StaticResource {x:Static vsshell:VsResourceKeys.TextBoxStyleKey}}">
-      <Setter Property="IsReadOnly" Value="True" />
-      <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
-      <Setter Property="FontSize" Value="11" />
-      <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="Padding" Value="4" />
-      <Setter Property="TextWrapping" Value="NoWrap" />
-      <Setter Property="HorizontalScrollBarVisibility" Value="Auto" />
-      <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
-      <Setter Property="Background" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}" />
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+    <Style TargetType="ScrollBar" BasedOn="{StaticResource {x:Static vsshell:VsResourceKeys.ScrollBarStyleKey}}" />
+    <Style TargetType="ScrollViewer" BasedOn="{StaticResource {x:Static vsshell:VsResourceKeys.ScrollViewerStyleKey}}" />
+
+    <Style x:Key="Muted" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
     </Style>
+    <Style x:Key="Icon" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- Flat square icon button (header actions). -->
+    <Style x:Key="IconButton" TargetType="Button">
+      <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Width" Value="28" />
+      <Setter Property="Height" Value="28" />
+      <Setter Property="Margin" Value="2,0,0,0" />
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Outlined rounded button (secondary actions, suggestions, the repo chip). -->
+    <Style x:Key="OutlineButton" TargetType="Button">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{StaticResource SubtleBorder}" />
+      <Setter Property="Padding" Value="12,5" />
+      <Setter Property="Margin" Value="6,0,0,0" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="1" CornerRadius="14" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Filled accent button (primary action). -->
+    <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource OutlineButton}">
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="Background" Value="{StaticResource Accent}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="1" CornerRadius="14" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.FontWeight="SemiBold" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHover}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentPressed}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Round send / stop button in the composer. -->
+    <Style x:Key="RoundButton" TargetType="Button">
+      <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="Background" Value="{StaticResource Accent}" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="16">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHover}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentPressed}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Rounded input boxes for the settings panel. -->
+    <ControlTemplate x:Key="FieldTemplate" TargetType="Control">
+      <Border x:Name="Bd" Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
+              BorderBrush="{StaticResource SubtleBorder}" BorderThickness="1" CornerRadius="6" Padding="6,4">
+        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
+      </Border>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+          <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+        </Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate>
+    <Style x:Key="Field" TargetType="TextBox">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+      <Setter Property="CaretBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+      <Setter Property="Template" Value="{StaticResource FieldTemplate}" />
+    </Style>
+    <Style x:Key="PasswordField" TargetType="PasswordBox">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+      <Setter Property="CaretBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
+      <Setter Property="Template" Value="{StaticResource FieldTemplate}" />
+    </Style>
+
+    <!-- Whole-row toggle used by collapsible transcript rows. -->
+    <Style x:Key="RowToggle" TargetType="ToggleButton">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ToggleButton">
+            <Border x:Name="Bd" Background="Transparent" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Stretch" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- One line of tool output or diff. -->
+    <DataTemplate x:Key="DiffLineTemplate">
+      <Border x:Name="Bg" Padding="8,0">
+        <TextBlock x:Name="LineText" Text="{Binding Text}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" TextWrapping="Wrap" />
+      </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding Kind}" Value="Added">
+          <Setter TargetName="Bg" Property="Background" Value="{StaticResource AddedTint}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Kind}" Value="Removed">
+          <Setter TargetName="Bg" Property="Background" Value="{StaticResource RemovedTint}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Kind}" Value="Hunk">
+          <Setter TargetName="LineText" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <!-- ===== Transcript templates ===== -->
+    <DataTemplate x:Key="UserTemplate">
+      <Grid Margin="48,10,0,6">
+        <Border CornerRadius="12,12,4,12" Background="{StaticResource UserBubble}" />
+        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" Margin="12,8,12,8" FontSize="13"
+                         Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="AssistantTemplate">
+      <StackPanel Margin="0,10,0,6">
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+          <Border Width="20" Height="20" CornerRadius="10" Background="{StaticResource Accent}">
+            <TextBlock Text="✻" Foreground="White" FontSize="12" FontFamily="Segoe UI Symbol"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0" />
+          </Border>
+          <TextBlock Text="Claude" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
+        </StackPanel>
+        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
+                         Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      </StackPanel>
+    </DataTemplate>
+
+    <DataTemplate x:Key="ThinkingTemplate">
+      <StackPanel Margin="0,4,0,2">
+        <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}">
+          <DockPanel Margin="6,4">
+            <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;" />
+            <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xEA80;" Margin="0,0,8,0" />
+            <TextBlock Text="Thinking" FontStyle="Italic" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+          </DockPanel>
+        </ToggleButton>
+        <TextBlock x:Name="Body" Text="{Binding Text}" Style="{StaticResource Muted}" FontStyle="Italic"
+                   TextWrapping="Wrap" Margin="26,2,6,4" Visibility="Collapsed" />
+      </StackPanel>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding IsChecked, ElementName=Toggle}" Value="True">
+          <Setter TargetName="Body" Property="Visibility" Value="Visible" />
+          <Setter TargetName="Chevron" Property="Text" Value="&#xE70D;" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <DataTemplate x:Key="ToolTemplate">
+      <Border Margin="0,2" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+        <StackPanel>
+          <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}">
+            <DockPanel Margin="8,5">
+              <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;"
+                         Margin="8,0,0,0" Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}" />
+              <TextBlock x:Name="Glyph" Style="{StaticResource Icon}" FontSize="12" Text="&#xE756;" Margin="0,0,8,0" />
+              <TextBlock x:Name="Title" Text="{Binding Header}" ToolTip="{Binding Header}" FontFamily="{StaticResource MonoFont}"
+                         FontSize="11.5" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            </DockPanel>
+          </ToggleButton>
+          <Border x:Name="Details" Visibility="Collapsed" BorderThickness="0,1,0,0" BorderBrush="{StaticResource SubtleBorder}" Padding="0,4">
+            <ItemsControl ItemsSource="{Binding DetailLines}" ItemTemplate="{StaticResource DiffLineTemplate}" />
+          </Border>
+        </StackPanel>
+      </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding IsChecked, ElementName=Toggle}" Value="True">
+          <Setter TargetName="Details" Property="Visibility" Value="Visible" />
+          <Setter TargetName="Chevron" Property="Text" Value="&#xE70D;" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Read">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE8A5;" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Edit">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE70F;" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Create">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE710;" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Declined">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE711;" />
+          <Setter TargetName="Title" Property="TextDecorations" Value="Strikethrough" />
+          <Setter TargetName="Title" Property="Opacity" Value="0.6" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Failed">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE7BA;" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Amber}" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <DataTemplate x:Key="ErrorTemplate">
+      <Border Margin="0,6" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource ErrorRed}" Background="{StaticResource ErrorTint}" Padding="10,8">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE783;" FontSize="14"
+                     Foreground="{StaticResource ErrorRed}" VerticalAlignment="Top" Margin="0,1,10,0" />
+          <StackPanel>
+            <TextBlock Text="{Binding Header}" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding Text}" TextWrapping="Wrap" Margin="0,2,0,0" Style="{StaticResource Muted}" />
+          </StackPanel>
+        </DockPanel>
+      </Border>
+    </DataTemplate>
+
+    <DataTemplate x:Key="NoticeTemplate">
+      <Grid Margin="0,10">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Border Height="1" Background="{StaticResource SubtleBorder}" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="{Binding Header}" Style="{StaticResource Muted}" FontSize="11" Margin="10,0" />
+        <Border Grid.Column="2" Height="1" Background="{StaticResource SubtleBorder}" VerticalAlignment="Center" />
+      </Grid>
+    </DataTemplate>
+
+    <local:ChatEntryTemplateSelector x:Key="EntrySelector"
+                                     User="{StaticResource UserTemplate}"
+                                     Assistant="{StaticResource AssistantTemplate}"
+                                     Thinking="{StaticResource ThinkingTemplate}"
+                                     Tool="{StaticResource ToolTemplate}"
+                                     Error="{StaticResource ErrorTemplate}"
+                                     Notice="{StaticResource NoticeTemplate}" />
   </UserControl.Resources>
 
-  <Grid Margin="6">
+  <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
@@ -42,113 +363,177 @@
       <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <!-- Repository picker -->
-    <DockPanel Grid.Row="0" Margin="0,0,0,4">
-      <TextBlock DockPanel.Dock="Left" Text="Repo:" VerticalAlignment="Center" Margin="0,0,4,0" />
-      <Button DockPanel.Dock="Right" Content="New chat" Click="OnNewChat" ToolTip="Start a fresh conversation" />
-      <Button DockPanel.Dock="Right" Content="From solution" Click="OnFromSolution" ToolTip="Use the git repository of the open solution" />
-      <TextBox Text="{Binding RepoPath, UpdateSourceTrigger=PropertyChanged}" VerticalContentAlignment="Center" />
+    <!-- Header: repository chip and actions -->
+    <DockPanel Grid.Row="0" Margin="10,8,10,6">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="New chat" Click="OnNewChat" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" Click="OnToggleSettings" />
+      </StackPanel>
+      <Button Style="{StaticResource OutlineButton}" Margin="0" Padding="10,4" HorizontalAlignment="Left"
+              ToolTip="{Binding RepoPath}" Click="OnToggleSettings">
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="12" Foreground="{StaticResource Accent}" />
+          <TextBlock Text="{Binding RepoName}" FontWeight="SemiBold" Margin="7,0,6,0" VerticalAlignment="Center" />
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE70D;" FontSize="8" />
+        </StackPanel>
+      </Button>
     </DockPanel>
 
-    <!-- API key setup -->
-    <Border Grid.Row="1" Margin="0,0,0,4" Padding="6" BorderThickness="1"
-            BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ActiveBorderKey}}"
-            Visibility="{Binding NeedsApiKey, Converter={StaticResource BoolToVis}}">
+    <!-- Settings panel -->
+    <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,10" CornerRadius="8" BorderThickness="1"
+            BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}"
+            Visibility="{Binding SettingsVisible, Converter={StaticResource BoolToVis}}">
       <StackPanel>
-        <TextBlock TextWrapping="Wrap" Margin="0,0,0,4"
-                   Text="Enter your Anthropic API key (from console.anthropic.com). It's stored encrypted for your Windows account in %LOCALAPPDATA%\ClaudeForVS." />
+        <TextBlock Text="Repository" FontWeight="SemiBold" Margin="0,0,0,4" />
         <DockPanel>
-          <Button DockPanel.Dock="Right" Content="Save key" Click="OnSaveKey" />
-          <PasswordBox x:Name="ApiKeyBox" VerticalContentAlignment="Center" />
+          <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Content="Use solution" Click="OnFromSolution" />
+          <TextBox Style="{StaticResource Field}" Text="{Binding RepoPath, UpdateSourceTrigger=PropertyChanged}" />
         </DockPanel>
+
+        <TextBlock Text="Anthropic API key" FontWeight="SemiBold" Margin="0,12,0,4" />
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Save" Click="OnSaveKey" />
+          <PasswordBox x:Name="ApiKeyBox" Style="{StaticResource PasswordField}" />
+        </DockPanel>
+        <TextBlock Style="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"
+                   Text="Get a key at console.anthropic.com. It's stored encrypted for your Windows account." />
+        <TextBlock Style="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
+                   Text="✓ A key is saved. Enter a new one only to replace it."
+                   Visibility="{Binding HasApiKey, Converter={StaticResource BoolToVis}}" />
       </StackPanel>
     </Border>
 
-    <!-- Transcript -->
+    <!-- Transcript, with a welcome screen while it's empty -->
     <ScrollViewer x:Name="Transcript" Grid.Row="2"
                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                   ScrollChanged="OnTranscriptScrollChanged" PreviewMouseWheel="OnTranscriptMouseWheel">
-      <ItemsControl ItemsSource="{Binding Messages}">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate>
-            <Border x:Name="Card" Margin="0,0,0,8" Padding="8,4" BorderThickness="2,0,0,0"
-                    BorderBrush="{DynamicResource {x:Static vsshell:VsBrushes.ActiveBorderKey}}">
-              <StackPanel>
-                <TextBlock x:Name="HeaderText" Text="{Binding Header}" FontWeight="SemiBold" Margin="0,0,0,2" TextWrapping="Wrap" />
-                <md:MarkdownView x:Name="Body" Markdown="{Binding Text, Mode=OneWay}"
-                                 Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-                <TextBlock x:Name="PlainBody" Text="{Binding Text}" TextWrapping="Wrap" Visibility="Collapsed" />
-                <Expander x:Name="DetailExpander" Header="Details" Margin="0,2,0,0"
-                          Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}"
-                          Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}">
-                  <TextBox Style="{StaticResource MonoBox}" Text="{Binding Detail, Mode=OneWay}" />
-                </Expander>
-              </StackPanel>
-            </Border>
-            <DataTemplate.Triggers>
-              <DataTrigger Binding="{Binding Kind}" Value="User">
-                <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource {x:Static platform:EnvironmentColors.SystemHighlightBrushKey}}" />
-              </DataTrigger>
-              <DataTrigger Binding="{Binding Kind}" Value="Thinking">
-                <Setter TargetName="Body" Property="Visibility" Value="Collapsed" />
-                <Setter TargetName="PlainBody" Property="Visibility" Value="Visible" />
-                <Setter TargetName="PlainBody" Property="FontStyle" Value="Italic" />
-                <Setter TargetName="PlainBody" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
-                <Setter TargetName="HeaderText" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
-              </DataTrigger>
-              <DataTrigger Binding="{Binding Kind}" Value="Tool">
-                <Setter TargetName="Body" Property="Visibility" Value="Collapsed" />
-                <Setter TargetName="HeaderText" Property="FontFamily" Value="Cascadia Mono, Consolas" />
-                <Setter TargetName="HeaderText" Property="FontWeight" Value="Normal" />
-                <Setter TargetName="HeaderText" Property="FontSize" Value="11" />
-              </DataTrigger>
-              <DataTrigger Binding="{Binding Kind}" Value="Error">
-                <Setter TargetName="Body" Property="Visibility" Value="Collapsed" />
-                <Setter TargetName="PlainBody" Property="Visibility" Value="Visible" />
-                <Setter TargetName="Card" Property="BorderBrush" Value="Firebrick" />
-              </DataTrigger>
-            </DataTemplate.Triggers>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
+      <ItemsControl ItemsSource="{Binding Messages}" ItemTemplateSelector="{StaticResource EntrySelector}" Margin="12,0,12,8" />
     </ScrollViewer>
 
-    <!-- Approval prompt for actions that change the repository -->
-    <Border Grid.Row="3" Margin="0,4,0,0" Padding="6" BorderThickness="1" BorderBrush="Orange"
+    <StackPanel Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="380" Margin="16">
+      <StackPanel.Style>
+        <Style TargetType="StackPanel">
+          <Setter Property="Visibility" Value="Collapsed" />
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding Messages.Count}" Value="0">
+              <Setter Property="Visibility" Value="Visible" />
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+      </StackPanel.Style>
+      <Border Width="44" Height="44" CornerRadius="22" Background="{StaticResource Accent}" HorizontalAlignment="Center">
+        <TextBlock Text="✻" Foreground="White" FontSize="24" FontFamily="Segoe UI Symbol"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-2,0,0" />
+      </Border>
+      <TextBlock Text="How can I help?" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,12,0,4" />
+      <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" TextAlignment="Center">
+        <Run Text="I can explore" />
+        <Run Text="{Binding RepoName, Mode=OneWay}" FontWeight="SemiBold" />
+        <Run Text="with git, read its files, and make edits you approve." />
+      </TextBlock>
+      <WrapPanel HorizontalAlignment="Center" Margin="0,16,0,0">
+        <WrapPanel.Resources>
+          <Style TargetType="Button" BasedOn="{StaticResource OutlineButton}">
+            <Setter Property="Margin" Value="4" />
+          </Style>
+        </WrapPanel.Resources>
+        <Button Content="Summarize recent commits" Tag="Summarize the last 10 commits in this repository." Click="OnSuggestion" />
+        <Button Content="What's uncommitted?" Tag="What has changed since the last commit? Summarize the uncommitted changes." Click="OnSuggestion" />
+        <Button Content="Tour this repo" Tag="Give me a quick tour of this repository: its structure, main components and how they fit together." Click="OnSuggestion" />
+        <Button Content="Find TODOs" Tag="Find TODO and FIXME comments in this repository and tell me which are worth fixing first." Click="OnSuggestion" />
+      </WrapPanel>
+    </StackPanel>
+
+    <!-- Approval card for actions that change the repository -->
+    <Border Grid.Row="3" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource Amber}"
+            Background="{StaticResource AmberTint}" Padding="12,10"
             Visibility="{Binding HasPendingApproval, Converter={StaticResource BoolToVis}}">
-      <DockPanel>
-        <TextBlock DockPanel.Dock="Top" Text="Claude wants to:" Margin="0,0,0,2" />
-        <TextBlock DockPanel.Dock="Top" Text="{Binding ApprovalTitle}" FontFamily="Cascadia Mono, Consolas" FontWeight="SemiBold" TextWrapping="Wrap" />
-        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
-          <Button Content="Allow" Click="OnAllow" />
-          <Button Content="{Binding AllowAllLabel}" Click="OnAllowAll" Visibility="{Binding CanAllowAll, Converter={StaticResource BoolToVis}}" />
-          <Button Content="Deny" Click="OnDeny" />
+      <StackPanel>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,8,0" />
+          <TextBlock Text="Claude wants to make a change" FontWeight="SemiBold" VerticalAlignment="Center" />
         </StackPanel>
-        <TextBox Style="{StaticResource MonoBox}" Text="{Binding ApprovalDetail, Mode=OneWay}" Margin="0,4,0,0"
-                 MaxHeight="240" VerticalScrollBarVisibility="Auto"
-                 Visibility="{Binding HasApprovalDetail, Converter={StaticResource BoolToVis}}" />
-      </DockPanel>
+        <TextBlock Text="{Binding ApprovalTitle}" FontFamily="{StaticResource MonoFont}" FontSize="12" TextWrapping="Wrap" Margin="21,4,0,0" />
+        <Border Margin="0,8,0,0" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+                Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
+                Visibility="{Binding HasApprovalDetail, Converter={StaticResource BoolToVis}}">
+          <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,4">
+            <ItemsControl ItemsSource="{Binding ApprovalLines}" ItemTemplate="{StaticResource DiffLineTemplate}" />
+          </ScrollViewer>
+        </Border>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+          <Button Style="{StaticResource OutlineButton}" Content="Deny" Click="OnDeny" />
+          <Button Style="{StaticResource OutlineButton}" Content="{Binding AllowAllLabel}" Click="OnAllowAll"
+                  Visibility="{Binding CanAllowAll, Converter={StaticResource BoolToVis}}" />
+          <Button Style="{StaticResource PrimaryButton}" Content="Allow" Click="OnAllow" />
+        </StackPanel>
+      </StackPanel>
     </Border>
 
-    <!-- Status line -->
-    <DockPanel Grid.Row="4" Margin="0,4,0,0">
-      <Button DockPanel.Dock="Right" Content="Change API key" Click="OnChangeKey"
-              Visibility="{Binding HasApiKey, Converter={StaticResource BoolToVis}}" />
-      <TextBlock Text="{Binding Status}" TextWrapping="Wrap" VerticalAlignment="Center"
-                 Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
-    </DockPanel>
+    <!-- Activity indicator -->
+    <ProgressBar Grid.Row="4" Height="2" Margin="12,0,12,0" IsIndeterminate="{Binding IsBusy}" BorderThickness="0"
+                 Background="Transparent" Foreground="{StaticResource Accent}"
+                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
 
-    <!-- Prompt box: Enter sends, Shift+Enter inserts a new line -->
-    <DockPanel Grid.Row="5" Margin="0,4,0,0">
-      <StackPanel DockPanel.Dock="Right" VerticalAlignment="Bottom">
-        <Button Content="Send" Click="OnSend" IsEnabled="{Binding IsIdle}" Margin="4,0,0,4" />
-        <Button Content="Stop" Click="OnStop" IsEnabled="{Binding IsBusy}" />
-      </StackPanel>
-      <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="60" MaxHeight="200"
-               VerticalScrollBarVisibility="Auto" PreviewKeyDown="OnPromptKeyDown"
-               ToolTip="Enter to send, Shift+Enter for a new line" />
+    <!-- Composer: Enter sends, Shift+Enter inserts a new line -->
+    <Border Grid.Row="5" Margin="10,4,10,4" CornerRadius="12" BorderThickness="1"
+            Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}">
+      <Border.Style>
+        <Style TargetType="Border">
+          <Setter Property="BorderBrush" Value="{StaticResource SubtleBorder}" />
+          <Style.Triggers>
+            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+              <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+            </Trigger>
+          </Style.Triggers>
+        </Style>
+      </Border.Style>
+      <Grid Margin="12,8,8,8">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="200"
+                 VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" PreviewKeyDown="OnPromptKeyDown"
+                 Background="Transparent" BorderThickness="0" Padding="0" FontSize="13"
+                 Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}"
+                 CaretBrush="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}">
+          <TextBox.Template>
+            <ControlTemplate TargetType="TextBox">
+              <ScrollViewer x:Name="PART_ContentHost" />
+            </ControlTemplate>
+          </TextBox.Template>
+        </TextBox>
+        <TextBlock Text="Ask Claude about this repository…" IsHitTestVisible="False" FontSize="13" Margin="2,0,0,0"
+                   Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}">
+          <TextBlock.Style>
+            <Style TargetType="TextBlock">
+              <Setter Property="Visibility" Value="Collapsed" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding Text, ElementName=PromptBox}" Value="">
+                  <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </TextBlock.Style>
+        </TextBlock>
+        <Grid Grid.Column="1" VerticalAlignment="Bottom" Margin="8,0,0,0">
+          <Button Style="{StaticResource RoundButton}" Content="&#xE724;" ToolTip="Send (Enter)" Click="OnSend"
+                  Visibility="{Binding IsIdle, Converter={StaticResource BoolToVis}}" />
+          <Button Style="{StaticResource RoundButton}" Content="&#xE71A;" ToolTip="Stop" Click="OnStop"
+                  Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
+        </Grid>
+      </Grid>
+    </Border>
+
+    <!-- Footer: status and keyboard hint -->
+    <DockPanel Grid.Row="6" Margin="14,0,14,8">
+      <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="11" Text="Enter to send · Shift+Enter for new line" />
+      <TextBlock Style="{StaticResource Muted}" FontSize="11" Text="{Binding Status}" TextTrimming="CharacterEllipsis"
+                 ToolTip="{Binding Status}" Margin="0,0,12,0" />
     </DockPanel>
   </Grid>
 </UserControl>

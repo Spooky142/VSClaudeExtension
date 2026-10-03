@@ -105,7 +105,17 @@ public partial class ClaudeChatControl : UserControl
         this.ApiKeyBox.Clear();
     }
 
-    private void OnChangeKey(object sender, RoutedEventArgs e) => this.viewModel.NeedsApiKey = true;
+    private void OnToggleSettings(object sender, RoutedEventArgs e) => this.viewModel.ShowSettings = !this.viewModel.ShowSettings;
+
+    /// <summary>Suggestion buttons on the welcome screen carry their full prompt in Tag.</summary>
+    private void OnSuggestion(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string prompt })
+        {
+            this.PromptBox.Text = prompt;
+            this.SendPrompt();
+        }
+    }
 
     private void OnAllow(object sender, RoutedEventArgs e) => this.viewModel.Resolve(Approval.Allow);
 

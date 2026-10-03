@@ -1,6 +1,9 @@
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using ClaudeForVS.Agent;
 
 namespace ClaudeForVS.ToolWindows;
 
@@ -11,6 +14,46 @@ internal enum ChatEntryKind
     Thinking,
     Tool,
     Error,
+
+    /// <summary>A small centred note, e.g. "New conversation".</summary>
+    Notice,
+}
+
+internal enum DiffLineKind
+{
+    Context,
+    Added,
+    Removed,
+    Hunk,
+}
+
+/// <summary>One line of tool output or a diff preview.</summary>
+internal sealed record DiffLine(string Text, DiffLineKind Kind)
+{
+    /// <summary>Splits detail text into lines, classifying them by the activity that produced it.</summary>
+    public static IReadOnlyList<DiffLine> Parse(string detail, ActivityKind activity)
+    {
+        if (detail.Length == 0)
+        {
+            return [];
+        }
+
+        return detail.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').Select(line => new DiffLine(line, Classify(line, activity))).ToList();
+    }
+
+    private static DiffLineKind Classify(string line, ActivityKind activity) => activity switch
+    {
+        // The agent's edit previews use "- " / "+ " prefixes.
+        ActivityKind.Edit when line.StartsWith("+ ") => DiffLineKind.Added,
+        ActivityKind.Edit when line.StartsWith("- ") => DiffLineKind.Removed,
+        ActivityKind.Create => DiffLineKind.Added,
+
+        // Unified diff output from git diff/show/log -p.
+        ActivityKind.Git when line.StartsWith("@@") => DiffLineKind.Hunk,
+        ActivityKind.Git when line.StartsWith("+") && !line.StartsWith("+++") => DiffLineKind.Added,
+        ActivityKind.Git when line.StartsWith("-") && !line.StartsWith("---") => DiffLineKind.Removed,
+        _ => DiffLineKind.Context,
+    };
 }
 
 /// <summary>One item in the chat transcript.</summary>
@@ -19,22 +62,25 @@ internal sealed class ChatEntry : INotifyPropertyChanged
     private readonly StringBuilder buffer = new();
     private string text;
 
-    public ChatEntry(ChatEntryKind kind, string header, string text = "", string detail = "")
+    public ChatEntry(ChatEntryKind kind, string header, string text = "", string detail = "", ActivityKind activity = ActivityKind.Git)
     {
         this.Kind = kind;
         this.Header = header;
+        this.Activity = activity;
         this.buffer.Append(text);
         this.text = text;
-        this.Detail = detail;
+        this.DetailLines = DiffLine.Parse(detail, activity);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ChatEntryKind Kind { get; }
 
+    public ActivityKind Activity { get; }
+
     public string Header { get; }
 
-    /// <summary>Markdown body (rendered for user/assistant entries, plain for thinking).</summary>
+    /// <summary>Markdown body (rendered for user/assistant entries, plain for thinking and errors).</summary>
     public string Text
     {
         get => this.text;
@@ -45,10 +91,10 @@ internal sealed class ChatEntry : INotifyPropertyChanged
         }
     }
 
-    /// <summary>Monospace detail shown in an expander, e.g. tool output or a diff.</summary>
-    public string Detail { get; }
+    /// <summary>Expandable monospace detail, e.g. tool output or a diff.</summary>
+    public IReadOnlyList<DiffLine> DetailLines { get; }
 
-    public bool HasDetail => this.Detail.Length > 0;
+    public bool HasDetail => this.DetailLines.Count > 0;
 
     public void Append(string chunk)
     {

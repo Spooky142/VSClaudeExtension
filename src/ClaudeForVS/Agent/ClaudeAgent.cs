@@ -108,7 +108,7 @@ internal sealed class ClaudeAgent
                 }
                 catch (Exception ex) when (ex is ToolInputException or InvalidOperationException or IOException or UnauthorizedAccessException)
                 {
-                    sink.ToolActivity($"{toolUse.Name} failed", ex.Message);
+                    sink.ToolActivity(ActivityKind.Failed, $"{toolUse.Name} failed", ex.Message);
                     results.Add(Error(toolUse.ID, ex.Message));
                 }
             }
@@ -284,16 +284,16 @@ internal sealed class ClaudeAgent
         if (!GitRunner.IsReadOnly(args))
         {
             sink.SetStatus("Waiting for your approval…");
-            if (await sink.RequestApprovalAsync(commandLine, string.Empty, null, cancellationToken) == Approval.Deny)
+            if (await sink.RequestApprovalAsync(ActivityKind.Git, commandLine, string.Empty, null, cancellationToken) == Approval.Deny)
             {
-                sink.ToolActivity(commandLine, "Declined by you.");
+                sink.ToolActivity(ActivityKind.Declined, commandLine, "Declined by you.");
                 return "The user declined to run this command.";
             }
         }
 
         sink.SetStatus($"Running {commandLine}");
         (int exitCode, string output) = await GitRunner.RunAsync(this.RepoRoot, args, cancellationToken);
-        sink.ToolActivity(commandLine, output.Length == 0 ? "(no output)" : output);
+        sink.ToolActivity(ActivityKind.Git, commandLine, output.Length == 0 ? "(no output)" : output);
         return exitCode == 0
             ? (output.Length == 0 ? "(no output)" : output)
             : $"git exited with code {exitCode}.\n{output}";
@@ -318,7 +318,7 @@ internal sealed class ClaudeAgent
             }
         }
 
-        sink.ToolActivity($"Read {this.files.Relative(file.FullPath)}", $"lines {startLine}-{endLine} of {lines.Length}");
+        sink.ToolActivity(ActivityKind.Read, $"Read {this.files.Relative(file.FullPath)}", $"lines {startLine}-{endLine} of {lines.Length}");
         return sb.Length == 0 ? "(empty file)" : sb.ToString();
     }
 
@@ -350,15 +350,15 @@ internal sealed class ClaudeAgent
 
         string relative = this.files.Relative(file.FullPath);
         string diff = Diff(oldString, newString) + (count > 1 ? $"\n({count} occurrences)" : string.Empty);
-        if (!await this.ApproveEditAsync($"Edit {relative}", diff, sink, cancellationToken))
+        if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Edit {relative}", diff, sink, cancellationToken))
         {
-            sink.ToolActivity($"Edit {relative}", "Declined by you.");
+            sink.ToolActivity(ActivityKind.Declined, $"Edit {relative}", "Declined by you.");
             return "The user declined this edit.";
         }
 
         string updated = replaceAll ? file.Text.Replace(find, replace) : ReplaceFirst(file.Text, find, replace);
         this.files.Write(file.FullPath, updated, file.Encoding);
-        sink.ToolActivity($"Edited {relative}", diff);
+        sink.ToolActivity(ActivityKind.Edit, $"Edited {relative}", diff);
         return $"Edited {relative} ({count} replacement{(count == 1 ? "" : "s")}).";
     }
 
@@ -385,18 +385,18 @@ internal sealed class ClaudeAgent
         }
 
         string preview = Preview(content);
-        if (!await this.ApproveEditAsync($"{action} {relative}", preview, sink, cancellationToken))
+        if (!await this.ApproveEditAsync(ActivityKind.Create, $"{action} {relative}", preview, sink, cancellationToken))
         {
-            sink.ToolActivity($"{action} {relative}", "Declined by you.");
+            sink.ToolActivity(ActivityKind.Declined, $"{action} {relative}", "Declined by you.");
             return "The user declined this change.";
         }
 
         this.files.Write(full, RepoFiles.NormalizeNewlines(content, newline), encoding);
-        sink.ToolActivity(action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview);
+        sink.ToolActivity(ActivityKind.Create, action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview);
         return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}.";
     }
 
-    private async Task<bool> ApproveEditAsync(string title, string detail, IChatSink sink, CancellationToken cancellationToken)
+    private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, IChatSink sink, CancellationToken cancellationToken)
     {
         if (this.editsPreApproved)
         {
@@ -404,7 +404,7 @@ internal sealed class ClaudeAgent
         }
 
         sink.SetStatus("Waiting for your approval…");
-        Approval approval = await sink.RequestApprovalAsync(title, detail, "Allow all edits", cancellationToken);
+        Approval approval = await sink.RequestApprovalAsync(kind, title, detail, "Allow all edits", cancellationToken);
         if (approval == Approval.AllowAll)
         {
             this.editsPreApproved = true;
