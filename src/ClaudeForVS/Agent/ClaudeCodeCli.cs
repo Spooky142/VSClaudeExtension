@@ -33,7 +33,8 @@ internal sealed record ClaudeCodeStatus(string? ExecutablePath, string? Version,
 
 /// <summary>
 /// Finds, installs and signs in to the Claude Code CLI. Installing and signing in run Anthropic's own
-/// installer and login flow in a visible window; this extension never sees or stores Claude credentials.
+/// installer and login flow in a visible window; this extension never stores Claude credentials
+/// (<see cref="PlanUsageClient"/> only reads Claude Code's token to fetch plan usage).
 /// </summary>
 internal static class ClaudeCodeCli
 {

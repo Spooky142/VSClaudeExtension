@@ -74,7 +74,7 @@
           <Button x:Name="RefreshButton" Style="{StaticResource OutlineButton}" Margin="0" Content="Check again" Click="OnRefreshStatus" />
         </StackPanel>
         <TextBlock Style="{StaticResource CardNote}" Margin="0,8,0,0"
-                   Text="Install runs Anthropic's official installer in a PowerShell window. Sign in opens Anthropic's own login page; this extension never sees your Claude credentials." />
+                   Text="Install runs Anthropic's official installer in a PowerShell window. Sign in opens Anthropic's own login page. The extension never stores your Claude credentials; it only reads Claude Code's sign-in token to show your plan usage." />
       </StackPanel>
     </Border>
 

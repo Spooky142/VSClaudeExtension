@@ -97,6 +97,102 @@ internal static class PlanUsageStore
     }
 }
 
+/// <summary>
+/// Fetches exact plan usage (every window's percentage) from the endpoint behind Claude Code's /usage command,
+/// using the sign-in token Claude Code keeps in ~/.claude/.credentials.json. The endpoint is undocumented, so any
+/// failure just returns nothing and the strip keeps what the stream reported.
+/// </summary>
+internal static class PlanUsageClient
+{
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    public static async Task<IReadOnlyList<PlanLimit>> FetchAsync(CancellationToken cancellationToken)
+    {
+        if (ReadAccessToken() is not string token)
+        {
+            return [];
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            request.Headers.Add("anthropic-beta", "oauth-2025-04-20");
+            using HttpResponseMessage response = await Http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return [];
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            return Parse(doc.RootElement);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>Each top-level object with a numeric 0-100 "utilization" is a window, e.g. five_hour or seven_day.</summary>
+    private static List<PlanLimit> Parse(JsonElement root)
+    {
+        var limits = new List<PlanLimit>();
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return limits;
+        }
+
+        foreach (JsonProperty window in root.EnumerateObject())
+        {
+            if (window.Value.ValueKind != JsonValueKind.Object
+                || !window.Value.TryGetProperty("utilization", out JsonElement u) || u.ValueKind != JsonValueKind.Number)
+            {
+                continue;
+            }
+
+            double utilization = Math.Max(0, Math.Min(100, u.GetDouble()));
+            DateTimeOffset? resetsAt =
+                window.Value.TryGetProperty("resets_at", out JsonElement r) && r.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(r.GetString(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTimeOffset t)
+                    ? t : null;
+            string name = window.Name == "extra_usage" ? "overage" : window.Name;
+            string status = utilization >= 100 ? "rejected" : "allowed";
+            limits.Add(new PlanLimit(name, utilization, resetsAt, status, DateTimeOffset.Now));
+        }
+
+        return limits;
+    }
+
+    /// <summary>Claude Code refreshes this token on every run, so it's normally valid right after one.</summary>
+    private static string? ReadAccessToken()
+    {
+        string dir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") is { Length: > 0 } configDir
+            ? configDir
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, ".credentials.json")));
+            if (!doc.RootElement.TryGetProperty("claudeAiOauth", out JsonElement oauth)
+                || !oauth.TryGetProperty("accessToken", out JsonElement token) || token.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            if (oauth.TryGetProperty("expiresAt", out JsonElement exp) && exp.ValueKind == JsonValueKind.Number
+                && DateTimeOffset.FromUnixTimeMilliseconds(exp.GetInt64()) <= DateTimeOffset.UtcNow)
+            {
+                return null;
+            }
+
+            return token.GetString();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+}
+
 /// <summary>Reads the anthropic-ratelimit-* headers off every API response.</summary>
 internal sealed class RateLimitHeaderHandler : DelegatingHandler
 {

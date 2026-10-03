@@ -643,6 +643,16 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     void IChatSink.ReportPlanLimit(PlanLimit limit)
     {
+        // Stream events often omit the percentage; keep the last exact figure for the same window period.
+        if (limit.Utilization is null
+            && this.planLimits.TryGetValue(limit.Window, out PlanLimit? known)
+            && known.Utilization is double pct
+            && known.ResetsAt is DateTimeOffset knownReset && limit.ResetsAt is DateTimeOffset newReset
+            && Math.Abs((knownReset - newReset).TotalMinutes) < 5)
+        {
+            limit = limit with { Utilization = pct };
+        }
+
         this.planLimits[limit.Window] = limit;
         PlanUsageStore.Save(this.planLimits.Values);
         this.RefreshUsage();

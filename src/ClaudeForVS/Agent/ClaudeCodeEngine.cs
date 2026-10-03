@@ -162,6 +162,15 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         this.running = null;
         cancellationToken.ThrowIfCancellationRequested();
 
+        // The stream only says which window is binding; fetch exact percentages for every window.
+        if (gotResult)
+        {
+            foreach (PlanLimit limit in await PlanUsageClient.FetchAsync(cancellationToken))
+            {
+                chatSink.ReportPlanLimit(limit);
+            }
+        }
+
         if (resultError != null)
         {
             throw new InvalidOperationException(resultError);
