@@ -16,9 +16,10 @@ Ask the user whether they would like the changes committed. Do not commit, stage
 
 If they say yes:
 
-1. Bump the .vsix version (patch number, e.g. 0.3.8 → 0.3.9) in both places so they stay in step:
+1. Bump the .vsix version (patch number, e.g. 0.3.8 → 0.3.9) in all three places so they stay in step:
    - `Identity Version` in `src/ClaudeForVS/source.extension.vsixmanifest`
    - `<AssemblyVersion>` in `src/ClaudeForVS/ClaudeForVS.csproj` (same version with a trailing `.0`)
+   - `<FileVersion>` in `src/ClaudeForVS/ClaudeForVS.csproj` (same value as `<AssemblyVersion>`)
 2. Do a clean rebuild with the command above and confirm it succeeds. If it fails, fix the problem before going further.
 3. Stage the changes, including the version bump, and commit with a short message in the style of the existing history (e.g. "Added token usage to prompts.").
 
