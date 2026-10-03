@@ -46,6 +46,9 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private double sessionCost;
     private ApiRateLimits? apiLimits;
 
+    // Tokens in the current chat's context, as of the latest response; 0 until the chat's engine has answered once.
+    private long contextTokens;
+
     // Tokens (and, for the API, estimated cost) used by the prompt currently running; shown as its footer.
     private TokenUsage promptTokens;
     private double promptCost;
@@ -72,6 +75,9 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     public bool HasUsageMeters => this.UsageMeters.Count > 0;
 
+    /// <summary>Tiles per row: all in one row, except four, which go in a 2x2 grid.</summary>
+    public int UsageColumns => this.UsageMeters.Count == 4 ? 2 : Math.Max(1, this.UsageMeters.Count);
+
     /// <summary>Shown in place of the meters before there's anything to report.</summary>
     public string UsageEmptyText { get => this.usageEmptyText; private set => this.Set(ref this.usageEmptyText, value); }
 
@@ -79,6 +85,11 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     public void RefreshUsage()
     {
         List<UsageMeter> meters = this.settings.Engine == ChatEngineKind.ClaudeCode ? this.PlanMeters() : this.ApiMeters();
+        if (this.ContextMeter() is UsageMeter context)
+        {
+            meters.Add(context);
+        }
+
         this.UsageMeters.Clear();
         foreach (UsageMeter meter in meters)
         {
@@ -89,6 +100,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             : this.settings.Engine == ChatEngineKind.ClaudeCode ? "Plan usage limits appear here after your first message."
             : "Token usage and rate limits appear here after your first message.";
         this.OnPropertyChanged(nameof(this.HasUsageMeters));
+        this.OnPropertyChanged(nameof(this.UsageColumns));
     }
 
     private List<UsageMeter> PlanMeters()
@@ -144,6 +156,18 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
 
         return meters;
+    }
+
+    private UsageMeter? ContextMeter()
+    {
+        if (this.contextTokens <= 0)
+        {
+            return null;
+        }
+
+        long window = AgentSettings.ContextWindow(this.engine?.Model ?? this.settings.Model);
+        double used = Math.Min(100, 100.0 * this.contextTokens / window);
+        return new UsageMeter("Context", $"{used:0}%", $"{FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens", used, UsageMeter.SeverityFor(used));
     }
 
     private static string FormatTokens(long n) =>
@@ -683,6 +707,13 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     {
         this.engine?.Dispose();
         this.engine = null;
+
+        // The context belongs to the engine's conversation; a reopened chat reports its size again after the next reply.
+        if (this.contextTokens != 0)
+        {
+            this.contextTokens = 0;
+            this.RefreshUsage();
+        }
     }
 
     public void Stop()
@@ -935,6 +966,12 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         long total = this.liveTokens > 0 ? this.liveTokens : t.Input + t.CacheWrite + t.Output; // new tokens only; cache reads re-send the history every round
         string text = $"{total:N0} tokens";
         return this.promptHasCost ? $"{text} · ≈ ${this.promptCost:0.00}" : text;
+    }
+
+    void IChatSink.ReportContext(long tokens)
+    {
+        this.contextTokens = tokens;
+        this.RefreshUsage();
     }
 
     void IChatSink.ReportApiRateLimits(ApiRateLimits limits)

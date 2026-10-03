@@ -217,7 +217,7 @@
 
     <!-- The prompt's token count, on its own line tucked under the last thing Claude wrote. -->
     <DataTemplate x:Key="UsageTemplate">
-      <TextBlock Text="{Binding Text}" Style="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Left" Margin="6,-3,0,8" />
+      <TextBlock Text="{Binding Text}" Style="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Left" Margin="12,0,0,10" />
     </DataTemplate>
 
     <local:ChatEntryTemplateSelector x:Key="EntrySelector"
@@ -264,15 +264,16 @@
     <!-- Usage strip: plan limits (Claude Code) or session tokens and rate limits (Claude API). Always shown. -->
     <Border Margin="10,0,10,8">
       <Grid>
-        <ItemsControl ItemsSource="{Binding UsageMeters}" Visibility="{Binding HasUsageMeters, Converter={StaticResource BoolToVis}}">
+        <!-- One row of tiles, or a 2x2 grid when there are four. The -3 margin cancels the tiles' outer spacing. -->
+        <ItemsControl ItemsSource="{Binding UsageMeters}" Margin="-3" Visibility="{Binding HasUsageMeters, Converter={StaticResource BoolToVis}}">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate>
-              <UniformGrid Rows="1" />
+              <UniformGrid Columns="{Binding UsageColumns}" />
             </ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Border Margin="0,0,6,0" Padding="10,6,10,6" CornerRadius="8" BorderThickness="1"
+              <Border Margin="3" Padding="10,6,10,6" CornerRadius="8" BorderThickness="1"
                       BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}"
                       ToolTip="{Binding Detail}">
                 <StackPanel>

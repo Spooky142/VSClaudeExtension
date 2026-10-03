@@ -311,6 +311,9 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     // Live token count for the prompt in progress: finished messages, plus the one streaming (output estimated until it ends).
     private long liveDone, liveInput, liveOutput, liveChars;
 
+    // Everything sent with the streaming message, cache re-read included; plus its output, that's the context size.
+    private long contextInput;
+
     private void TrackLiveTokens(JsonElement inner, IChatSink chatSink)
     {
         switch (Str(inner, "type"))
@@ -318,6 +321,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             case "message_start" when inner.TryGetProperty("message", out JsonElement message)
                 && message.TryGetProperty("usage", out JsonElement start):
                 this.liveInput = (long)(Num(start, "input_tokens") + Num(start, "cache_creation_input_tokens")); // new input only, not the cache re-read
+                this.contextInput = this.liveInput + (long)Num(start, "cache_read_input_tokens");
                 this.liveOutput = 0;
                 this.liveChars = 0;
                 break;
@@ -329,6 +333,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 this.liveChars = this.liveOutput * 4;
                 break;
             case "message_stop":
+                chatSink.ReportContext(this.contextInput + Math.Max(this.liveOutput, this.liveChars / 4));
                 this.liveDone += this.liveInput + Math.Max(this.liveOutput, this.liveChars / 4);
                 this.liveInput = this.liveOutput = this.liveChars = 0;
                 chatSink.ReportLiveTokens(this.liveDone);

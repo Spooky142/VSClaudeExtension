@@ -139,6 +139,7 @@ internal sealed class ClaudeAgent : IChatEngine
             sink.ReportLiveTokens(promptTokens);
             sink.SetStatus(null); // token counts are shown below the reply, not in the footer
             sink.ReportTokenUsage(this.Model, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens));
+            sink.ReportContext(turn.UncachedInputTokens + turn.CacheWriteTokens + turn.CacheReadTokens + turn.OutputTokens);
             if (this.rateLimits.Latest is ApiRateLimits limits)
             {
                 sink.ReportApiRateLimits(limits);

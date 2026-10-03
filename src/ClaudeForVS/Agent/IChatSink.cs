@@ -66,6 +66,9 @@ internal interface IChatSink
     /// <summary>Running total of tokens (in + out) for the prompt in progress, updated as the response streams. Estimated until each response completes.</summary>
     void ReportLiveTokens(long totalTokens);
 
+    /// <summary>Tokens in the conversation's context after the latest response (everything sent, cached or not, plus the reply).</summary>
+    void ReportContext(long tokens);
+
     /// <summary>Per-minute rate-limit headroom from the latest API response (Claude API engine).</summary>
     void ReportApiRateLimits(ApiRateLimits limits);
 

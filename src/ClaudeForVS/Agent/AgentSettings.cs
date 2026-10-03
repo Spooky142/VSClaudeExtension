@@ -100,6 +100,9 @@ internal sealed record AgentSettings
         _ => "claude-opus-5-5",
     };
 
+    /// <summary>Context window in tokens.</summary>
+    public static long ContextWindow(ClaudeModel model) => model == ClaudeModel.Haiku ? 200_000 : 1_000_000;
+
     /// <summary>Short display name, e.g. "Opus 5.5".</summary>
     public static string ModelName(ClaudeModel model) => model switch
     {
