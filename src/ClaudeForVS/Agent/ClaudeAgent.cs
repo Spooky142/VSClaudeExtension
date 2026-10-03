@@ -24,6 +24,18 @@ internal sealed class ClaudeAgent : IChatEngine
     private const int MaxFileChars = 100_000;
     private const int PreviewLines = 60;
 
+    // At this share of the context window the conversation is summarized and restarted from the summary.
+    private const double CompactAt = 0.95;
+
+    private const string CompactInstruction =
+        """
+        The conversation is close to the context limit, so it will be replaced by a summary that you write now. Don't call
+        any tools and don't continue the task. Write a summary that lets you carry on seamlessly: what the user has asked
+        for, decisions made, the files involved and what was changed in each, anything still pending or in progress
+        (including the step you were in the middle of), and any preferences the user has expressed. Be specific: include
+        paths, names and key code details, since this summary is all that will remain.
+        """;
+
     private const string PlanModeRefusal =
         "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes in Settings.";
 
@@ -33,6 +45,9 @@ internal sealed class ClaudeAgent : IChatEngine
     private readonly RepoFiles files;
     private readonly string systemPrompt;
     private bool editsPreApproved;
+
+    // Tokens in the conversation as of the latest response; 0 until the first one (or after compacting).
+    private long contextTokens;
 
     public ClaudeAgent(string apiKey, string repoRoot, ClaudeModel model, EffortLevel effort, AgentMode mode)
     {
@@ -127,11 +142,17 @@ internal sealed class ClaudeAgent : IChatEngine
 
     public async Task SendAsync(string prompt, IChatSink sink, CancellationToken cancellationToken)
     {
+        // Finished responses so far; the one streaming is added on top, live.
+        long promptTokens = await this.CompactIfNeededAsync(sink, midTask: false, cancellationToken);
         this.history.Add(new() { Role = Role.User, Content = prompt });
 
-        long promptTokens = 0; // finished responses so far; the one streaming is added on top, live
         for (int round = 0; round < MaxToolRounds; round++)
         {
+            if (round > 0)
+            {
+                promptTokens += await this.CompactIfNeededAsync(sink, midTask: true, cancellationToken);
+            }
+
             sink.SetStatus("Waiting for Claude…");
             StreamedTurn turn = await this.StreamTurnAsync(sink, promptTokens, cancellationToken);
             this.history.Add(new() { Role = Role.Assistant, Content = turn.Content });
@@ -139,7 +160,8 @@ internal sealed class ClaudeAgent : IChatEngine
             sink.ReportLiveTokens(promptTokens);
             sink.SetStatus(null); // token counts are shown below the reply, not in the footer
             sink.ReportTokenUsage(this.Model, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens));
-            sink.ReportContext(turn.UncachedInputTokens + turn.CacheWriteTokens + turn.CacheReadTokens + turn.OutputTokens);
+            this.contextTokens = turn.UncachedInputTokens + turn.CacheWriteTokens + turn.CacheReadTokens + turn.OutputTokens;
+            sink.ReportContext(this.contextTokens);
             if (this.rateLimits.Latest is ApiRateLimits limits)
             {
                 sink.ReportApiRateLimits(limits);
@@ -198,10 +220,74 @@ internal sealed class ClaudeAgent : IChatEngine
 
     public void Dispose() => this.client.Dispose();
 
+    /// <summary>
+    /// Once the context passes <see cref="CompactAt"/>, has Claude summarize the conversation and restarts it from that
+    /// summary. The request reuses the normal request with the instruction appended, so the history is read from the
+    /// cache. Returns the new tokens it used (counted towards the prompt's total), or 0 if it didn't compact.
+    /// </summary>
+    private async Task<long> CompactIfNeededAsync(IChatSink sink, bool midTask, CancellationToken cancellationToken)
+    {
+        long window = AgentSettings.ContextWindow(this.Model);
+        if (this.contextTokens < window * CompactAt || this.history.Count == 0)
+        {
+            return 0;
+        }
+
+        sink.SetStatus("Context is nearly full · summarizing the conversation…");
+
+        // The reply has to fit in what's left of the window.
+        long maxTokens = Math.Max(4_000, Math.Min(16_000, window - this.contextTokens - 2_000));
+        MessageCreateParams request = this.BuildRequest(new() { Role = Role.User, Content = CompactInstruction }, maxTokens);
+
+        var summary = new StringBuilder();
+        long newTokens = 0;
+        await foreach (RawMessageStreamEvent ev in this.client.Messages.CreateStreaming(request, cancellationToken))
+        {
+            if (ev.TryPickStart(out RawMessageStartEvent? start))
+            {
+                newTokens += start.Message.Usage.InputTokens + (start.Message.Usage.CacheCreationInputTokens ?? 0);
+                sink.ReportTokenUsage(this.Model, new TokenUsage(
+                    start.Message.Usage.InputTokens,
+                    start.Message.Usage.CacheCreationInputTokens ?? 0,
+                    start.Message.Usage.CacheReadInputTokens ?? 0,
+                    0));
+            }
+            else if (ev.TryPickContentBlockDelta(out RawContentBlockDeltaEvent? delta) && delta.Delta.TryPickText(out TextDelta? text))
+            {
+                summary.Append(text.Text);
+            }
+            else if (ev.TryPickDelta(out RawMessageDeltaEvent? messageDelta))
+            {
+                newTokens += messageDelta.Usage.OutputTokens;
+                sink.ReportTokenUsage(this.Model, new TokenUsage(0, 0, 0, messageDelta.Usage.OutputTokens));
+            }
+        }
+
+        if (summary.Length == 0)
+        {
+            return newTokens; // nothing to restart from; carry on with the full history
+        }
+
+        long before = this.contextTokens;
+        this.history.Clear();
+        this.history.Add(new()
+        {
+            Role = Role.User,
+            Content = "This conversation was compacted to free up context. Summary of everything before this point:\n\n"
+                + summary.ToString().Trim()
+                + (midTask ? "\n\nContinue the task from where you left off." : string.Empty),
+        });
+        this.contextTokens = 0;
+        sink.ReportCompacted(before);
+        return newTokens;
+    }
+
     private static ToolResultBlockParam Error(string id, string message)
         => new() { ToolUseID = id, Content = message, IsError = true };
 
-    private MessageCreateParams BuildRequest()
+    /// <param name="extra">A message to send after the history without adding it to the history.</param>
+    /// <param name="maxTokens">Overrides the output limit; doesn't affect caching.</param>
+    private MessageCreateParams BuildRequest(MessageParam? extra = null, long maxTokens = 64000)
     {
         bool haiku = this.Model == ClaudeModel.Haiku;
         int? haikuBudget = AgentSettings.HaikuThinkingBudget(this.Effort);
@@ -209,17 +295,18 @@ internal sealed class ClaudeAgent : IChatEngine
         return new MessageCreateParams
         {
             Model = AgentSettings.ModelId(this.Model),
-            MaxTokens = 64000,
+            MaxTokens = maxTokens,
 
             // Haiku 4.5 rejects `effort` and adaptive thinking; it takes an explicit thinking budget instead.
-            Thinking = haiku ? HaikuThinking(haikuBudget) : new ThinkingConfigAdaptive { Display = Display.Summarized },
+            // The budget has to be below the output limit, which compaction lowers.
+            Thinking = haiku ? HaikuThinking(haikuBudget < maxTokens ? haikuBudget : null) :new ThinkingConfigAdaptive { Display = Display.Summarized },
             OutputConfig = haiku ? null : new OutputConfig { Effort = ToApiEffort(this.Effort) },
 
             // Automatic caching: the breakpoint moves forward with the conversation.
             CacheControl = new CacheControlEphemeral(),
             System = this.systemPrompt + "\n" + AgentSettings.ModeInstructions(this.Mode),
             Tools = ToolDefinitions,
-            Messages = [.. this.history],
+            Messages = extra is null ? [.. this.history] : [.. this.history, extra],
         };
     }
 

@@ -974,6 +974,16 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.RefreshUsage();
     }
 
+    void IChatSink.ReportCompacted(long tokensBefore)
+    {
+        this.currentAssistant = null;
+        this.currentThinking = null;
+        string was = tokensBefore > 0 ? $" · was {FormatTokens(tokensBefore)} tokens" : string.Empty;
+        this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"Context compacted{was}"));
+        this.contextTokens = 0; // the next reply reports the new size
+        this.RefreshUsage();
+    }
+
     void IChatSink.ReportApiRateLimits(ApiRateLimits limits)
     {
         this.apiLimits = limits;

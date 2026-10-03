@@ -223,6 +223,11 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                         this.SessionId = Str(ev, "session_id") ?? this.SessionId;
                         chatSink.SetStatus("Claude Code is working…");
                         break;
+                    case "compact_boundary" when isTopLevel:
+                        // Claude Code compacts on its own as the context fills up (or on /compact).
+                        double preTokens = ev.TryGetProperty("compact_metadata", out JsonElement meta) ? Num(meta, "pre_tokens") : 0;
+                        chatSink.ReportCompacted((long)preTokens);
+                        break;
                     case "api_retry":
                         chatSink.SetStatus($"Retrying ({Num(ev, "attempt")}/{Num(ev, "max_retries")})…");
                         break;

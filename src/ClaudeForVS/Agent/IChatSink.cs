@@ -69,6 +69,10 @@ internal interface IChatSink
     /// <summary>Tokens in the conversation's context after the latest response (everything sent, cached or not, plus the reply).</summary>
     void ReportContext(long tokens);
 
+    /// <summary>The conversation was replaced by a summary to free up context.</summary>
+    /// <param name="tokensBefore">Tokens in the context just before, if known (0 if not).</param>
+    void ReportCompacted(long tokensBefore);
+
     /// <summary>Per-minute rate-limit headroom from the latest API response (Claude API engine).</summary>
     void ReportApiRateLimits(ApiRateLimits limits);
 
