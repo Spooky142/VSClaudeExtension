@@ -45,6 +45,7 @@ public partial class SettingsDialog : DialogWindow
         (settings.Engine == ChatEngineKind.ClaudeCode ? this.CodeEngineRadio : this.ApiEngineRadio).IsChecked = true;
         this.ModelRadio(settings.Model).IsChecked = true;
         this.EffortRadio(settings.Effort).IsChecked = true;
+        (settings.Mode switch { AgentMode.Auto => this.ModeAuto, AgentMode.Plan => this.ModePlan, _ => this.ModeCoding }).IsChecked = true;
         this.RepoBox.Text = repoPath;
         this.UpdateRepoHint();
         this.ApiKeyHint.Text = hasApiKey
@@ -79,6 +80,11 @@ public partial class SettingsDialog : DialogWindow
         this.EffortXHigh.IsChecked == true ? EffortLevel.XHigh :
         this.EffortMax.IsChecked == true ? EffortLevel.Max :
         EffortLevel.High;
+
+    private AgentMode SelectedMode =>
+        this.ModeAuto.IsChecked == true ? AgentMode.Auto :
+        this.ModePlan.IsChecked == true ? AgentMode.Plan :
+        AgentMode.Coding;
 
     private RadioButton ModelRadio(ClaudeModel model) => model switch
     {
@@ -169,6 +175,22 @@ public partial class SettingsDialog : DialogWindow
     private void OnModelChanged(object sender, RoutedEventArgs e) => this.UpdateHints();
 
     private void OnEffortChanged(object sender, RoutedEventArgs e) => this.UpdateHints();
+
+    private void OnModeChanged(object sender, RoutedEventArgs e)
+    {
+        // Radio buttons raise Checked during InitializeComponent, before every named element exists.
+        if (this.ModeHint is null)
+        {
+            return;
+        }
+
+        this.ModeHint.Text = this.SelectedMode switch
+        {
+            AgentMode.Auto => "Edits files and runs commands without asking. Fastest, but review the changes afterwards.",
+            AgentMode.Plan => "Read-only. Reviews your code and suggests changes, but never edits files.",
+            _ => "Edits files and runs commands after you approve each action.",
+        };
+    }
 
     private void OnInstallClaudeCode(object sender, RoutedEventArgs e) =>
         this.RunBusy("Installing… follow the PowerShell window that opened.", ClaudeCodeCli.InstallAsync);
@@ -297,6 +319,7 @@ public partial class SettingsDialog : DialogWindow
             Engine = this.SelectedEngine,
             Model = this.SelectedModel,
             Effort = this.SelectedEffort,
+            Mode = this.SelectedMode,
             PinnedRepoPath = follows ? null : root ?? text,
         };
         this.ResultRepoPath = text.Length == 0 ? this.SolutionRepoRoot() ?? string.Empty : root ?? text;

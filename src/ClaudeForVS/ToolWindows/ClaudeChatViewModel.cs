@@ -253,9 +253,9 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
     }
 
-    /// <summary>Header chip text, e.g. "Opus 5.5 · High" or "Opus 5.5 · High · Claude Code".</summary>
+    /// <summary>Header chip text, e.g. "Opus 5.5 · High · Coding" or "Opus 5.5 · High · Coding · Claude Code".</summary>
     public string ModelSummary =>
-        $"{AgentSettings.ModelName(this.settings.Model)} · {AgentSettings.EffortName(this.settings.Effort)}"
+        $"{AgentSettings.ModelName(this.settings.Model)} · {AgentSettings.EffortName(this.settings.Effort)} · {AgentSettings.ModeName(this.settings.Mode)}"
         + (this.settings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty);
 
     /// <summary>Last known Claude Code install/sign-in state, or null before the first check.</summary>
@@ -398,6 +398,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         else
         {
             this.engine.Effort = newSettings.Effort; // used from the next message on
+            this.engine.Mode = newSettings.Mode;
         }
 
         this.Status = "Settings saved.";
@@ -485,7 +486,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
                 return null;
             }
 
-            return new ClaudeCodeEngine(exe, root, this.settings.Model, this.settings.Effort);
+            return new ClaudeCodeEngine(exe, root, this.settings.Model, this.settings.Effort, this.settings.Mode);
         }
 
         if (ApiKeyStore.Load() is not string apiKey)
@@ -495,7 +496,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             return null;
         }
 
-        return new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort);
+        return new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode);
     }
 
     private async Task RunAsync(IChatEngine runEngine, string text)

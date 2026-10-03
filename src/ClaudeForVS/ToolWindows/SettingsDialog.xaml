@@ -123,6 +123,17 @@
     </Border>
     <TextBlock x:Name="EffortHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
 
+    <!-- Mode -->
+    <TextBlock Style="{StaticResource SectionTitle}" Text="Mode" />
+    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+      <UniformGrid Rows="1" Columns="3">
+        <RadioButton x:Name="ModeAuto" GroupName="Mode" Style="{StaticResource SegmentRadio}" Content="Auto" Checked="OnModeChanged" />
+        <RadioButton x:Name="ModePlan" GroupName="Mode" Style="{StaticResource SegmentRadio}" Content="Plan" Checked="OnModeChanged" />
+        <RadioButton x:Name="ModeCoding" GroupName="Mode" Style="{StaticResource SegmentRadio}" Content="Coding" Checked="OnModeChanged" />
+      </UniformGrid>
+    </Border>
+    <TextBlock x:Name="ModeHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
+
     <!-- Repository -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Repository" />
     <DockPanel>

@@ -37,12 +37,13 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     private CancellationToken runToken;
     private Process? running;
 
-    public ClaudeCodeEngine(string executable, string repoRoot, ClaudeModel model, EffortLevel effort)
+    public ClaudeCodeEngine(string executable, string repoRoot, ClaudeModel model, EffortLevel effort, AgentMode mode)
     {
         this.executable = executable;
         this.RepoRoot = repoRoot;
         this.Model = model;
         this.Effort = effort;
+        this.Mode = mode;
         this.approvalServer = new ApprovalServer(this.DecideAsync);
 
         string dir = Path.Combine(Path.GetTempPath(), "ClaudeForVS");
@@ -65,6 +66,8 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
     public EffortLevel Effort { get; set; }
 
+    public AgentMode Mode { get; set; }
+
     public async Task SendAsync(string prompt, IChatSink chatSink, CancellationToken cancellationToken)
     {
         this.sink = chatSink;
@@ -78,10 +81,10 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             "--verbose",
             "--include-partial-messages",
             "--model", AgentSettings.ModelId(this.Model),
-            "--permission-mode", "default",
+            "--permission-mode", this.Mode == AgentMode.Plan ? "plan" : "default",
             "--mcp-config", this.mcpConfigPath,
             "--permission-prompt-tool", ApprovalServer.QualifiedToolName,
-            "--append-system-prompt", ExtraSystemPrompt,
+            "--append-system-prompt", ExtraSystemPrompt + " " + AgentSettings.ModeInstructions(this.Mode),
         };
         if (this.Model != ClaudeModel.Haiku)
         {
@@ -295,7 +298,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     /// <summary>Called by the approval server (on a thread-pool thread) when Claude Code needs permission.</summary>
     private async Task<PermissionDecision> DecideAsync(string toolName, JsonElement input)
     {
-        if (this.editsPreApproved && EditTools.Contains(toolName))
+        if (this.editsPreApproved && EditTools.Contains(toolName) && this.Mode != AgentMode.Plan)
         {
             return new PermissionDecision(true);
         }
@@ -303,6 +306,17 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         if (toolName == "AskUserQuestion")
         {
             return await this.AskQuestionsAsync(input).ConfigureAwait(false);
+        }
+
+        // Plan mode never leaves plan mode or changes files; the user switches modes in Settings.
+        if (this.Mode == AgentMode.Plan && (toolName == "ExitPlanMode" || EditTools.Contains(toolName)))
+        {
+            return new PermissionDecision(false, "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes in Settings.");
+        }
+
+        if (this.Mode == AgentMode.Auto)
+        {
+            return new PermissionDecision(true);
         }
 
         IChatSink? chatSink = this.sink;

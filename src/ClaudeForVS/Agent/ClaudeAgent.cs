@@ -24,6 +24,9 @@ internal sealed class ClaudeAgent : IChatEngine
     private const int MaxFileChars = 100_000;
     private const int PreviewLines = 60;
 
+    private const string PlanModeRefusal =
+        "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes in Settings.";
+
     private readonly AnthropicClient client;
     private readonly RateLimitHeaderHandler rateLimits = new();
     private readonly List<MessageParam> history = [];
@@ -31,12 +34,13 @@ internal sealed class ClaudeAgent : IChatEngine
     private readonly string systemPrompt;
     private bool editsPreApproved;
 
-    public ClaudeAgent(string apiKey, string repoRoot, ClaudeModel model, EffortLevel effort)
+    public ClaudeAgent(string apiKey, string repoRoot, ClaudeModel model, EffortLevel effort, AgentMode mode)
     {
         this.client = new AnthropicClient { ApiKey = apiKey, Handlers = [this.rateLimits] };
         this.RepoRoot = repoRoot;
         this.Model = model;
         this.Effort = effort;
+        this.Mode = mode;
         this.files = new RepoFiles(repoRoot);
         this.systemPrompt =
             $"""
@@ -68,6 +72,9 @@ internal sealed class ClaudeAgent : IChatEngine
 
     /// <summary>Can change between turns; takes effect on the next request.</summary>
     public EffortLevel Effort { get; set; }
+
+    /// <summary>Can change between turns; takes effect on the next request.</summary>
+    public AgentMode Mode { get; set; }
 
     public async Task SendAsync(string prompt, IChatSink sink, CancellationToken cancellationToken)
     {
@@ -159,7 +166,7 @@ internal sealed class ClaudeAgent : IChatEngine
 
             // Automatic caching: the breakpoint moves forward with the conversation.
             CacheControl = new CacheControlEphemeral(),
-            System = this.systemPrompt,
+            System = this.systemPrompt + "\n" + AgentSettings.ModeInstructions(this.Mode),
             Tools = ToolDefinitions,
             Messages = [.. this.history],
         };
@@ -333,7 +340,13 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         string commandLine = "git " + string.Join(" ", args.Select(GitRunner.QuoteArgument));
-        if (!GitRunner.IsReadOnly(args))
+        if (!GitRunner.IsReadOnly(args) && this.Mode == AgentMode.Plan)
+        {
+            sink.ToolActivity(ActivityKind.Declined, commandLine, "Blocked in Plan mode.");
+            return PlanModeRefusal;
+        }
+
+        if (!GitRunner.IsReadOnly(args) && this.Mode == AgentMode.Coding)
         {
             sink.SetStatus("Waiting for your approval…");
             if (await sink.RequestApprovalAsync(ActivityKind.Git, commandLine, string.Empty, null, cancellationToken) == Approval.Deny)
@@ -450,7 +463,12 @@ internal sealed class ClaudeAgent : IChatEngine
 
     private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, IChatSink sink, CancellationToken cancellationToken)
     {
-        if (this.editsPreApproved)
+        if (this.Mode == AgentMode.Plan)
+        {
+            throw new ToolInputException(PlanModeRefusal);
+        }
+
+        if (this.editsPreApproved || this.Mode == AgentMode.Auto)
         {
             return true;
         }
