@@ -233,8 +233,8 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     private long liveTokens;
 
-    // The usage entry of the prompt in progress; its text is the realtime "1,234 tokens" count.
-    private ChatEntry? liveUsageEntry;
+    // The user entry of the prompt in progress; its Usage is the realtime "1,234 tokens" count.
+    private ChatEntry? promptEntry;
 
     private void SetLiveTokens(long tokens)
     {
@@ -245,21 +245,12 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
     }
 
-    /// <summary>Shows the prompt's token count as the last transcript entry, below anything added since it last changed.</summary>
+    /// <summary>Shows the prompt's token count beside its message.</summary>
     private void ShowPromptUsage(string text)
     {
-        if (this.liveUsageEntry is null)
+        if (this.promptEntry != null)
         {
-            this.liveUsageEntry = new ChatEntry(ChatEntryKind.Usage, string.Empty, text);
-            this.Messages.Add(this.liveUsageEntry);
-            return;
-        }
-
-        this.liveUsageEntry.SetText(text);
-        int at = this.Messages.IndexOf(this.liveUsageEntry);
-        if (at >= 0 && at < this.Messages.Count - 1)
-        {
-            this.Messages.Move(at, this.Messages.Count - 1);
+            this.promptEntry.Usage = text;
         }
     }
 
@@ -539,6 +530,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
                 Text = m.Text,
                 Detail = string.Join("\n", m.DetailLines.Select(l => l.Text)),
                 Activity = m.Activity,
+                Usage = m.Usage,
             })
             .ToList();
 
@@ -584,10 +576,19 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.Messages.Clear();
         foreach (SavedEntry e in entries)
         {
-            // Chats saved by 0.3.9-0.3.10 kept the token count in the header.
-            this.Messages.Add(e.Kind == ChatEntryKind.Usage && e.Text.Length == 0
-                ? new ChatEntry(e.Kind, string.Empty, e.Header)
-                : new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity));
+            if (e.Kind == ChatEntryKind.Usage)
+            {
+                // Older chats kept the token count as a footer entry (0.3.9-0.3.10 in the header); move it onto its prompt.
+                ChatEntry? prompt = this.Messages.LastOrDefault(m => m.Kind == ChatEntryKind.User);
+                if (prompt != null)
+                {
+                    prompt.Usage = e.Text.Length == 0 ? e.Header : e.Text;
+                }
+
+                continue;
+            }
+
+            this.Messages.Add(new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity) { Usage = e.Usage });
         }
 
         this.chatId = info.Id;
@@ -730,7 +731,8 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             this.ApplyResume(created); // before the new prompt joins the transcript
         }
 
-        this.Messages.Add(new ChatEntry(ChatEntryKind.User, "You", text));
+        this.promptEntry = new ChatEntry(ChatEntryKind.User, "You", text);
+        this.Messages.Add(this.promptEntry);
         this.PromptSent?.Invoke(this, EventArgs.Empty);
         this.SaveChat();
         run = this.RunAsync(this.engine, text);
@@ -800,13 +802,13 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
         finally
         {
-            // Settle the live count with the final figure, below the reply.
-            if (this.liveUsageEntry != null || this.promptTokens != default)
+            // Settle the live count with the final figure.
+            if (this.promptEntry is { Usage.Length: > 0 } || this.promptTokens != default)
             {
                 this.ShowPromptUsage(this.FormatPromptUsage());
             }
 
-            this.liveUsageEntry = null;
+            this.promptEntry = null;
 
             if (ReferenceEquals(this.engine, runEngine))
             {

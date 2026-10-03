@@ -117,6 +117,8 @@ public partial class ClaudeChatControl : UserControl
 
     private void OnStop(object sender, RoutedEventArgs e) => this.viewModel.Stop();
 
+    private void OnToggleHistory(object sender, RoutedEventArgs e) => this.viewModel.ShowHistory = !this.viewModel.ShowHistory;
+
     private void OnNewChat(object sender, RoutedEventArgs e) => this.viewModel.NewChat();
 
     private void OnOpenSession(object sender, RoutedEventArgs e)

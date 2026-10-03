@@ -18,7 +18,7 @@ internal enum ChatEntryKind
     /// <summary>A small centred note, e.g. "New conversation".</summary>
     Notice,
 
-    /// <summary>A small footer with the tokens used by the prompt above.</summary>
+    /// <summary>Only in chats saved before 0.3.12, which kept the tokens as a footer below the reply; now shown on the user entry.</summary>
     Usage,
 }
 
@@ -64,6 +64,7 @@ internal sealed class ChatEntry : INotifyPropertyChanged
 {
     private readonly StringBuilder buffer = new();
     private string text;
+    private string usage = string.Empty;
 
     public ChatEntry(ChatEntryKind kind, string header, string text = "", string detail = "", ActivityKind activity = ActivityKind.Git)
     {
@@ -90,6 +91,17 @@ internal sealed class ChatEntry : INotifyPropertyChanged
         private set
         {
             this.text = value;
+            this.OnPropertyChanged();
+        }
+    }
+
+    /// <summary>For a user entry: the tokens its prompt used, shown beside the message. Empty until the prompt reports any.</summary>
+    public string Usage
+    {
+        get => this.usage;
+        set
+        {
+            this.usage = value;
             this.OnPropertyChanged();
         }
     }

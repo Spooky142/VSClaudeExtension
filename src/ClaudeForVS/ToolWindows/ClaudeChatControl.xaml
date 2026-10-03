@@ -86,12 +86,20 @@
 
     <!-- ===== Transcript templates ===== -->
     <DataTemplate x:Key="UserTemplate">
-      <!-- Left-anchored 48px in from the edge; shrinks to fit short messages and grows rightward for long ones. -->
-      <Border Margin="48,10,0,6" HorizontalAlignment="Left" CornerRadius="12,12,4,12" Padding="12,8"
-              Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
-        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
-                         Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-      </Border>
+      <!-- The prompt's token count is centred in a gutter to the left of the bubble, which shrinks to fit short messages and grows rightward for long ones. -->
+      <Grid Margin="0,10,0,6">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="72" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding Usage}" Style="{StaticResource Muted}" FontSize="10.5" TextWrapping="Wrap"
+                   TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <Border Grid.Column="1" HorizontalAlignment="Left" CornerRadius="12,12,4,12" Padding="12,8"
+                Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
+          <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
+                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+        </Border>
+      </Grid>
     </DataTemplate>
 
     <DataTemplate x:Key="AssistantTemplate">
@@ -132,7 +140,7 @@
     </DataTemplate>
 
     <DataTemplate x:Key="ToolTemplate">
-      <Border Margin="0,2" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+      <Border Margin="0,2,24,2" HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
         <StackPanel>
           <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}">
             <DockPanel Margin="8,5">
@@ -215,18 +223,13 @@
       </Grid>
     </DataTemplate>
 
-    <DataTemplate x:Key="UsageTemplate">
-      <TextBlock Text="{Binding Text}" Style="{StaticResource Muted}" FontSize="11" HorizontalAlignment="Right" Margin="0,0,0,8" />
-    </DataTemplate>
-
     <local:ChatEntryTemplateSelector x:Key="EntrySelector"
                                      User="{StaticResource UserTemplate}"
                                      Assistant="{StaticResource AssistantTemplate}"
                                      Thinking="{StaticResource ThinkingTemplate}"
                                      Tool="{StaticResource ToolTemplate}"
                                      Error="{StaticResource ErrorTemplate}"
-                                     Notice="{StaticResource NoticeTemplate}"
-                                     Usage="{StaticResource UsageTemplate}" />
+                                     Notice="{StaticResource NoticeTemplate}" />
     </ResourceDictionary>
   </UserControl.Resources>
 
@@ -240,6 +243,7 @@
     <StackPanel Grid.Row="0">
     <DockPanel Margin="10,8,10,6">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button Style="{StaticResource IconButton}" Content="&#xE81C;" ToolTip="History" Click="OnToggleHistory" />
         <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="New chat" Click="OnNewChat" />
         <Button Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" Click="OnOpenSettings" />
       </StackPanel>
@@ -312,14 +316,6 @@
       </Grid>
     </Border>
 
-    <!-- Tabs: the current chat, or previously saved ones -->
-    <Border Margin="10,0,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
-            Background="{StaticResource SubtleFill}" Padding="1">
-      <UniformGrid Rows="1">
-        <RadioButton GroupName="ChatTabs" Style="{StaticResource SegmentRadio}" Content="Chat" IsChecked="{Binding ShowChat, Mode=TwoWay}" />
-        <RadioButton GroupName="ChatTabs" Style="{StaticResource SegmentRadio}" Content="History" IsChecked="{Binding ShowHistory, Mode=TwoWay}" />
-      </UniformGrid>
-    </Border>
     </StackPanel>
 
     <!-- History tab: saved chats, newest first. Click one to continue it; the bin removes it. -->

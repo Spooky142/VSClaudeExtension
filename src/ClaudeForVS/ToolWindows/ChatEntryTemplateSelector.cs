@@ -18,8 +18,6 @@ internal sealed class ChatEntryTemplateSelector : DataTemplateSelector
 
     public DataTemplate? Notice { get; set; }
 
-    public DataTemplate? Usage { get; set; }
-
     public override DataTemplate? SelectTemplate(object item, DependencyObject container) => (item as ChatEntry)?.Kind switch
     {
         ChatEntryKind.User => this.User,
@@ -28,7 +26,6 @@ internal sealed class ChatEntryTemplateSelector : DataTemplateSelector
         ChatEntryKind.Tool => this.Tool,
         ChatEntryKind.Error => this.Error,
         ChatEntryKind.Notice => this.Notice,
-        ChatEntryKind.Usage => this.Usage,
         _ => null,
     };
 }
