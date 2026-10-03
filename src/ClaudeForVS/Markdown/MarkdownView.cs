@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.Text;
 using System.Windows;
@@ -21,7 +21,7 @@ internal sealed class MarkdownView : RichTextBox
     private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(120);
 
     // Covers the caret and small differences between measured and laid-out text, so the last word doesn't wrap.
-    private const double WidthSlack = 8;
+    private const double WidthSlack = 6;
 
     private readonly DispatcherTimer timer;
     private DateTime lastRender = DateTime.MinValue;
@@ -67,20 +67,27 @@ internal sealed class MarkdownView : RichTextBox
         this.timer.Stop();
         this.lastRender = DateTime.UtcNow;
         this.Document = MarkdownRenderer.Render(this.Markdown, this.FontSize);
-        this.naturalWidth = null;
+        this.fitWidth = null;
         this.InvalidateMeasure();
     }
 
     // A RichTextBox always wants the full width offered to it, so bubbles around it would span the whole window.
-    // Instead the width of the longest line is worked out from the document's text, and the text is laid out at
-    // that width (when narrower) so the surrounding bubble hugs it. This happens within the measure pass itself:
-    // laying out at full width first and shrinking afterwards gets drawn in between, which shows as flicker.
-    private double? naturalWidth;
+    // Instead the width of the longest line is worked out from the document's text, wrapped at the width on offer,
+    // and the text is laid out at that width (when narrower) so the surrounding bubble hugs it, wrapped or not.
+    // This happens within the measure pass itself: laying out at full width first and shrinking afterwards gets
+    // drawn in between, which shows as flicker.
+    private double? fitWidth;
+    private double fitConstraint;
 
     protected override Size MeasureOverride(Size constraint)
     {
-        this.naturalWidth ??= this.MeasureNaturalWidth();
-        double width = Math.Min(constraint.Width, this.naturalWidth.Value);
+        if (this.fitWidth is null || this.fitConstraint != constraint.Width)
+        {
+            this.fitConstraint = constraint.Width;
+            this.fitWidth = this.MeasureFitWidth(constraint.Width);
+        }
+
+        double width = Math.Min(constraint.Width, this.fitWidth.Value);
         Size size = base.MeasureOverride(new Size(width, constraint.Height));
         return new Size(Math.Min(size.Width, width), size.Height);
     }
@@ -91,83 +98,83 @@ internal sealed class MarkdownView : RichTextBox
         if (e.Property == FontFamilyProperty || e.Property == FontSizeProperty || e.Property == FontWeightProperty
             || e.Property == FontStyleProperty || e.Property == PaddingProperty)
         {
-            this.naturalWidth = null;
+            this.fitWidth = null;
         }
     }
 
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
         base.OnDpiChanged(oldDpi, newDpi);
-        this.naturalWidth = null;
+        this.fitWidth = null;
         this.InvalidateMeasure();
     }
 
-    private double MeasureNaturalWidth()
+    private double MeasureFitWidth(double constraintWidth)
     {
         double pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-        double content = MeasureBlocks(this.Document.Blocks, pixelsPerDip);
-        if (double.IsPositiveInfinity(content))
-        {
-            return double.PositiveInfinity;
-        }
-
         Thickness page = this.Document.PagePadding;
-        return Math.Ceiling(content + page.Left + page.Right + this.Padding.Left + this.Padding.Right
-            + this.BorderThickness.Left + this.BorderThickness.Right + WidthSlack);
+        double chrome = page.Left + page.Right + this.Padding.Left + this.Padding.Right
+            + this.BorderThickness.Left + this.BorderThickness.Right + WidthSlack;
+        double content = MeasureBlocks(this.Document.Blocks, pixelsPerDip, Math.Max(1, constraintWidth - chrome));
+        return double.IsPositiveInfinity(content) ? double.PositiveInfinity : Math.Ceiling(content + chrome);
     }
 
-    /// <summary>Widest unwrapped line among the blocks, including their indents; infinite for tables, which fill whatever width they get.</summary>
-    private static double MeasureBlocks(BlockCollection blocks, double pixelsPerDip)
+    /// <summary>Widest line among the blocks once wrapped to <paramref name="available"/>, including their indents; infinite for tables, which fill whatever width they get.</summary>
+    private static double MeasureBlocks(BlockCollection blocks, double pixelsPerDip, double available)
     {
         double max = 0;
         foreach (Block block in blocks)
         {
+            double insets = block.Padding.Left + block.Padding.Right + block.BorderThickness.Left
+                + block.BorderThickness.Right + block.Margin.Left + block.Margin.Right;
+            double inside = Math.Max(1, available - insets);
             double inner = block switch
             {
-                Paragraph p => MeasureParagraph(p, pixelsPerDip),
-                List list => MeasureList(list, pixelsPerDip),
-                Section section => MeasureBlocks(section.Blocks, pixelsPerDip),
+                Paragraph p => MeasureParagraph(p, pixelsPerDip, inside),
+                List list => MeasureList(list, pixelsPerDip, inside),
+                Section section => MeasureBlocks(section.Blocks, pixelsPerDip, inside),
                 _ => double.PositiveInfinity,
             };
 
-            max = Math.Max(max, inner + block.Padding.Left + block.Padding.Right + block.BorderThickness.Left
-                + block.BorderThickness.Right + block.Margin.Left + block.Margin.Right);
+            max = Math.Max(max, inner + insets);
         }
 
         return max;
     }
 
-    private static double MeasureList(List list, double pixelsPerDip)
+    private static double MeasureList(List list, double pixelsPerDip, double available)
     {
         double max = 0;
         foreach (ListItem item in list.ListItems)
         {
-            max = Math.Max(max, MeasureBlocks(item.Blocks, pixelsPerDip));
+            max = Math.Max(max, MeasureBlocks(item.Blocks, pixelsPerDip, available));
         }
 
         return max;
     }
 
-    private static double MeasureParagraph(Paragraph paragraph, double pixelsPerDip)
+    private static double MeasureParagraph(Paragraph paragraph, double pixelsPerDip, double available)
     {
-        var line = new LineMeasurer(paragraph, pixelsPerDip);
+        var line = new LineMeasurer(paragraph, pixelsPerDip, available);
         line.AddInlines(paragraph.Inlines);
         return line.Finish();
     }
 
-    /// <summary>Measures the hard lines of a paragraph, keeping each run's font.</summary>
+    /// <summary>Measures a paragraph's lines, wrapped to the available width, keeping each run's font.</summary>
     private sealed class LineMeasurer
     {
         private readonly Paragraph paragraph;
         private readonly double pixelsPerDip;
+        private readonly double available;
         private readonly StringBuilder text = new();
         private readonly System.Collections.Generic.List<(int Start, int Length, Run Run)> runs = [];
         private double max;
 
-        public LineMeasurer(Paragraph paragraph, double pixelsPerDip)
+        public LineMeasurer(Paragraph paragraph, double pixelsPerDip, double available)
         {
             this.paragraph = paragraph;
             this.pixelsPerDip = pixelsPerDip;
+            this.available = available;
         }
 
         public void AddInlines(InlineCollection inlines)
@@ -221,7 +228,12 @@ internal sealed class MarkdownView : RichTextBox
                     }
                 }
 
-                this.max = Math.Max(this.max, formatted.WidthIncludingTrailingWhitespace);
+                if (!double.IsPositiveInfinity(this.available))
+                {
+                    formatted.MaxTextWidth = this.available;
+                }
+
+                this.max = Math.Max(this.max, formatted.Width);
             }
 
             this.text.Clear();
