@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -35,13 +37,5 @@ internal static class ApiKeyStore
         Directory.CreateDirectory(Path.GetDirectoryName(KeyFile)!);
         byte[] cipher = ProtectedData.Protect(Encoding.UTF8.GetBytes(apiKey.Trim()), null, DataProtectionScope.CurrentUser);
         File.WriteAllBytes(KeyFile, cipher);
-    }
-
-    public static void Clear()
-    {
-        if (File.Exists(KeyFile))
-        {
-            File.Delete(KeyFile);
-        }
     }
 }

@@ -1,42 +1,47 @@
 # Claude for Visual Studio
 
-A self-contained Visual Studio 2026 extension that lets you chat with Claude about a cloned git repository.
+A self-contained Visual Studio 2026 extension that lets you chat with Claude about a cloned git repository and have it edit files there.
 It calls the Anthropic API directly with your own API key and doesn't depend on any Claude Code install.
 
 ## What it does
 
 - **Tools > Claude Chat** opens a tool window with a prompt box and a streaming transcript.
-- Claude can run `git` commands in the repository and read files from the working tree.
-  - Read-only commands (`status`, `diff`, `log`, `show`, `blame`, `grep`, `ls-files`, branch/tag/remote listing, …) run immediately.
-  - Anything that changes the repo or contacts a remote (`commit`, `checkout`, `reset`, `push`, `merge`, `stash`, …) shows an **Allow / Deny** prompt first.
-- The repository is detected from the open solution (**From solution**), or you can type any path inside a clone.
+  - **Enter** sends the prompt. **Shift+Enter** adds a new line.
+  - Answers render as Markdown (headings, lists, code blocks, tables, links) while they stream, and you can select and copy them.
+  - The transcript follows new output. Scroll up to read earlier messages; scrolling back to the bottom resumes following.
+- Claude works inside one repository, which **From solution** detects from the open solution. You can also type any path inside a clone.
+  - `git`: read-only commands (`status`, `diff`, `log`, `show`, `blame`, `grep`, `ls-files`, branch/tag/remote listing, …) run immediately. Anything that changes the repo or contacts a remote (`commit`, `checkout`, `reset`, `push`, `merge`, `stash`, …) shows an **Allow / Deny** prompt first.
+  - `read_file`, `edit_file` and `write_file` work only on files inside the repository. Absolute paths, `..` escapes, anything under `.git`, and paths through symlinks or junctions are refused. Every edit shows a preview and needs approval; **Allow all edits** skips the prompt for the rest of that chat. Edits keep the file's encoding and line endings.
 - Uses `claude-opus-5-5` with adaptive thinking (summaries shown in grey), streaming, and automatic prompt caching.
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `src/ClaudeForVS/ExtensionEntrypoint.cs` | Extension metadata |
-| `src/ClaudeForVS/ShowClaudeWindowCommand.cs` | Tools menu command |
-| `src/ClaudeForVS/ToolWindows/` | Tool window, view model, Remote UI XAML |
-| `src/ClaudeForVS/Agent/ClaudeAgent.cs` | Streaming tool-use loop against the Messages API |
+| `src/ClaudeForVS/ClaudePackage.cs`, `ClaudePackage.vsct` | VS package, Tools menu command, tool window registration |
+| `src/ClaudeForVS/ToolWindows/` | WPF tool window, view model, transcript entries |
+| `src/ClaudeForVS/Markdown/` | Markdig to FlowDocument renderer and the read-only `MarkdownView` |
+| `src/ClaudeForVS/Agent/ClaudeAgent.cs` | Streaming tool-use loop against the Messages API, plus tool implementations |
+| `src/ClaudeForVS/Agent/RepoFiles.cs` | Repository sandbox for file reads and writes |
 | `src/ClaudeForVS/Agent/ApiKeyStore.cs` | DPAPI-encrypted API key in `%LOCALAPPDATA%\ClaudeForVS` |
 | `src/ClaudeForVS/Git/GitRunner.cs` | Runs git (PATH, or the copy bundled with Visual Studio); read-only allowlist |
 
-This is an out-of-process extension (VisualStudio.Extensibility, .NET 8), so it runs in its own process alongside Visual Studio.
+This is an in-process VSSDK package (.NET Framework 4.8, WPF). It uses the Anthropic C# SDK's netstandard2.0 build. Most of the SDK's dependencies resolve to the copies Visual Studio already ships, through VS's binding redirects. The rest (Anthropic, Markdig, Microsoft.Extensions.AI.Abstractions, System.Net.ServerSentEvents) ship in the VSIX and load from the extension folder via `[ProvideBindingPath]`.
 
 ## Build
 
+The VSSDK command-table compiler needs Visual Studio's MSBuild, not `dotnet build`:
+
 ```
-dotnet build src/ClaudeForVS/ClaudeForVS.csproj
+"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe" src\ClaudeForVS\ClaudeForVS.csproj -restore
 ```
 
-Output: `src/ClaudeForVS/bin/Debug/net8.0-windows8.0/ClaudeForVS.vsix`.
+Output: `src/ClaudeForVS/bin/Debug/net48/ClaudeForVS.vsix`.
 
 ## Run / debug
 
-- **Install:** close Visual Studio, double-click the `.vsix`, then reopen and use **Tools > Claude Chat**.
-- **Debug (F5):** open `VSClaudeExtension.sln` in Visual Studio. This requires the **Visual Studio extension development** workload (Visual Studio Installer > Modify). F5 launches an experimental instance with the extension loaded.
+- **Install:** close Visual Studio, double-click the `.vsix`, then reopen and use **Tools > Claude Chat**. It installs over 0.1.x, which used the same extension ID.
+- **Debug (F5):** open `VSClaudeExtension.sln` in Visual Studio. This requires the **Visual Studio extension development** workload (Visual Studio Installer > Modify). F5 builds, deploys to the experimental instance, and launches `devenv /rootsuffix Exp`.
 
 On first use, paste an API key from https://console.anthropic.com. API usage is billed to that Console account, separately from any Claude subscription.
 

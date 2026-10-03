@@ -1,5 +1,11 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Anthropic;
 using Anthropic.Models.Messages;
 using ClaudeForVS.Git;
@@ -16,26 +22,35 @@ internal sealed class ClaudeAgent
     private const string ModelId = "claude-opus-5-5";
     private const int MaxToolRounds = 40;
     private const int MaxFileChars = 100_000;
+    private const int PreviewLines = 60;
 
     private readonly AnthropicClient client;
     private readonly List<MessageParam> history = [];
+    private readonly RepoFiles files;
     private readonly string systemPrompt;
+    private bool editsPreApproved;
 
     public ClaudeAgent(string apiKey, string repoRoot)
     {
         this.client = new AnthropicClient { ApiKey = apiKey };
         this.RepoRoot = repoRoot;
+        this.files = new RepoFiles(repoRoot);
         this.systemPrompt =
             $"""
             You are Claude, working inside a Visual Studio extension as a coding assistant for the git repository at:
             {repoRoot}
 
-            You can inspect and operate on the repository with the `git` tool and read files with `read_file`.
-            Read-only git commands run immediately. Commands that change the repository or talk to a remote
-            (commit, checkout, reset, push, merge, stash, etc.) are shown to the user, who must approve them first;
-            if the user declines, accept that and don't retry the same command.
-            Look at the repository before answering questions about it rather than guessing. Keep answers concise
-            and use Markdown code fences for code. When you reference files, use paths relative to the repository root.
+            Tools:
+            - `git` runs git commands. Read-only commands run immediately. Commands that change the repository or talk
+              to a remote (commit, checkout, reset, push, merge, stash, etc.) need the user's approval first.
+            - `read_file` reads a file with line numbers.
+            - `edit_file` replaces an exact string in a file; `write_file` creates or overwrites a whole file.
+              The user approves edits before they're applied. Prefer `edit_file` for changes to existing files.
+            All file paths are relative to the repository root, and files outside the repository can't be accessed.
+            If the user declines an action, accept that and don't retry the same thing.
+
+            Look at the repository before answering questions about it rather than guessing. Keep answers concise and
+            use Markdown, with fenced code blocks for code. Reference files by their repository-relative paths.
             """;
     }
 
@@ -93,6 +108,7 @@ internal sealed class ClaudeAgent
                 }
                 catch (Exception ex) when (ex is ToolInputException or InvalidOperationException or IOException or UnauthorizedAccessException)
                 {
+                    sink.ToolActivity($"{toolUse.Name} failed", ex.Message);
                     results.Add(Error(toolUse.ID, ex.Message));
                 }
             }
@@ -236,91 +252,227 @@ internal sealed class ClaudeAgent
         }
     }
 
-    private async Task<string> ExecuteToolAsync(ToolUseBlockParam toolUse, IChatSink sink, CancellationToken cancellationToken)
+    private Task<string> ExecuteToolAsync(ToolUseBlockParam toolUse, IChatSink sink, CancellationToken cancellationToken)
     {
         IReadOnlyDictionary<string, JsonElement> input = toolUse.Input;
-        switch (toolUse.Name)
+        return toolUse.Name switch
         {
-            case "git":
-            {
-                if (!input.TryGetValue("args", out JsonElement argsEl) || argsEl.ValueKind != JsonValueKind.Array)
-                {
-                    throw new ToolInputException("`args` must be an array of strings.");
-                }
-
-                List<string> args = argsEl.EnumerateArray()
-                    .Select(a => a.ValueKind == JsonValueKind.String ? a.GetString()! : throw new ToolInputException("`args` must contain only strings."))
-                    .ToList();
-                if (args.Count == 0)
-                {
-                    throw new ToolInputException("`args` must not be empty.");
-                }
-
-                string commandLine = "git " + string.Join(' ', args.Select(QuoteForDisplay));
-                if (!GitRunner.IsReadOnly(args))
-                {
-                    sink.SetStatus("Waiting for your approval…");
-                    if (!await sink.RequestApprovalAsync(commandLine, cancellationToken))
-                    {
-                        sink.ToolActivity(commandLine, "Declined by user.");
-                        return "The user declined to run this command.";
-                    }
-                }
-
-                sink.SetStatus($"Running {commandLine}");
-                (int exitCode, string output) = await GitRunner.RunAsync(this.RepoRoot, args, cancellationToken);
-                sink.ToolActivity(commandLine, output.Length == 0 ? "(no output)" : output);
-                return exitCode == 0
-                    ? (output.Length == 0 ? "(no output)" : output)
-                    : $"git exited with code {exitCode}.\n{output}";
-            }
-
-            case "read_file":
-            {
-                if (!input.TryGetValue("path", out JsonElement pathEl) || pathEl.ValueKind != JsonValueKind.String)
-                {
-                    throw new ToolInputException("`path` must be a string.");
-                }
-
-                string fullPath = Path.GetFullPath(Path.Combine(this.RepoRoot, pathEl.GetString()!));
-                string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(this.RepoRoot)) + Path.DirectorySeparatorChar;
-                if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new ToolInputException("Path is outside the repository.");
-                }
-
-                if (!File.Exists(fullPath))
-                {
-                    throw new ToolInputException($"File not found: {pathEl.GetString()}");
-                }
-
-                string[] lines = await File.ReadAllLinesAsync(fullPath, cancellationToken);
-                int startLine = input.TryGetValue("start_line", out JsonElement s) && s.ValueKind == JsonValueKind.Number ? Math.Max(1, s.GetInt32()) : 1;
-                int endLine = input.TryGetValue("end_line", out JsonElement e) && e.ValueKind == JsonValueKind.Number ? Math.Min(lines.Length, e.GetInt32()) : lines.Length;
-
-                var sb = new StringBuilder();
-                for (int i = startLine; i <= endLine; i++)
-                {
-                    sb.Append(i).Append('\t').AppendLine(lines[i - 1]);
-                    if (sb.Length > MaxFileChars)
-                    {
-                        sb.AppendLine($"[truncated at line {i} of {lines.Length}; use start_line/end_line to read more]");
-                        break;
-                    }
-                }
-
-                string relative = Path.GetRelativePath(this.RepoRoot, fullPath);
-                sink.ToolActivity($"Read {relative}", $"lines {startLine}-{endLine} of {lines.Length}");
-                return sb.Length == 0 ? "(empty file)" : sb.ToString();
-            }
-
-            default:
-                throw new ToolInputException($"Unknown tool: {toolUse.Name}");
-        }
+            "git" => this.RunGitAsync(input, sink, cancellationToken),
+            "read_file" => Task.FromResult(this.ReadFile(input, sink)),
+            "edit_file" => this.EditFileAsync(input, sink, cancellationToken),
+            "write_file" => this.WriteFileAsync(input, sink, cancellationToken),
+            _ => throw new ToolInputException($"Unknown tool: {toolUse.Name}"),
+        };
     }
 
-    private static string QuoteForDisplay(string arg)
-        => arg.Length == 0 || arg.Any(char.IsWhiteSpace) ? "\"" + arg.Replace("\"", "\\\"") + "\"" : arg;
+    private async Task<string> RunGitAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        if (!input.TryGetValue("args", out JsonElement argsEl) || argsEl.ValueKind != JsonValueKind.Array)
+        {
+            throw new ToolInputException("`args` must be an array of strings.");
+        }
+
+        List<string> args = argsEl.EnumerateArray()
+            .Select(a => a.ValueKind == JsonValueKind.String ? a.GetString()! : throw new ToolInputException("`args` must contain only strings."))
+            .ToList();
+        if (args.Count == 0)
+        {
+            throw new ToolInputException("`args` must not be empty.");
+        }
+
+        string commandLine = "git " + string.Join(" ", args.Select(GitRunner.QuoteArgument));
+        if (!GitRunner.IsReadOnly(args))
+        {
+            sink.SetStatus("Waiting for your approval…");
+            if (await sink.RequestApprovalAsync(commandLine, string.Empty, null, cancellationToken) == Approval.Deny)
+            {
+                sink.ToolActivity(commandLine, "Declined by you.");
+                return "The user declined to run this command.";
+            }
+        }
+
+        sink.SetStatus($"Running {commandLine}");
+        (int exitCode, string output) = await GitRunner.RunAsync(this.RepoRoot, args, cancellationToken);
+        sink.ToolActivity(commandLine, output.Length == 0 ? "(no output)" : output);
+        return exitCode == 0
+            ? (output.Length == 0 ? "(no output)" : output)
+            : $"git exited with code {exitCode}.\n{output}";
+    }
+
+    private string ReadFile(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink)
+    {
+        string path = RequireString(input, "path");
+        RepoFiles.TextFile file = this.files.Read(path);
+        string[] lines = file.Text.Replace("\r\n", "\n").Split('\n');
+        int startLine = OptionalInt(input, "start_line") is int s ? Math.Max(1, s) : 1;
+        int endLine = OptionalInt(input, "end_line") is int e ? Math.Min(lines.Length, e) : lines.Length;
+
+        var sb = new StringBuilder();
+        for (int i = startLine; i <= endLine; i++)
+        {
+            sb.Append(i).Append('\t').Append(lines[i - 1]).Append('\n');
+            if (sb.Length > MaxFileChars)
+            {
+                sb.Append($"[truncated at line {i} of {lines.Length}; use start_line/end_line to read more]\n");
+                break;
+            }
+        }
+
+        sink.ToolActivity($"Read {this.files.Relative(file.FullPath)}", $"lines {startLine}-{endLine} of {lines.Length}");
+        return sb.Length == 0 ? "(empty file)" : sb.ToString();
+    }
+
+    private async Task<string> EditFileAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string path = RequireString(input, "path");
+        string oldString = RequireString(input, "old_string");
+        string newString = RequireString(input, "new_string", allowEmpty: true);
+        bool replaceAll = input.TryGetValue("replace_all", out JsonElement ra) && ra.ValueKind == JsonValueKind.True;
+        if (oldString.Length == 0)
+        {
+            throw new ToolInputException("`old_string` must not be empty. Use write_file to create a file.");
+        }
+
+        RepoFiles.TextFile file = this.files.Read(path);
+        string find = RepoFiles.NormalizeNewlines(oldString, file.Newline);
+        string replace = RepoFiles.NormalizeNewlines(newString, file.Newline);
+
+        int count = CountOccurrences(file.Text, find);
+        if (count == 0)
+        {
+            throw new ToolInputException($"`old_string` was not found in {path}. Read the file again and copy the text exactly (without line numbers).");
+        }
+
+        if (count > 1 && !replaceAll)
+        {
+            throw new ToolInputException($"`old_string` appears {count} times in {path}. Include more surrounding context to make it unique, or set replace_all.");
+        }
+
+        string relative = this.files.Relative(file.FullPath);
+        string diff = Diff(oldString, newString) + (count > 1 ? $"\n({count} occurrences)" : string.Empty);
+        if (!await this.ApproveEditAsync($"Edit {relative}", diff, sink, cancellationToken))
+        {
+            sink.ToolActivity($"Edit {relative}", "Declined by you.");
+            return "The user declined this edit.";
+        }
+
+        string updated = replaceAll ? file.Text.Replace(find, replace) : ReplaceFirst(file.Text, find, replace);
+        this.files.Write(file.FullPath, updated, file.Encoding);
+        sink.ToolActivity($"Edited {relative}", diff);
+        return $"Edited {relative} ({count} replacement{(count == 1 ? "" : "s")}).";
+    }
+
+    private async Task<string> WriteFileAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string path = RequireString(input, "path");
+        string content = RequireString(input, "content", allowEmpty: true);
+        string full = this.files.Resolve(path);
+        string relative = this.files.Relative(full);
+
+        Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        string newline = "\r\n";
+        string action = "Create";
+        if (File.Exists(full))
+        {
+            RepoFiles.TextFile existing = this.files.Read(path);
+            encoding = existing.Encoding;
+            newline = existing.Newline;
+            action = "Overwrite";
+        }
+        else if (Directory.Exists(full))
+        {
+            throw new ToolInputException($"{path} is a directory.");
+        }
+
+        string preview = Preview(content);
+        if (!await this.ApproveEditAsync($"{action} {relative}", preview, sink, cancellationToken))
+        {
+            sink.ToolActivity($"{action} {relative}", "Declined by you.");
+            return "The user declined this change.";
+        }
+
+        this.files.Write(full, RepoFiles.NormalizeNewlines(content, newline), encoding);
+        sink.ToolActivity(action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview);
+        return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}.";
+    }
+
+    private async Task<bool> ApproveEditAsync(string title, string detail, IChatSink sink, CancellationToken cancellationToken)
+    {
+        if (this.editsPreApproved)
+        {
+            return true;
+        }
+
+        sink.SetStatus("Waiting for your approval…");
+        Approval approval = await sink.RequestApprovalAsync(title, detail, "Allow all edits", cancellationToken);
+        if (approval == Approval.AllowAll)
+        {
+            this.editsPreApproved = true;
+        }
+
+        return approval != Approval.Deny;
+    }
+
+    private static string RequireString(IReadOnlyDictionary<string, JsonElement> input, string name, bool allowEmpty = false)
+    {
+        if (!input.TryGetValue(name, out JsonElement el) || el.ValueKind != JsonValueKind.String)
+        {
+            throw new ToolInputException($"`{name}` must be a string.");
+        }
+
+        string value = el.GetString()!;
+        if (!allowEmpty && value.Length == 0)
+        {
+            throw new ToolInputException($"`{name}` must not be empty.");
+        }
+
+        return value;
+    }
+
+    private static int? OptionalInt(IReadOnlyDictionary<string, JsonElement> input, string name)
+        => input.TryGetValue(name, out JsonElement el) && el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out int v) ? v : null;
+
+    private static int CountOccurrences(string text, string find)
+    {
+        int count = 0;
+        for (int i = text.IndexOf(find, StringComparison.Ordinal); i >= 0; i = text.IndexOf(find, i + find.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    private static string ReplaceFirst(string text, string find, string replace)
+    {
+        int i = text.IndexOf(find, StringComparison.Ordinal);
+        return text.Substring(0, i) + replace + text.Substring(i + find.Length);
+    }
+
+    private static string Diff(string oldText, string newText)
+    {
+        var sb = new StringBuilder();
+        foreach (string line in Lines(oldText).Take(PreviewLines))
+        {
+            sb.Append("- ").Append(line).Append('\n');
+        }
+
+        foreach (string line in Lines(newText).Take(PreviewLines))
+        {
+            sb.Append("+ ").Append(line).Append('\n');
+        }
+
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    private static string Preview(string content)
+    {
+        string[] lines = Lines(content);
+        string head = string.Join("\n", lines.Take(PreviewLines));
+        return lines.Length > PreviewLines ? head + $"\n… ({lines.Length - PreviewLines} more lines)" : head;
+    }
+
+    private static string[] Lines(string text) => text.Length == 0 ? [] : text.Replace("\r\n", "\n").Split('\n');
 
     private static readonly List<ToolUnion> ToolDefinitions =
     [
@@ -352,8 +504,8 @@ internal sealed class ClaudeAgent
         {
             Name = "read_file",
             Description =
-                "Read a text file from the working tree, with line numbers. The path is relative to the repository root. " +
-                "Use start_line/end_line (1-based, inclusive) for large files.",
+                "Read a text file from the working tree. Each line is prefixed with its line number and a tab; the prefix " +
+                "is not part of the file. Use start_line/end_line (1-based, inclusive) for large files.",
             InputSchema = new()
             {
                 Properties = new Dictionary<string, JsonElement>
@@ -363,6 +515,45 @@ internal sealed class ClaudeAgent
                     ["end_line"] = JsonSerializer.SerializeToElement(new { type = "integer" }),
                 },
                 Required = ["path"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "edit_file",
+            Description =
+                "Replace an exact string in an existing file. `old_string` must match the file's text exactly (including " +
+                "indentation, without read_file's line-number prefixes) and must be unique in the file unless replace_all " +
+                "is true; include surrounding lines to make it unique. Read the file before editing it. The user approves " +
+                "each edit before it's applied.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Path relative to the repository root." }),
+                    ["old_string"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Exact text to replace." }),
+                    ["new_string"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Replacement text." }),
+                    ["replace_all"] = JsonSerializer.SerializeToElement(new { type = "boolean", description = "Replace every occurrence. Default false." }),
+                },
+                Required = ["path", "old_string", "new_string"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "write_file",
+            Description =
+                "Create a new file, or replace the entire contents of an existing one, inside the repository. Parent " +
+                "directories are created as needed. Prefer edit_file for changing existing files. The user approves each " +
+                "write before it's applied.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Path relative to the repository root." }),
+                    ["content"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The complete file contents." }),
+                },
+                Required = ["path", "content"],
             },
             EagerInputStreaming = true,
         },

@@ -1,40 +1,21 @@
-using Microsoft.VisualStudio.Extensibility;
-using Microsoft.VisualStudio.Extensibility.ToolWindows;
-using Microsoft.VisualStudio.RpcContracts.RemoteUI;
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeForVS.ToolWindows;
 
-[VisualStudioContribution]
-internal class ClaudeToolWindow : ToolWindow
+[Guid("c7a1e2d3-4b5f-4a6e-8d9c-0f1e2a3b4c5d")]
+public sealed class ClaudeToolWindow : ToolWindowPane
 {
-    private readonly ClaudeChatViewModel viewModel;
-
-    public ClaudeToolWindow(VisualStudioExtensibility extensibility)
-        : base(extensibility)
+    public ClaudeToolWindow()
+        : base(null)
     {
-        this.Title = "Claude";
-        this.viewModel = new ClaudeChatViewModel(extensibility);
+        this.Caption = "Claude";
     }
 
-    public override ToolWindowConfiguration ToolWindowConfiguration => new()
+    protected override void Initialize()
     {
-        Placement = ToolWindowPlacement.DockedTo(new Guid("3ae79031-e1bc-11d0-8f78-00a0c9110057")), // Solution Explorer
-        DockDirection = Dock.Right,
-    };
-
-    public override async Task InitializeAsync(CancellationToken cancellationToken)
-    {
-        await this.viewModel.RefreshRepoFromSolutionAsync(cancellationToken);
-    }
-
-    public override Task<IRemoteUserControl> GetContentAsync(CancellationToken cancellationToken)
-        => Task.FromResult<IRemoteUserControl>(new ClaudeChatControl(this.viewModel));
-}
-
-internal class ClaudeChatControl : Microsoft.VisualStudio.Extensibility.UI.RemoteUserControl
-{
-    public ClaudeChatControl(object? dataContext)
-        : base(dataContext)
-    {
+        base.Initialize();
+        this.Content = new ClaudeChatControl((ClaudePackage)this.Package);
     }
 }

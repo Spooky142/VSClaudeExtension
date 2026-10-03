@@ -1,160 +1,162 @@
-﻿using System.Runtime.Serialization;
+using System;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 using Anthropic.Exceptions;
 using ClaudeForVS.Agent;
 using ClaudeForVS.Git;
-using Microsoft.VisualStudio.Extensibility;
-using Microsoft.VisualStudio.Extensibility.UI;
-using Microsoft.VisualStudio.ProjectSystem.Query;
 
 namespace ClaudeForVS.ToolWindows;
 
-[DataContract]
-internal class ClaudeChatViewModel : NotifyPropertyChangedObject, IChatSink
+/// <summary>
+/// State behind the chat window. Everything here runs on the UI thread: the agent is started from
+/// the UI thread and its awaits resume there, so sink callbacks can touch bound properties directly.
+/// </summary>
+internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 {
-    private readonly VisualStudioExtensibility extensibility;
     private ClaudeAgent? agent;
     private CancellationTokenSource? runCts;
-    private TaskCompletionSource<bool>? pendingApproval;
+    private TaskCompletionSource<Approval>? pendingApproval;
     private ChatEntry? currentAssistant;
     private ChatEntry? currentThinking;
 
-    private string prompt = string.Empty;
     private string repoPath = string.Empty;
     private string status = string.Empty;
-    private string apiKeyInput = string.Empty;
-    private string approvalText = string.Empty;
+    private string approvalTitle = string.Empty;
+    private string approvalDetail = string.Empty;
+    private string? allowAllLabel;
     private bool isBusy;
     private bool needsApiKey;
     private bool hasPendingApproval;
 
-    public ClaudeChatViewModel(VisualStudioExtensibility extensibility)
+    public ClaudeChatViewModel()
     {
-        this.extensibility = extensibility;
         this.needsApiKey = ApiKeyStore.Load() is null;
-
-        this.SendCommand = new AsyncCommand((_, ct) => this.SendAsync());
-        this.StopCommand = new AsyncCommand(async (_, ct) => { this.pendingApproval?.TrySetResult(false); if (this.runCts is { } cts) { await cts.CancelAsync(); } });
-        this.NewChatCommand = new AsyncCommand((_, ct) => { this.ResetConversation(); return Task.CompletedTask; });
-        this.UseSolutionRepoCommand = new AsyncCommand((_, ct) => this.RefreshRepoFromSolutionAsync(ct));
-        this.SaveApiKeyCommand = new AsyncCommand((_, ct) => this.SaveApiKeyAsync());
-        this.ChangeApiKeyCommand = new AsyncCommand((_, ct) => { this.NeedsApiKey = true; return Task.CompletedTask; });
-        this.ApproveCommand = new AsyncCommand((_, ct) => { this.pendingApproval?.TrySetResult(true); return Task.CompletedTask; });
-        this.DenyCommand = new AsyncCommand((_, ct) => { this.pendingApproval?.TrySetResult(false); return Task.CompletedTask; });
-
-        this.Status = GitRunner.GitPath is null ? "git.exe not found - git tools will fail." : string.Empty;
+        this.status = GitRunner.GitPath is null ? "git.exe not found - git tools will fail." : string.Empty;
     }
 
-    [DataMember] public ObservableList<ChatEntry> Messages { get; } = [];
+    public event PropertyChangedEventHandler? PropertyChanged;
 
-    [DataMember] public IAsyncCommand SendCommand { get; }
-    [DataMember] public IAsyncCommand StopCommand { get; }
-    [DataMember] public IAsyncCommand NewChatCommand { get; }
-    [DataMember] public IAsyncCommand UseSolutionRepoCommand { get; }
-    [DataMember] public IAsyncCommand SaveApiKeyCommand { get; }
-    [DataMember] public IAsyncCommand ChangeApiKeyCommand { get; }
-    [DataMember] public IAsyncCommand ApproveCommand { get; }
-    [DataMember] public IAsyncCommand DenyCommand { get; }
+    /// <summary>Raised when the user sends a prompt, so the view can jump back to the bottom.</summary>
+    public event EventHandler? PromptSent;
 
-    [DataMember]
-    public string Prompt { get => this.prompt; set => this.SetProperty(ref this.prompt, value); }
+    public ObservableCollection<ChatEntry> Messages { get; } = [];
 
-    [DataMember]
-    public string RepoPath { get => this.repoPath; set => this.SetProperty(ref this.repoPath, value); }
+    public string RepoPath { get => this.repoPath; set => this.Set(ref this.repoPath, value); }
 
-    [DataMember]
-    public string Status { get => this.status; set => this.SetProperty(ref this.status, value); }
+    public string Status { get => this.status; private set => this.Set(ref this.status, value); }
 
-    [DataMember]
-    public string ApiKeyInput { get => this.apiKeyInput; set => this.SetProperty(ref this.apiKeyInput, value); }
+    public string ApprovalTitle { get => this.approvalTitle; private set => this.Set(ref this.approvalTitle, value); }
 
-    [DataMember]
-    public string ApprovalText { get => this.approvalText; set => this.SetProperty(ref this.approvalText, value); }
-
-    [DataMember]
-    public bool IsBusy
+    public string ApprovalDetail
     {
-        get => this.isBusy;
-        set
+        get => this.approvalDetail;
+        private set
         {
-            this.SetProperty(ref this.isBusy, value);
-            this.RaiseNotifyPropertyChangedEvent(nameof(this.IsIdle));
+            this.Set(ref this.approvalDetail, value);
+            this.OnPropertyChanged(nameof(this.HasApprovalDetail));
         }
     }
 
-    [DataMember] public bool IsIdle => !this.isBusy;
+    public bool HasApprovalDetail => this.approvalDetail.Length > 0;
 
-    [DataMember]
+    public string? AllowAllLabel
+    {
+        get => this.allowAllLabel;
+        private set
+        {
+            this.Set(ref this.allowAllLabel, value);
+            this.OnPropertyChanged(nameof(this.CanAllowAll));
+        }
+    }
+
+    public bool CanAllowAll => this.allowAllLabel != null;
+
+    public bool IsBusy
+    {
+        get => this.isBusy;
+        private set
+        {
+            this.Set(ref this.isBusy, value);
+            this.OnPropertyChanged(nameof(this.IsIdle));
+        }
+    }
+
+    public bool IsIdle => !this.isBusy;
+
     public bool NeedsApiKey
     {
         get => this.needsApiKey;
         set
         {
-            this.SetProperty(ref this.needsApiKey, value);
-            this.RaiseNotifyPropertyChangedEvent(nameof(this.HasApiKey));
+            this.Set(ref this.needsApiKey, value);
+            this.OnPropertyChanged(nameof(this.HasApiKey));
         }
     }
 
-    [DataMember] public bool HasApiKey => !this.needsApiKey;
+    public bool HasApiKey => !this.needsApiKey;
 
-    [DataMember]
-    public bool HasPendingApproval { get => this.hasPendingApproval; set => this.SetProperty(ref this.hasPendingApproval, value); }
+    public bool HasPendingApproval { get => this.hasPendingApproval; private set => this.Set(ref this.hasPendingApproval, value); }
 
-    public async Task RefreshRepoFromSolutionAsync(CancellationToken cancellationToken)
+    public void SetRepoFromDirectory(string? directory)
     {
-        try
+        string? root = GitRunner.FindRepoRoot(directory);
+        if (root != null)
         {
-            var solutions = await this.extensibility.Workspaces().QuerySolutionAsync(
-                solution => solution.With(s => s.Directory),
-                cancellationToken);
-            string? dir = solutions.FirstOrDefault()?.Directory;
-            string? root = GitRunner.FindRepoRoot(dir);
-            if (root != null)
-            {
-                this.RepoPath = root;
-            }
-            else if (dir != null)
-            {
-                this.RepoPath = dir;
-                this.Status = "The open solution is not inside a git repository.";
-            }
+            this.RepoPath = root;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        else if (directory != null)
         {
-            this.Status = "Could not read the open solution: " + ex.Message;
+            this.RepoPath = directory;
+            this.Status = "The open solution is not inside a git repository.";
+        }
+        else
+        {
+            this.Status = "No solution or folder is open.";
         }
     }
 
-    private Task SaveApiKeyAsync()
+    public void SaveApiKey(string key)
     {
-        string key = this.ApiKeyInput.Trim();
+        key = key.Trim();
         if (key.Length == 0)
         {
             this.Status = "Enter an API key first.";
-            return Task.CompletedTask;
+            return;
         }
 
         ApiKeyStore.Save(key);
-        this.ApiKeyInput = string.Empty;
         this.NeedsApiKey = false;
         this.agent = null; // pick up the new key
         this.Status = "API key saved (encrypted for your Windows account).";
-        return Task.CompletedTask;
     }
 
-    private void ResetConversation()
+    public void NewChat()
     {
-        this.runCts?.Cancel();
+        this.Stop();
         this.agent = null;
         this.Messages.Clear();
         this.Status = string.Empty;
     }
 
-    private async Task SendAsync()
+    public void Stop()
     {
-        string text = this.Prompt.Trim();
+        this.pendingApproval?.TrySetResult(Approval.Deny);
+        this.runCts?.Cancel();
+    }
+
+    public void Resolve(Approval approval) => this.pendingApproval?.TrySetResult(approval);
+
+    /// <summary>Sends a prompt. Returns false (and leaves the prompt box alone) if it couldn't be sent.</summary>
+    public bool TrySend(string text, out Task run)
+    {
+        run = Task.CompletedTask;
+        text = text.Trim();
         if (text.Length == 0 || this.IsBusy)
         {
-            return;
+            return false;
         }
 
         string? apiKey = ApiKeyStore.Load();
@@ -162,73 +164,71 @@ internal class ClaudeChatViewModel : NotifyPropertyChangedObject, IChatSink
         {
             this.NeedsApiKey = true;
             this.Status = "Add your Anthropic API key to start.";
-            return;
+            return false;
         }
 
         string? root = GitRunner.FindRepoRoot(this.RepoPath.Trim());
         if (root is null)
         {
             this.Status = "Set the repository path to a folder inside a cloned git repository.";
-            return;
+            return false;
         }
 
         if (this.agent is null || !string.Equals(this.agent.RepoRoot, root, StringComparison.OrdinalIgnoreCase))
         {
             if (this.agent != null)
             {
-                this.Messages.Add(new ChatEntry("tool", "New conversation", $"Repository changed to {root}"));
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Tool, $"New conversation for {root}"));
             }
 
             this.agent = new ClaudeAgent(apiKey, root);
             this.RepoPath = root;
         }
 
-        this.Prompt = string.Empty;
-        this.Messages.Add(new ChatEntry("user", "You", text));
+        this.Messages.Add(new ChatEntry(ChatEntryKind.User, "You", text));
+        this.PromptSent?.Invoke(this, EventArgs.Empty);
+        run = this.RunAsync(this.agent, text);
+        return true;
+    }
+
+    private async Task RunAsync(ClaudeAgent runAgent, string text)
+    {
         this.IsBusy = true;
-        this.runCts = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource();
+        this.runCts = cts;
         try
         {
-            await this.agent.SendAsync(text, this, this.runCts.Token);
+            await runAgent.SendAsync(text, this, cts.Token);
         }
         catch (OperationCanceledException)
         {
-            this.Messages.Add(new ChatEntry("error", "Stopped", "Cancelled by you."));
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Stopped", "Cancelled by you."));
         }
         catch (AnthropicUnauthorizedException)
         {
-            this.Messages.Add(new ChatEntry("error", "Error", "The API key was rejected. Use \"Change API key\" to enter a new one."));
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Error", "The API key was rejected. Use \"Change API key\" to enter a new one."));
             this.agent = null;
         }
         catch (Exception ex)
         {
-            this.Messages.Add(new ChatEntry("error", "Error", ex.Message));
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Error", ex.Message));
         }
         finally
         {
-            this.EndStreamingEntries();
-            this.runCts.Dispose();
+            this.currentAssistant = null;
+            this.currentThinking = null;
             this.runCts = null;
             this.IsBusy = false;
             this.HasPendingApproval = false;
         }
     }
 
-    private void EndStreamingEntries()
-    {
-        this.currentAssistant?.Flush();
-        this.currentThinking?.Flush();
-        this.currentAssistant = null;
-        this.currentThinking = null;
-    }
-
     void IChatSink.AppendText(string text)
     {
-        this.currentThinking?.Flush();
         this.currentThinking = null;
         if (this.currentAssistant is null)
         {
-            this.currentAssistant = new ChatEntry("assistant", "Claude");
+            this.currentAssistant = new ChatEntry(ChatEntryKind.Assistant, "Claude");
             this.Messages.Add(this.currentAssistant);
         }
 
@@ -239,9 +239,8 @@ internal class ClaudeChatViewModel : NotifyPropertyChangedObject, IChatSink
     {
         if (this.currentThinking is null)
         {
-            this.currentAssistant?.Flush();
             this.currentAssistant = null;
-            this.currentThinking = new ChatEntry("thinking", "Thinking");
+            this.currentThinking = new ChatEntry(ChatEntryKind.Thinking, "Thinking");
             this.Messages.Add(this.currentThinking);
         }
 
@@ -250,20 +249,24 @@ internal class ClaudeChatViewModel : NotifyPropertyChangedObject, IChatSink
 
     void IChatSink.ToolActivity(string title, string detail)
     {
-        this.EndStreamingEntries();
-        this.Messages.Add(new ChatEntry("tool", title) { Detail = detail.Length > 4000 ? detail[..4000] + "\nâ€¦" : detail });
+        this.currentAssistant = null;
+        this.currentThinking = null;
+        this.Messages.Add(new ChatEntry(ChatEntryKind.Tool, title, detail: detail.Length > 8000 ? detail.Substring(0, 8000) + "\n…" : detail));
     }
 
     void IChatSink.SetStatus(string? status) => this.Status = status ?? string.Empty;
 
-    async Task<bool> IChatSink.RequestApprovalAsync(string description, CancellationToken cancellationToken)
+    async Task<Approval> IChatSink.RequestApprovalAsync(string title, string detail, string? allowAllLabel, CancellationToken cancellationToken)
     {
-        this.EndStreamingEntries();
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        this.currentAssistant = null;
+        this.currentThinking = null;
+        var tcs = new TaskCompletionSource<Approval>(TaskCreationOptions.RunContinuationsAsynchronously);
         this.pendingApproval = tcs;
-        this.ApprovalText = description;
+        this.ApprovalTitle = title;
+        this.ApprovalDetail = detail;
+        this.AllowAllLabel = allowAllLabel;
         this.HasPendingApproval = true;
-        using (cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken)))
+        using (cancellationToken.Register(() => tcs.TrySetCanceled()))
         {
             try
             {
@@ -276,4 +279,13 @@ internal class ClaudeChatViewModel : NotifyPropertyChangedObject, IChatSink
             }
         }
     }
+
+    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    {
+        field = value;
+        this.OnPropertyChanged(name);
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? name = null)
+        => this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

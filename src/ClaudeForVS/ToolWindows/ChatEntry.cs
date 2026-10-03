@@ -1,78 +1,61 @@
-using System.Runtime.Serialization;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Text;
-using Microsoft.VisualStudio.Extensibility.UI;
 
 namespace ClaudeForVS.ToolWindows;
 
+internal enum ChatEntryKind
+{
+    User,
+    Assistant,
+    Thinking,
+    Tool,
+    Error,
+}
+
 /// <summary>One item in the chat transcript.</summary>
-[DataContract]
-internal class ChatEntry : NotifyPropertyChangedObject
+internal sealed class ChatEntry : INotifyPropertyChanged
 {
     private readonly StringBuilder buffer = new();
-    private string text = string.Empty;
-    private string detail = string.Empty;
-    private DateTime lastFlush = DateTime.MinValue;
+    private string text;
 
-    public ChatEntry(string kind, string header, string text = "")
+    public ChatEntry(ChatEntryKind kind, string header, string text = "", string detail = "")
     {
         this.Kind = kind;
         this.Header = header;
         this.buffer.Append(text);
         this.text = text;
+        this.Detail = detail;
     }
 
-    /// <summary>user | assistant | thinking | tool | error. The XAML styles on this.</summary>
-    [DataMember]
-    public string Kind { get; }
+    public event PropertyChangedEventHandler? PropertyChanged;
 
-    [DataMember]
+    public ChatEntryKind Kind { get; }
+
     public string Header { get; }
 
-    [DataMember]
+    /// <summary>Markdown body (rendered for user/assistant entries, plain for thinking).</summary>
     public string Text
     {
         get => this.text;
-        private set => this.SetProperty(ref this.text, value);
-    }
-
-    [DataMember]
-    public string Detail
-    {
-        get => this.detail;
-        set
+        private set
         {
-            this.SetProperty(ref this.detail, value);
-            this.RaiseNotifyPropertyChangedEvent(nameof(this.HasDetail));
+            this.text = value;
+            this.OnPropertyChanged();
         }
     }
 
-    [DataMember]
-    public bool HasDetail => this.detail.Length > 0;
+    /// <summary>Monospace detail shown in an expander, e.g. tool output or a diff.</summary>
+    public string Detail { get; }
 
-    /// <summary>Appends streamed text, pushing it to the UI at most every 60 ms to limit RPC traffic.</summary>
+    public bool HasDetail => this.Detail.Length > 0;
+
     public void Append(string chunk)
     {
-        lock (this.buffer)
-        {
-            this.buffer.Append(chunk);
-            if ((DateTime.UtcNow - this.lastFlush).TotalMilliseconds >= 60)
-            {
-                this.FlushLocked();
-            }
-        }
-    }
-
-    public void Flush()
-    {
-        lock (this.buffer)
-        {
-            this.FlushLocked();
-        }
-    }
-
-    private void FlushLocked()
-    {
-        this.lastFlush = DateTime.UtcNow;
+        this.buffer.Append(chunk);
         this.Text = this.buffer.ToString();
     }
+
+    private void OnPropertyChanged([CallerMemberName] string? name = null)
+        => this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
