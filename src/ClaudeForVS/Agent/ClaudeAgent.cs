@@ -80,11 +80,14 @@ internal sealed class ClaudeAgent : IChatEngine
     {
         this.history.Add(new() { Role = Role.User, Content = prompt });
 
+        long promptTokens = 0; // finished responses so far; the one streaming is added on top, live
         for (int round = 0; round < MaxToolRounds; round++)
         {
             sink.SetStatus("Waiting for Claude…");
-            StreamedTurn turn = await this.StreamTurnAsync(sink, cancellationToken);
+            StreamedTurn turn = await this.StreamTurnAsync(sink, promptTokens, cancellationToken);
             this.history.Add(new() { Role = Role.Assistant, Content = turn.Content });
+            promptTokens += turn.InputTokens + turn.OutputTokens;
+            sink.ReportLiveTokens(promptTokens);
 
             sink.SetStatus(
                 $"Tokens: {turn.InputTokens:N0} in ({turn.CacheReadTokens:N0} cached), {turn.OutputTokens:N0} out");
@@ -192,10 +195,11 @@ internal sealed class ClaudeAgent : IChatEngine
         _ => ApiEffort.High,
     };
 
-    private async Task<StreamedTurn> StreamTurnAsync(IChatSink sink, CancellationToken cancellationToken)
+    private async Task<StreamedTurn> StreamTurnAsync(IChatSink sink, long tokensBefore, CancellationToken cancellationToken)
     {
         var blocks = new SortedDictionary<long, BlockBuilder>();
         var turn = new StreamedTurn();
+        long streamedChars = 0; // output isn't counted until the response ends, so estimate it (~4 chars per token) meanwhile
 
         await foreach (RawMessageStreamEvent ev in this.client.Messages.CreateStreaming(this.BuildRequest(), cancellationToken))
         {
@@ -207,6 +211,7 @@ internal sealed class ClaudeAgent : IChatEngine
                 turn.CacheReadTokens = start.Message.Usage.CacheReadInputTokens ?? 0;
                 turn.CacheWriteTokens = start.Message.Usage.CacheCreationInputTokens ?? 0;
                 turn.UncachedInputTokens = start.Message.Usage.InputTokens;
+                sink.ReportLiveTokens(tokensBefore + turn.InputTokens);
             }
             else if (ev.TryPickContentBlockStart(out RawContentBlockStartEvent? blockStart))
             {
@@ -256,6 +261,12 @@ internal sealed class ClaudeAgent : IChatEngine
                 {
                     block.Text.Append(json.PartialJson);
                 }
+
+                streamedChars += delta.Delta.TryPickText(out TextDelta? t) ? t.Text.Length
+                    : delta.Delta.TryPickThinking(out ThinkingDelta? th) ? th.Thinking.Length
+                    : delta.Delta.TryPickInputJson(out InputJsonDelta? ij) ? ij.PartialJson.Length
+                    : 0;
+                sink.ReportLiveTokens(tokensBefore + turn.InputTokens + (streamedChars / 4));
             }
             else if (ev.TryPickDelta(out RawMessageDeltaEvent? messageDelta))
             {

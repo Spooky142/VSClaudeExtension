@@ -451,6 +451,8 @@
     <!-- Footer: status and keyboard hint -->
     <DockPanel Grid.Row="6" Margin="14,0,14,8">
       <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="11" Text="Enter to send · Shift+Enter for new line" />
+      <TextBlock DockPanel.Dock="Left" Style="{StaticResource Muted}" FontSize="11" Text="{Binding LiveTokenText}"
+                 FontWeight="SemiBold" Margin="0,0,12,0" />
       <TextBlock Style="{StaticResource Muted}" FontSize="11" Text="{Binding Status}" TextTrimming="CharacterEllipsis"
                  ToolTip="{Binding Status}" Margin="0,0,12,0" />
     </DockPanel>

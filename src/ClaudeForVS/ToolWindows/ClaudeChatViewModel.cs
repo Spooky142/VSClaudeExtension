@@ -231,6 +231,19 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     public bool IsIdle => !this.isBusy;
 
+    private long liveTokens;
+
+    /// <summary>"1,234 tokens" for the prompt in progress; empty when idle or nothing has streamed yet.</summary>
+    public string LiveTokenText => this.liveTokens > 0 ? $"{this.liveTokens:N0} tokens" : string.Empty;
+
+    private void SetLiveTokens(long tokens)
+    {
+        this.liveTokens = tokens;
+        this.OnPropertyChanged(nameof(this.LiveTokenText));
+    }
+
+    void IChatSink.ReportLiveTokens(long totalTokens) => this.SetLiveTokens(totalTokens);
+
     public bool NeedsApiKey
     {
         get => this.needsApiKey;
@@ -508,6 +521,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     {
         this.IsBusy = true;
         this.promptTokens = default;
+        this.SetLiveTokens(0);
         this.promptCost = 0;
         this.promptHasCost = false;
         using var cts = new CancellationTokenSource();
@@ -540,6 +554,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
                 this.Messages.Add(new ChatEntry(ChatEntryKind.Usage, this.FormatPromptUsage()));
             }
 
+            this.SetLiveTokens(0); // the footer entry above keeps the final figure
             this.currentAssistant = null;
             this.currentThinking = null;
             this.runCts = null;

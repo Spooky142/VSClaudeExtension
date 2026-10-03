@@ -118,6 +118,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         };
         ClaudeCodeCli.RemoveApiKeyVariables(psi); // use the subscription login, not a stray API key
 
+        this.liveDone = this.liveInput = this.liveOutput = this.liveChars = 0;
         chatSink.SetStatus("Starting Claude Code…");
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Couldn't start Claude Code.");
         this.running = process;
@@ -228,6 +229,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 break;
 
             case "stream_event" when isTopLevel && ev.TryGetProperty("event", out JsonElement inner):
+                this.TrackLiveTokens(inner, chatSink);
                 if (Str(inner, "type") == "content_block_delta" && inner.TryGetProperty("delta", out JsonElement delta))
                 {
                     switch (Str(delta, "type"))
@@ -302,6 +304,38 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         }
 
         return null;
+    }
+
+    // Live token count for the prompt in progress: finished messages, plus the one streaming (output estimated until it ends).
+    private long liveDone, liveInput, liveOutput, liveChars;
+
+    private void TrackLiveTokens(JsonElement inner, IChatSink chatSink)
+    {
+        switch (Str(inner, "type"))
+        {
+            case "message_start" when inner.TryGetProperty("message", out JsonElement message)
+                && message.TryGetProperty("usage", out JsonElement start):
+                this.liveInput = (long)(Num(start, "input_tokens") + Num(start, "cache_creation_input_tokens") + Num(start, "cache_read_input_tokens"));
+                this.liveOutput = 0;
+                this.liveChars = 0;
+                break;
+            case "content_block_delta" when inner.TryGetProperty("delta", out JsonElement delta):
+                this.liveChars += (Str(delta, "text") ?? Str(delta, "thinking") ?? Str(delta, "partial_json") ?? string.Empty).Length;
+                break;
+            case "message_delta" when inner.TryGetProperty("usage", out JsonElement usage):
+                this.liveOutput = (long)Num(usage, "output_tokens");
+                this.liveChars = this.liveOutput * 4;
+                break;
+            case "message_stop":
+                this.liveDone += this.liveInput + Math.Max(this.liveOutput, this.liveChars / 4);
+                this.liveInput = this.liveOutput = this.liveChars = 0;
+                chatSink.ReportLiveTokens(this.liveDone);
+                return;
+            default:
+                return;
+        }
+
+        chatSink.ReportLiveTokens(this.liveDone + this.liveInput + Math.Max(this.liveOutput, this.liveChars / 4));
     }
 
     /// <summary>Called by the approval server (on a thread-pool thread) when Claude Code needs permission.</summary>

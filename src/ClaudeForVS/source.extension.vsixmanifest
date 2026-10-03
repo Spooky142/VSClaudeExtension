@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="ClaudeForVS.6d1c2a9e-3f4b-4c8e-9a51-0b7e2f4d8c13" Version="0.3.7" Language="en-US" Publisher="adamb" />
+    <Identity Id="ClaudeForVS.6d1c2a9e-3f4b-4c8e-9a51-0b7e2f4d8c13" Version="0.3.8" Language="en-US" Publisher="adamb" />
     <DisplayName>Claude for Visual Studio</DisplayName>
     <Description xml:space="preserve">Chat with Claude about the current git repository, directly from Visual Studio.</Description>
   </Metadata>

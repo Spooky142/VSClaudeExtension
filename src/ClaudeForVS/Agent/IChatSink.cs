@@ -63,6 +63,9 @@ internal interface IChatSink
     /// <summary>Total tokens used answering one prompt (Claude Code engine, which doesn't report per response).</summary>
     void ReportPromptUsage(TokenUsage usage);
 
+    /// <summary>Running total of tokens (in + out) for the prompt in progress, updated as the response streams. Estimated until each response completes.</summary>
+    void ReportLiveTokens(long totalTokens);
+
     /// <summary>Per-minute rate-limit headroom from the latest API response (Claude API engine).</summary>
     void ReportApiRateLimits(ApiRateLimits limits);
 
