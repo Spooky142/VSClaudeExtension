@@ -60,6 +60,8 @@ public partial class ClaudeChatControl : UserControl
                 {
                     this.viewModel.SetRepoFromDirectory(solutionDir);
                 }
+
+                this.viewModel.RestoreLastSession();
             }
 
             this.PromptBox.Focus();

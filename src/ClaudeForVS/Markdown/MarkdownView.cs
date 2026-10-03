@@ -1,7 +1,10 @@
 using System;
+using System.Globalization;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace ClaudeForVS.Markdown;
@@ -17,6 +20,9 @@ internal sealed class MarkdownView : RichTextBox
 
     private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(120);
 
+    // Covers the caret and small differences between measured and laid-out text, so the last word doesn't wrap.
+    private const double WidthSlack = 8;
+
     private readonly DispatcherTimer timer;
     private DateTime lastRender = DateTime.MinValue;
 
@@ -27,10 +33,10 @@ internal sealed class MarkdownView : RichTextBox
         this.IsReadOnlyCaretVisible = false;
         this.BorderThickness = new Thickness(0);
         this.Padding = new Thickness(0);
-        this.Background = System.Windows.Media.Brushes.Transparent;
+        this.Background = Brushes.Transparent;
         this.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
         this.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-        this.Document = new System.Windows.Documents.FlowDocument();
+        this.Document = new FlowDocument();
 
         this.timer = new DispatcherTimer(RenderInterval, DispatcherPriority.Background, (_, _) => this.Render(), this.Dispatcher);
         this.timer.Stop();
@@ -61,105 +67,165 @@ internal sealed class MarkdownView : RichTextBox
         this.timer.Stop();
         this.lastRender = DateTime.UtcNow;
         this.Document = MarkdownRenderer.Render(this.Markdown, this.FontSize);
-        this.ResetNaturalWidth();
-    }
-
-    // A RichTextBox always wants the full width offered to it, so bubbles around it would span the whole
-    // window. Instead: lay out at the offered width, measure the widest rendered line, then report that
-    // (when narrower) as the desired width so the surrounding bubble hugs the text.
-    private double? naturalWidth;
-    private bool measuringNaturalWidth;
-    private double lastConstraintWidth = -1;
-
-    private void ResetNaturalWidth()
-    {
         this.naturalWidth = null;
-        this.measuringNaturalWidth = true;
         this.InvalidateMeasure();
     }
 
+    // A RichTextBox always wants the full width offered to it, so bubbles around it would span the whole window.
+    // Instead the width of the longest line is worked out from the document's text, and the text is laid out at
+    // that width (when narrower) so the surrounding bubble hugs it. This happens within the measure pass itself:
+    // laying out at full width first and shrinking afterwards gets drawn in between, which shows as flicker.
+    private double? naturalWidth;
+
     protected override Size MeasureOverride(Size constraint)
     {
-        if (constraint.Width != this.lastConstraintWidth)
+        this.naturalWidth ??= this.MeasureNaturalWidth();
+        double width = Math.Min(constraint.Width, this.naturalWidth.Value);
+        Size size = base.MeasureOverride(new Size(width, constraint.Height));
+        return new Size(Math.Min(size.Width, width), size.Height);
+    }
+
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property == FontFamilyProperty || e.Property == FontSizeProperty || e.Property == FontWeightProperty
+            || e.Property == FontStyleProperty || e.Property == PaddingProperty)
         {
-            this.lastConstraintWidth = constraint.Width;
             this.naturalWidth = null;
-            this.measuringNaturalWidth = true;
-        }
-
-        Size size = base.MeasureOverride(constraint);
-        if (this.naturalWidth is double natural && natural < size.Width)
-        {
-            return new Size(natural, size.Height);
-        }
-
-        return size;
-    }
-
-    protected override Size ArrangeOverride(Size arrangeBounds)
-    {
-        Size result = base.ArrangeOverride(arrangeBounds);
-        if (this.measuringNaturalWidth)
-        {
-#pragma warning disable VSTHRD001, VSTHRD110 // pure UI-thread layout work, no JTF needed
-            // Normal (above Render) so the natural width is captured and re-measured before the frame is drawn;
-            // at a lower priority the full-width intermediate layout gets painted, which shows as flicker.
-            this.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(this.CaptureNaturalWidth));
-#pragma warning restore VSTHRD001, VSTHRD110
-        }
-
-        return result;
-    }
-
-    private void CaptureNaturalWidth()
-    {
-        if (!this.measuringNaturalWidth)
-        {
-            return;
-        }
-
-        double? widest = this.MeasureWidestLine();
-        if (widest is null)
-        {
-            return; // layout not ready yet; the next arrange retries
-        }
-
-        this.measuringNaturalWidth = false;
-        double width = Math.Ceiling(widest.Value + this.Document.PagePadding.Right + this.Padding.Right + 4);
-        if (this.naturalWidth != width)
-        {
-            this.naturalWidth = width;
-            this.InvalidateMeasure();
         }
     }
 
-    private double? MeasureWidestLine()
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
-        FlowDocument doc = this.Document;
-        TextPointer? pos = doc.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+        base.OnDpiChanged(oldDpi, newDpi);
+        this.naturalWidth = null;
+        this.InvalidateMeasure();
+    }
+
+    private double MeasureNaturalWidth()
+    {
+        double pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        double content = MeasureBlocks(this.Document.Blocks, pixelsPerDip);
+        if (double.IsPositiveInfinity(content))
+        {
+            return double.PositiveInfinity;
+        }
+
+        Thickness page = this.Document.PagePadding;
+        return Math.Ceiling(content + page.Left + page.Right + this.Padding.Left + this.Padding.Right
+            + this.BorderThickness.Left + this.BorderThickness.Right + WidthSlack);
+    }
+
+    /// <summary>Widest unwrapped line among the blocks, including their indents; infinite for tables, which fill whatever width they get.</summary>
+    private static double MeasureBlocks(BlockCollection blocks, double pixelsPerDip)
+    {
         double max = 0;
-        while (pos is not null)
+        foreach (Block block in blocks)
         {
-            TextPointer? next = pos.GetLineStartPosition(1, out int moved);
-            TextPointer end = moved == 1 && next is not null
-                ? next.GetInsertionPosition(LogicalDirection.Backward)
-                : doc.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
-
-            Rect rect = end.GetCharacterRect(LogicalDirection.Backward);
-            if (rect.IsEmpty)
+            double inner = block switch
             {
-                return null;
-            }
+                Paragraph p => MeasureParagraph(p, pixelsPerDip),
+                List list => MeasureList(list, pixelsPerDip),
+                Section section => MeasureBlocks(section.Blocks, pixelsPerDip),
+                _ => double.PositiveInfinity,
+            };
 
-            max = Math.Max(max, rect.Right);
-            if (moved != 1)
-            {
-                break;
-            }
-
-            pos = next;
+            max = Math.Max(max, inner + block.Padding.Left + block.Padding.Right + block.BorderThickness.Left
+                + block.BorderThickness.Right + block.Margin.Left + block.Margin.Right);
         }
 
         return max;
+    }
+
+    private static double MeasureList(List list, double pixelsPerDip)
+    {
+        double max = 0;
+        foreach (ListItem item in list.ListItems)
+        {
+            max = Math.Max(max, MeasureBlocks(item.Blocks, pixelsPerDip));
+        }
+
+        return max;
+    }
+
+    private static double MeasureParagraph(Paragraph paragraph, double pixelsPerDip)
+    {
+        var line = new LineMeasurer(paragraph, pixelsPerDip);
+        line.AddInlines(paragraph.Inlines);
+        return line.Finish();
+    }
+
+    /// <summary>Measures the hard lines of a paragraph, keeping each run's font.</summary>
+    private sealed class LineMeasurer
+    {
+        private readonly Paragraph paragraph;
+        private readonly double pixelsPerDip;
+        private readonly StringBuilder text = new();
+        private readonly System.Collections.Generic.List<(int Start, int Length, Run Run)> runs = [];
+        private double max;
+
+        public LineMeasurer(Paragraph paragraph, double pixelsPerDip)
+        {
+            this.paragraph = paragraph;
+            this.pixelsPerDip = pixelsPerDip;
+        }
+
+        public void AddInlines(InlineCollection inlines)
+        {
+            foreach (Inline inline in inlines)
+            {
+                switch (inline)
+                {
+                    case Run run:
+                        string runText = run.Text.Replace("\t", "    ");
+                        this.runs.Add((this.text.Length, runText.Length, run));
+                        this.text.Append(runText);
+                        break;
+                    case LineBreak:
+                        this.EndLine();
+                        break;
+                    case Span span:
+                        this.AddInlines(span.Inlines);
+                        break;
+                }
+            }
+        }
+
+        public double Finish()
+        {
+            this.EndLine();
+            return this.max;
+        }
+
+        private void EndLine()
+        {
+            if (this.text.Length > 0)
+            {
+                var formatted = new FormattedText(
+                    this.text.ToString(),
+                    CultureInfo.CurrentUICulture,
+                    FlowDirection.LeftToRight,
+                    new Typeface(this.paragraph.FontFamily, this.paragraph.FontStyle, this.paragraph.FontWeight, FontStretches.Normal),
+                    this.paragraph.FontSize,
+                    Brushes.Black,
+                    this.pixelsPerDip);
+
+                foreach ((int start, int length, Run run) in this.runs)
+                {
+                    if (length > 0)
+                    {
+                        formatted.SetFontFamily(run.FontFamily, start, length);
+                        formatted.SetFontSize(run.FontSize, start, length);
+                        formatted.SetFontWeight(run.FontWeight, start, length);
+                        formatted.SetFontStyle(run.FontStyle, start, length);
+                    }
+                }
+
+                this.max = Math.Max(this.max, formatted.WidthIncludingTrailingWhitespace);
+            }
+
+            this.text.Clear();
+            this.runs.Clear();
+        }
     }
 }

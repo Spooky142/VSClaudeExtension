@@ -241,16 +241,25 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.liveTokens = tokens;
         if (tokens > 0)
         {
-            string text = $"{tokens:N0} tokens";
-            if (this.liveUsageEntry is null)
-            {
-                this.liveUsageEntry = new ChatEntry(ChatEntryKind.Usage, text);
-                this.Messages.Add(this.liveUsageEntry);
-            }
-            else
-            {
-                this.liveUsageEntry.SetText(text);
-            }
+            this.ShowPromptUsage($"{tokens:N0} tokens");
+        }
+    }
+
+    /// <summary>Shows the prompt's token count as the last transcript entry, below anything added since it last changed.</summary>
+    private void ShowPromptUsage(string text)
+    {
+        if (this.liveUsageEntry is null)
+        {
+            this.liveUsageEntry = new ChatEntry(ChatEntryKind.Usage, string.Empty, text);
+            this.Messages.Add(this.liveUsageEntry);
+            return;
+        }
+
+        this.liveUsageEntry.SetText(text);
+        int at = this.Messages.IndexOf(this.liveUsageEntry);
+        if (at >= 0 && at < this.Messages.Count - 1)
+        {
+            this.Messages.Move(at, this.Messages.Count - 1);
         }
     }
 
@@ -575,7 +584,10 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.Messages.Clear();
         foreach (SavedEntry e in entries)
         {
-            this.Messages.Add(new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity));
+            // Chats saved by 0.3.9-0.3.10 kept the token count in the header.
+            this.Messages.Add(e.Kind == ChatEntryKind.Usage && e.Text.Length == 0
+                ? new ChatEntry(e.Kind, string.Empty, e.Header)
+                : new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity));
         }
 
         this.chatId = info.Id;
@@ -597,6 +609,24 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.Status = status;
         this.ShowHistory = false;
         this.PromptSent?.Invoke(this, EventArgs.Empty); // scroll to the end of the opened chat
+    }
+
+    /// <summary>Reopens the most recent chat for the current repository, so a chat carries over when Visual Studio restarts.</summary>
+    public void RestoreLastSession()
+    {
+        if (this.Messages.Count > 0 || this.engine != null)
+        {
+            return;
+        }
+
+        string repo = this.RepoPath.Trim().TrimEnd('\\', '/');
+        SessionInfo? last = SessionStore.List().FirstOrDefault(s =>
+            string.Equals(s.RepoPath.TrimEnd('\\', '/'), repo, StringComparison.OrdinalIgnoreCase)
+            && s.Engine == this.settings.Engine);
+        if (last != null)
+        {
+            this.OpenSession(new SessionItem(last, isCurrent: false));
+        }
     }
 
     public void DeleteSession(SessionItem item)
@@ -770,20 +800,10 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
         finally
         {
-            // The live entry was added mid-run; settle it with the final figure and move it below the reply.
-            string finalUsage = this.FormatPromptUsage();
-            if (this.liveUsageEntry is ChatEntry usageEntry)
+            // Settle the live count with the final figure, below the reply.
+            if (this.liveUsageEntry != null || this.promptTokens != default)
             {
-                usageEntry.SetText(finalUsage);
-                int at = this.Messages.IndexOf(usageEntry);
-                if (at >= 0 && at < this.Messages.Count - 1)
-                {
-                    this.Messages.Move(at, this.Messages.Count - 1);
-                }
-            }
-            else if (this.promptTokens != default)
-            {
-                this.Messages.Add(new ChatEntry(ChatEntryKind.Usage, finalUsage));
+                this.ShowPromptUsage(this.FormatPromptUsage());
             }
 
             this.liveUsageEntry = null;
