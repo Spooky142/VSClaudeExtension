@@ -12,7 +12,11 @@ It calls the Anthropic API directly with your own API key and doesn't depend on 
 - Claude works inside one repository, which **From solution** detects from the open solution. You can also type any path inside a clone.
   - `git`: read-only commands (`status`, `diff`, `log`, `show`, `blame`, `grep`, `ls-files`, branch/tag/remote listing, …) run immediately. Anything that changes the repo or contacts a remote (`commit`, `checkout`, `reset`, `push`, `merge`, `stash`, …) shows an **Allow / Deny** prompt first.
   - `read_file`, `edit_file` and `write_file` work only on files inside the repository. Absolute paths, `..` escapes, anything under `.git`, and paths through symlinks or junctions are refused. Every edit shows a preview and needs approval; **Allow all edits** skips the prompt for the rest of that chat. Edits keep the file's encoding and line endings.
-- Uses `claude-opus-5-5` with adaptive thinking (summaries shown in grey), streaming, and automatic prompt caching.
+- **Settings** (gear icon, or click either header chip) picks the model, effort, repository and API key. Settings are saved in `%LOCALAPPDATA%\ClaudeForVS\settings.json`.
+  - Models: Opus 5.5 (`claude-opus-5-5`, default), Sonnet 5.5 (`claude-sonnet-5-5`), Haiku 4.5 (`claude-haiku-4-5`).
+  - Effort: Low, Medium, High (default), Extra high or Max. A new effort applies from the next message; switching model starts a new chat.
+  - Haiku 4.5 has no effort setting, so effort maps to its thinking budget: Low means no thinking, then 4K, 10K, 20K or 32K tokens.
+- Streams responses with thinking summaries (shown in grey) and uses automatic prompt caching.
 
 ## Layout
 

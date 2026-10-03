@@ -10,185 +10,12 @@
              FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
              FontSize="12">
   <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Theme.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+
     <BooleanToVisibilityConverter x:Key="BoolToVis" />
-
-    <!-- Palette. Translucent grays and tints read correctly on both light and dark VS themes. -->
-    <SolidColorBrush x:Key="Accent" Color="#D97757" />
-    <SolidColorBrush x:Key="AccentHover" Color="#C7684A" />
-    <SolidColorBrush x:Key="AccentPressed" Color="#B05A3E" />
-    <SolidColorBrush x:Key="UserBubble" Color="#24D97757" />
-    <SolidColorBrush x:Key="HoverTint" Color="#1F808080" />
-    <SolidColorBrush x:Key="PressTint" Color="#38808080" />
-    <SolidColorBrush x:Key="SubtleFill" Color="#10808080" />
-    <SolidColorBrush x:Key="SubtleBorder" Color="#38808080" />
-    <SolidColorBrush x:Key="AddedTint" Color="#332EA043" />
-    <SolidColorBrush x:Key="RemovedTint" Color="#33F85149" />
-    <SolidColorBrush x:Key="Amber" Color="#E3A33A" />
-    <SolidColorBrush x:Key="AmberTint" Color="#14E3A33A" />
-    <SolidColorBrush x:Key="ErrorRed" Color="#E5484D" />
-    <SolidColorBrush x:Key="ErrorTint" Color="#1AE5484D" />
-    <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
-    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>
-
-    <Style TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-    </Style>
-    <Style TargetType="Hyperlink">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static platform:EnvironmentColors.ControlLinkTextBrushKey}}" />
-    </Style>
-    <Style TargetType="ScrollBar" BasedOn="{StaticResource {x:Static vsshell:VsResourceKeys.ScrollBarStyleKey}}" />
-    <Style TargetType="ScrollViewer" BasedOn="{StaticResource {x:Static vsshell:VsResourceKeys.ScrollViewerStyleKey}}" />
-
-    <Style x:Key="Muted" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
-    </Style>
-    <Style x:Key="Icon" TargetType="TextBlock">
-      <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
-      <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
-
-    <!-- Flat square icon button (header actions). -->
-    <Style x:Key="IconButton" TargetType="Button">
-      <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
-      <Setter Property="FontSize" Value="14" />
-      <Setter Property="Width" Value="28" />
-      <Setter Property="Height" Value="28" />
-      <Setter Property="Margin" Value="2,0,0,0" />
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-      <Setter Property="Background" Value="Transparent" />
-      <Setter Property="Cursor" Value="Hand" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.4" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <!-- Outlined rounded button (secondary actions, suggestions, the repo chip). -->
-    <Style x:Key="OutlineButton" TargetType="Button">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-      <Setter Property="Background" Value="Transparent" />
-      <Setter Property="BorderBrush" Value="{StaticResource SubtleBorder}" />
-      <Setter Property="Padding" Value="12,5" />
-      <Setter Property="Margin" Value="6,0,0,0" />
-      <Setter Property="Cursor" Value="Hand" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="1" CornerRadius="14" Padding="{TemplateBinding Padding}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.4" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <!-- Filled accent button (primary action). -->
-    <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource OutlineButton}">
-      <Setter Property="Foreground" Value="White" />
-      <Setter Property="Background" Value="{StaticResource Accent}" />
-      <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                    BorderThickness="1" CornerRadius="14" Padding="{TemplateBinding Padding}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.FontWeight="SemiBold" />
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHover}" />
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentPressed}" />
-              </Trigger>
-              <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.4" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <!-- Round send / stop button in the composer. -->
-    <Style x:Key="RoundButton" TargetType="Button">
-      <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
-      <Setter Property="FontSize" Value="13" />
-      <Setter Property="Width" Value="32" />
-      <Setter Property="Height" Value="32" />
-      <Setter Property="Foreground" Value="White" />
-      <Setter Property="Background" Value="{StaticResource Accent}" />
-      <Setter Property="Cursor" Value="Hand" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="Button">
-            <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="16">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHover}" />
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentPressed}" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
-    <!-- Rounded input boxes for the settings panel. -->
-    <ControlTemplate x:Key="FieldTemplate" TargetType="Control">
-      <Border x:Name="Bd" Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
-              BorderBrush="{StaticResource SubtleBorder}" BorderThickness="1" CornerRadius="6" Padding="6,4">
-        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
-      </Border>
-      <ControlTemplate.Triggers>
-        <Trigger Property="IsKeyboardFocusWithin" Value="True">
-          <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
-        </Trigger>
-      </ControlTemplate.Triggers>
-    </ControlTemplate>
-    <Style x:Key="Field" TargetType="TextBox">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
-      <Setter Property="CaretBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
-      <Setter Property="Template" Value="{StaticResource FieldTemplate}" />
-    </Style>
-    <Style x:Key="PasswordField" TargetType="PasswordBox">
-      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
-      <Setter Property="CaretBrush" Value="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}" />
-      <Setter Property="Template" Value="{StaticResource FieldTemplate}" />
-    </Style>
 
     <!-- Whole-row toggle used by collapsible transcript rows. -->
     <Style x:Key="RowToggle" TargetType="ToggleButton">
@@ -353,6 +180,7 @@
                                      Tool="{StaticResource ToolTemplate}"
                                      Error="{StaticResource ErrorTemplate}"
                                      Notice="{StaticResource NoticeTemplate}" />
+    </ResourceDictionary>
   </UserControl.Resources>
 
   <Grid>
@@ -366,86 +194,45 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <!-- Header: repository chip and actions -->
+    <!-- Header: repository and model chips, actions -->
     <DockPanel Grid.Row="0" Margin="10,8,10,6">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
         <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="New chat" Click="OnNewChat" />
-        <Button Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" Click="OnToggleSettings" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" Click="OnOpenSettings" />
       </StackPanel>
-      <Button Style="{StaticResource OutlineButton}" Margin="0" Padding="10,4" HorizontalAlignment="Left"
-              ToolTip="{Binding RepoPath}" Click="OnToggleSettings">
-        <StackPanel Orientation="Horizontal">
-          <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="12" Foreground="{StaticResource Accent}" />
-          <TextBlock Text="{Binding RepoName}" FontWeight="SemiBold" Margin="7,0,6,0" VerticalAlignment="Center" />
-          <TextBlock Style="{StaticResource Icon}" Text="&#xE70D;" FontSize="8" />
-        </StackPanel>
-      </Button>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+        <Button Style="{StaticResource OutlineButton}" Margin="0" Padding="10,4" ToolTip="{Binding RepoPath}" Click="OnOpenSettings">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="12" Foreground="{StaticResource Accent}" />
+            <TextBlock Text="{Binding RepoName}" FontWeight="SemiBold" Margin="7,0,0,0" VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+        <Button Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4" ToolTip="Model and effort" Click="OnOpenSettings">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE945;" FontSize="12" Foreground="{StaticResource Accent}" />
+            <TextBlock Text="{Binding ModelSummary}" Margin="7,0,0,0" VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+      </StackPanel>
     </DockPanel>
 
-    <!-- Settings panel -->
-    <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,10" CornerRadius="8" BorderThickness="1"
-            BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}"
-            Visibility="{Binding SettingsVisible, Converter={StaticResource BoolToVis}}">
-      <StackPanel>
-        <TextBlock Text="Repository" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <DockPanel>
-          <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Content="Use solution" Click="OnFromSolution" />
-          <TextBox Style="{StaticResource Field}" Text="{Binding RepoPath, UpdateSourceTrigger=PropertyChanged}" />
-        </DockPanel>
-
-        <TextBlock Text="Anthropic API key" FontWeight="SemiBold" Margin="0,12,0,4" />
-        <DockPanel>
-          <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Save" Click="OnSaveKey" />
-          <PasswordBox x:Name="ApiKeyBox" Style="{StaticResource PasswordField}" />
-        </DockPanel>
-        <TextBlock Style="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"
-                   Text="Get a key at console.anthropic.com. It's stored encrypted for your Windows account." />
-        <TextBlock Style="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"
-                   Text="✓ A key is saved. Enter a new one only to replace it."
-                   Visibility="{Binding HasApiKey, Converter={StaticResource BoolToVis}}" />
-      </StackPanel>
+    <!-- Shown until an API key is saved -->
+    <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"
+            BorderBrush="{StaticResource Amber}" Background="{StaticResource AmberTint}"
+            Visibility="{Binding NeedsApiKey, Converter={StaticResource BoolToVis}}">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Open settings" Click="OnOpenSettings" />
+        <TextBlock Style="{StaticResource Icon}" Text="&#xE8D7;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,10,0" />
+        <TextBlock Text="Add your Anthropic API key to get started." TextWrapping="Wrap" VerticalAlignment="Center" />
+      </DockPanel>
     </Border>
 
-    <!-- Transcript, with a welcome screen while it's empty -->
+    <!-- Transcript -->
     <ScrollViewer x:Name="Transcript" Grid.Row="2"
                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                   ScrollChanged="OnTranscriptScrollChanged" PreviewMouseWheel="OnTranscriptMouseWheel">
       <ItemsControl ItemsSource="{Binding Messages}" ItemTemplateSelector="{StaticResource EntrySelector}" Margin="12,0,12,8" />
     </ScrollViewer>
-
-    <StackPanel Grid.Row="2" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="380" Margin="16">
-      <StackPanel.Style>
-        <Style TargetType="StackPanel">
-          <Setter Property="Visibility" Value="Collapsed" />
-          <Style.Triggers>
-            <DataTrigger Binding="{Binding Messages.Count}" Value="0">
-              <Setter Property="Visibility" Value="Visible" />
-            </DataTrigger>
-          </Style.Triggers>
-        </Style>
-      </StackPanel.Style>
-      <Border Width="44" Height="44" CornerRadius="22" Background="{StaticResource Accent}" HorizontalAlignment="Center">
-        <TextBlock Text="✻" Foreground="White" FontSize="24" FontFamily="Segoe UI Symbol"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-2,0,0" />
-      </Border>
-      <TextBlock Text="How can I help?" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,12,0,4" />
-      <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" TextAlignment="Center">
-        <Run Text="I can explore" />
-        <Run Text="{Binding RepoName, Mode=OneWay}" FontWeight="SemiBold" />
-        <Run Text="with git, read its files, and make edits you approve." />
-      </TextBlock>
-      <WrapPanel HorizontalAlignment="Center" Margin="0,16,0,0">
-        <WrapPanel.Resources>
-          <Style TargetType="Button" BasedOn="{StaticResource OutlineButton}">
-            <Setter Property="Margin" Value="4" />
-          </Style>
-        </WrapPanel.Resources>
-        <Button Content="Summarize recent commits" Tag="Summarize the last 10 commits in this repository." Click="OnSuggestion" />
-        <Button Content="What's uncommitted?" Tag="What has changed since the last commit? Summarize the uncommitted changes." Click="OnSuggestion" />
-        <Button Content="Tour this repo" Tag="Give me a quick tour of this repository: its structure, main components and how they fit together." Click="OnSuggestion" />
-        <Button Content="Find TODOs" Tag="Find TODO and FIXME comments in this repository and tell me which are worth fixing first." Click="OnSuggestion" />
-      </WrapPanel>
-    </StackPanel>
 
     <!-- Approval card for actions that change the repository -->
     <Border Grid.Row="3" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource Amber}"

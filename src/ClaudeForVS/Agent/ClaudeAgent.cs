@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Anthropic;
 using Anthropic.Models.Messages;
 using ClaudeForVS.Git;
+using ApiEffort = Anthropic.Models.Messages.Effort;
 
 namespace ClaudeForVS.Agent;
 
@@ -19,7 +20,6 @@ namespace ClaudeForVS.Agent;
 /// </summary>
 internal sealed class ClaudeAgent
 {
-    private const string ModelId = "claude-opus-5-5";
     private const int MaxToolRounds = 40;
     private const int MaxFileChars = 100_000;
     private const int PreviewLines = 60;
@@ -30,10 +30,12 @@ internal sealed class ClaudeAgent
     private readonly string systemPrompt;
     private bool editsPreApproved;
 
-    public ClaudeAgent(string apiKey, string repoRoot)
+    public ClaudeAgent(string apiKey, string repoRoot, ClaudeModel model, EffortLevel effort)
     {
         this.client = new AnthropicClient { ApiKey = apiKey };
         this.RepoRoot = repoRoot;
+        this.Model = model;
+        this.Effort = effort;
         this.files = new RepoFiles(repoRoot);
         this.systemPrompt =
             $"""
@@ -55,6 +57,12 @@ internal sealed class ClaudeAgent
     }
 
     public string RepoRoot { get; }
+
+    /// <summary>Fixed for the conversation: thinking blocks in the history only make sense to the model that wrote them.</summary>
+    public ClaudeModel Model { get; }
+
+    /// <summary>Can change between turns; takes effect on the next request.</summary>
+    public EffortLevel Effort { get; set; }
 
     public async Task SendAsync(string prompt, IChatSink sink, CancellationToken cancellationToken)
     {
@@ -123,17 +131,46 @@ internal sealed class ClaudeAgent
     private static ToolResultBlockParam Error(string id, string message)
         => new() { ToolUseID = id, Content = message, IsError = true };
 
-    private MessageCreateParams BuildRequest() => new()
+    private MessageCreateParams BuildRequest()
     {
-        Model = ModelId,
-        MaxTokens = 64000,
-        Thinking = new ThinkingConfigAdaptive { Display = Display.Summarized },
-        OutputConfig = new OutputConfig { Effort = Effort.High },
-        // Automatic caching: the breakpoint moves forward with the conversation.
-        CacheControl = new CacheControlEphemeral(),
-        System = this.systemPrompt,
-        Tools = ToolDefinitions,
-        Messages = [.. this.history],
+        bool haiku = this.Model == ClaudeModel.Haiku;
+        int? haikuBudget = AgentSettings.HaikuThinkingBudget(this.Effort);
+
+        return new MessageCreateParams
+        {
+            Model = AgentSettings.ModelId(this.Model),
+            MaxTokens = 64000,
+
+            // Haiku 4.5 rejects `effort` and adaptive thinking; it takes an explicit thinking budget instead.
+            Thinking = haiku ? HaikuThinking(haikuBudget) : new ThinkingConfigAdaptive { Display = Display.Summarized },
+            OutputConfig = haiku ? null : new OutputConfig { Effort = ToApiEffort(this.Effort) },
+
+            // Automatic caching: the breakpoint moves forward with the conversation.
+            CacheControl = new CacheControlEphemeral(),
+            System = this.systemPrompt,
+            Tools = ToolDefinitions,
+            Messages = [.. this.history],
+        };
+    }
+
+    /// <summary>No budget means thinking off: leave the parameter out rather than converting a null config.</summary>
+    private static ThinkingConfigParam? HaikuThinking(int? budget)
+    {
+        if (budget is not int tokens)
+        {
+            return null;
+        }
+
+        return new ThinkingConfigEnabled { BudgetTokens = tokens };
+    }
+
+    private static ApiEffort ToApiEffort(EffortLevel effort) => effort switch
+    {
+        EffortLevel.Low => ApiEffort.Low,
+        EffortLevel.Medium => ApiEffort.Medium,
+        EffortLevel.XHigh => ApiEffort.Xhigh,
+        EffortLevel.Max => ApiEffort.Max,
+        _ => ApiEffort.High,
     };
 
     private async Task<StreamedTurn> StreamTurnAsync(IChatSink sink, CancellationToken cancellationToken)

@@ -33,11 +33,12 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private string? allowAllLabel;
     private bool isBusy;
     private bool needsApiKey;
-    private bool showSettings;
     private bool hasPendingApproval;
+    private AgentSettings settings;
 
     public ClaudeChatViewModel()
     {
+        this.settings = AgentSettings.Load();
         this.needsApiKey = ApiKeyStore.Load() is null;
         this.status = GitRunner.GitPath is null ? "git.exe not found - git tools will fail." : string.Empty;
     }
@@ -112,28 +113,30 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     public bool NeedsApiKey
     {
         get => this.needsApiKey;
-        set
+        private set
         {
             this.Set(ref this.needsApiKey, value);
             this.OnPropertyChanged(nameof(this.HasApiKey));
-            this.OnPropertyChanged(nameof(this.SettingsVisible));
         }
     }
 
     public bool HasApiKey => !this.needsApiKey;
 
-    /// <summary>The settings panel is open when the user toggles it, and always while no API key is set.</summary>
-    public bool ShowSettings
+    public AgentSettings Settings
     {
-        get => this.showSettings;
-        set
+        get => this.settings;
+        private set
         {
-            this.Set(ref this.showSettings, value);
-            this.OnPropertyChanged(nameof(this.SettingsVisible));
+            this.Set(ref this.settings, value);
+            this.OnPropertyChanged(nameof(this.ModelSummary));
         }
     }
 
-    public bool SettingsVisible => this.showSettings || this.needsApiKey;
+    /// <summary>Header chip text, e.g. "Opus 5.5 · High".</summary>
+    public string ModelSummary => $"{AgentSettings.ModelName(this.settings.Model)} · {AgentSettings.EffortName(this.settings.Effort)}";
+
+    /// <summary>True once the current conversation has history that a model switch would discard.</summary>
+    public bool HasConversation => this.agent != null && this.Messages.Count > 0;
 
     public bool HasPendingApproval { get => this.hasPendingApproval; private set => this.Set(ref this.hasPendingApproval, value); }
 
@@ -155,20 +158,43 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
     }
 
-    public void SaveApiKey(string key)
+    /// <summary>Applies the Settings dialog's result.</summary>
+    public void ApplySettings(AgentSettings newSettings, string repoPath, string? newApiKey)
     {
-        key = key.Trim();
-        if (key.Length == 0)
+        bool modelChanged = newSettings.Model != this.settings.Model;
+        newSettings.Save();
+        this.Settings = newSettings;
+        this.RepoPath = repoPath;
+
+        if (newApiKey != null)
         {
-            this.Status = "Enter an API key first.";
+            ApiKeyStore.Save(newApiKey);
+            this.NeedsApiKey = false;
+        }
+
+        if (this.agent is null)
+        {
+            this.Status = "Settings saved.";
             return;
         }
 
-        ApiKeyStore.Save(key);
-        this.NeedsApiKey = false;
-        this.ShowSettings = false;
-        this.agent = null; // pick up the new key
-        this.Status = "API key saved (encrypted for your Windows account).";
+        // A new key needs a new client; a new model can't read the old model's thinking history.
+        if (modelChanged || newApiKey != null)
+        {
+            this.Stop();
+            bool hadHistory = this.Messages.Count > 0;
+            this.agent = null;
+            if (hadHistory)
+            {
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {AgentSettings.ModelName(newSettings.Model)}"));
+            }
+        }
+        else
+        {
+            this.agent.Effort = newSettings.Effort; // used from the next request on
+        }
+
+        this.Status = "Settings saved.";
     }
 
     public void NewChat()
@@ -208,8 +234,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         string? root = GitRunner.FindRepoRoot(this.RepoPath.Trim());
         if (root is null)
         {
-            this.ShowSettings = true;
-            this.Status = "Set the repository path to a folder inside a cloned git repository.";
+            this.Status = "Set the repository in Settings to a folder inside a cloned git repository.";
             return false;
         }
 
@@ -217,10 +242,10 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         {
             if (this.agent != null)
             {
-                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New conversation · {Path.GetFileName(root)}"));
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {Path.GetFileName(root)}"));
             }
 
-            this.agent = new ClaudeAgent(apiKey, root);
+            this.agent = new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort);
             this.RepoPath = root;
         }
 

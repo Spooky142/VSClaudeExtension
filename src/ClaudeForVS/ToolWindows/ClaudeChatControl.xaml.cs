@@ -93,27 +93,23 @@ public partial class ClaudeChatControl : UserControl
 
     private void OnNewChat(object sender, RoutedEventArgs e) => this.viewModel.NewChat();
 
-    private void OnFromSolution(object sender, RoutedEventArgs e)
+    private void OnOpenSettings(object sender, RoutedEventArgs e)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        this.UseSolutionRepo();
-    }
+        var dialog = new SettingsDialog(
+            this.viewModel.Settings,
+            this.viewModel.RepoPath,
+            this.viewModel.HasApiKey,
+            this.viewModel.HasConversation,
+            () =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                return this.package.GetSolutionDirectory();
+            });
 
-    private void OnSaveKey(object sender, RoutedEventArgs e)
-    {
-        this.viewModel.SaveApiKey(this.ApiKeyBox.Password);
-        this.ApiKeyBox.Clear();
-    }
-
-    private void OnToggleSettings(object sender, RoutedEventArgs e) => this.viewModel.ShowSettings = !this.viewModel.ShowSettings;
-
-    /// <summary>Suggestion buttons on the welcome screen carry their full prompt in Tag.</summary>
-    private void OnSuggestion(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { Tag: string prompt })
+        if (dialog.ShowModal() == true)
         {
-            this.PromptBox.Text = prompt;
-            this.SendPrompt();
+            this.viewModel.ApplySettings(dialog.Result, dialog.ResultRepoPath, dialog.ResultApiKey);
         }
     }
 

@@ -1,0 +1,99 @@
+using System;
+using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace ClaudeForVS.Agent;
+
+internal enum ClaudeModel
+{
+    Opus,
+    Sonnet,
+    Haiku,
+}
+
+internal enum EffortLevel
+{
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+/// <summary>User-chosen model and effort, persisted to %LOCALAPPDATA%\ClaudeForVS\settings.json.</summary>
+internal sealed record AgentSettings
+{
+    private static readonly string SettingsFile = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClaudeForVS", "settings.json");
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    public ClaudeModel Model { get; init; } = ClaudeModel.Opus;
+
+    public EffortLevel Effort { get; init; } = EffortLevel.High;
+
+    public static AgentSettings Load()
+    {
+        try
+        {
+            if (File.Exists(SettingsFile))
+            {
+                return JsonSerializer.Deserialize<AgentSettings>(File.ReadAllText(SettingsFile), JsonOptions) ?? new AgentSettings();
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+        }
+
+        return new AgentSettings();
+    }
+
+    public void Save()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
+        File.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, JsonOptions));
+    }
+
+    /// <summary>API model ID.</summary>
+    public static string ModelId(ClaudeModel model) => model switch
+    {
+        ClaudeModel.Sonnet => "claude-sonnet-5-5",
+        ClaudeModel.Haiku => "claude-haiku-4-5",
+        _ => "claude-opus-5-5",
+    };
+
+    /// <summary>Short display name, e.g. "Opus 5.5".</summary>
+    public static string ModelName(ClaudeModel model) => model switch
+    {
+        ClaudeModel.Sonnet => "Sonnet 5.5",
+        ClaudeModel.Haiku => "Haiku 4.5",
+        _ => "Opus 5.5",
+    };
+
+    public static string EffortName(EffortLevel effort) => effort switch
+    {
+        EffortLevel.Low => "Low",
+        EffortLevel.Medium => "Medium",
+        EffortLevel.XHigh => "Extra high",
+        EffortLevel.Max => "Max",
+        _ => "High",
+    };
+
+    /// <summary>
+    /// Haiku 4.5 has no effort parameter; it takes an explicit thinking budget instead. Low means no thinking.
+    /// Every budget stays below the 64K max_tokens used for Haiku.
+    /// </summary>
+    public static int? HaikuThinkingBudget(EffortLevel effort) => effort switch
+    {
+        EffortLevel.Low => null,
+        EffortLevel.Medium => 4_000,
+        EffortLevel.High => 10_000,
+        EffortLevel.XHigh => 20_000,
+        _ => 32_000,
+    };
+}
