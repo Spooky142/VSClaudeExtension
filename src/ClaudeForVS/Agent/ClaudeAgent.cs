@@ -252,8 +252,8 @@ internal sealed class ClaudeAgent : IChatEngine
         {
             if (ev.TryPickStart(out RawMessageStartEvent? start))
             {
+                // New input only: the history re-read from the cache on every round isn't counted again.
                 turn.InputTokens = start.Message.Usage.InputTokens
-                    + (start.Message.Usage.CacheReadInputTokens ?? 0)
                     + (start.Message.Usage.CacheCreationInputTokens ?? 0);
                 turn.CacheReadTokens = start.Message.Usage.CacheReadInputTokens ?? 0;
                 turn.CacheWriteTokens = start.Message.Usage.CacheCreationInputTokens ?? 0;

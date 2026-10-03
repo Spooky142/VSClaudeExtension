@@ -233,8 +233,8 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     private long liveTokens;
 
-    // The user entry of the prompt in progress; its Usage is the realtime "1,234 tokens" count.
-    private ChatEntry? promptEntry;
+    // The usage entry of the prompt in progress; its text is the realtime "1,234 tokens" count.
+    private ChatEntry? liveUsageEntry;
 
     private void SetLiveTokens(long tokens)
     {
@@ -245,12 +245,21 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
     }
 
-    /// <summary>Shows the prompt's token count beside its message.</summary>
+    /// <summary>Shows the prompt's token count as the last transcript entry, below anything added since it last changed.</summary>
     private void ShowPromptUsage(string text)
     {
-        if (this.promptEntry != null)
+        if (this.liveUsageEntry is null)
         {
-            this.promptEntry.Usage = text;
+            this.liveUsageEntry = new ChatEntry(ChatEntryKind.Usage, string.Empty, text);
+            this.Messages.Add(this.liveUsageEntry);
+            return;
+        }
+
+        this.liveUsageEntry.SetText(text);
+        int at = this.Messages.IndexOf(this.liveUsageEntry);
+        if (at >= 0 && at < this.Messages.Count - 1)
+        {
+            this.Messages.Move(at, this.Messages.Count - 1);
         }
     }
 
@@ -530,7 +539,6 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
                 Text = m.Text,
                 Detail = string.Join("\n", m.DetailLines.Select(l => l.Text)),
                 Activity = m.Activity,
-                Usage = m.Usage,
             })
             .ToList();
 
@@ -576,19 +584,10 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.Messages.Clear();
         foreach (SavedEntry e in entries)
         {
-            if (e.Kind == ChatEntryKind.Usage)
-            {
-                // Older chats kept the token count as a footer entry (0.3.9-0.3.10 in the header); move it onto its prompt.
-                ChatEntry? prompt = this.Messages.LastOrDefault(m => m.Kind == ChatEntryKind.User);
-                if (prompt != null)
-                {
-                    prompt.Usage = e.Text.Length == 0 ? e.Header : e.Text;
-                }
-
-                continue;
-            }
-
-            this.Messages.Add(new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity) { Usage = e.Usage });
+            // Chats saved by 0.3.9-0.3.10 kept the token count in the header.
+            this.Messages.Add(e.Kind == ChatEntryKind.Usage && e.Text.Length == 0
+                ? new ChatEntry(e.Kind, string.Empty, e.Header)
+                : new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity));
         }
 
         this.chatId = info.Id;
@@ -731,8 +730,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             this.ApplyResume(created); // before the new prompt joins the transcript
         }
 
-        this.promptEntry = new ChatEntry(ChatEntryKind.User, "You", text);
-        this.Messages.Add(this.promptEntry);
+        this.Messages.Add(new ChatEntry(ChatEntryKind.User, "You", text));
         this.PromptSent?.Invoke(this, EventArgs.Empty);
         this.SaveChat();
         run = this.RunAsync(this.engine, text);
@@ -802,13 +800,13 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
         finally
         {
-            // Settle the live count with the final figure.
-            if (this.promptEntry is { Usage.Length: > 0 } || this.promptTokens != default)
+            // Settle the live count with the final figure, below the reply.
+            if (this.liveUsageEntry != null || this.promptTokens != default)
             {
                 this.ShowPromptUsage(this.FormatPromptUsage());
             }
 
-            this.promptEntry = null;
+            this.liveUsageEntry = null;
 
             if (ReferenceEquals(this.engine, runEngine))
             {
@@ -934,7 +932,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private string FormatPromptUsage()
     {
         TokenUsage t = this.promptTokens;
-        long total = this.liveTokens > 0 ? this.liveTokens : t.Input + t.CacheWrite + t.CacheRead + t.Output;
+        long total = this.liveTokens > 0 ? this.liveTokens : t.Input + t.CacheWrite + t.Output; // new tokens only; cache reads re-send the history every round
         string text = $"{total:N0} tokens";
         return this.promptHasCost ? $"{text} · ≈ ${this.promptCost:0.00}" : text;
     }

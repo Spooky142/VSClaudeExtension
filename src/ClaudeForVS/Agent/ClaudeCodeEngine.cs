@@ -317,7 +317,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         {
             case "message_start" when inner.TryGetProperty("message", out JsonElement message)
                 && message.TryGetProperty("usage", out JsonElement start):
-                this.liveInput = (long)(Num(start, "input_tokens") + Num(start, "cache_creation_input_tokens") + Num(start, "cache_read_input_tokens"));
+                this.liveInput = (long)(Num(start, "input_tokens") + Num(start, "cache_creation_input_tokens")); // new input only, not the cache re-read
                 this.liveOutput = 0;
                 this.liveChars = 0;
                 break;

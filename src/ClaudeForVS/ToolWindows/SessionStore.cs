@@ -43,8 +43,6 @@ internal sealed record SavedEntry
     public string Detail { get; init; } = string.Empty;
 
     public ActivityKind Activity { get; init; }
-
-    public string Usage { get; init; } = string.Empty;
 }
 
 /// <summary>

@@ -86,15 +86,12 @@
 
     <!-- ===== Transcript templates ===== -->
     <DataTemplate x:Key="UserTemplate">
-      <!-- Left-anchored 48px in from the edge; shrinks to fit short messages and grows rightward for long ones. The prompt's token count sits on its own line just below. -->
-      <StackPanel Margin="48,10,0,6" HorizontalAlignment="Left">
-        <Border CornerRadius="12,12,4,12" Padding="12,8"
-                Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
-          <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
-                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-        </Border>
-        <TextBlock Text="{Binding Usage}" Style="{StaticResource Muted}" FontSize="10.5" Margin="6,2,0,0" />
-      </StackPanel>
+      <!-- Left-anchored 48px in from the edge; shrinks to fit short messages and grows rightward for long ones. -->
+      <Border Margin="48,10,0,6" HorizontalAlignment="Left" CornerRadius="12,12,4,12" Padding="12,8"
+              Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
+        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
+                         Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      </Border>
     </DataTemplate>
 
     <DataTemplate x:Key="AssistantTemplate">
@@ -218,13 +215,19 @@
       </Grid>
     </DataTemplate>
 
+    <!-- The prompt's token count, on its own line tucked under the last thing Claude wrote. -->
+    <DataTemplate x:Key="UsageTemplate">
+      <TextBlock Text="{Binding Text}" Style="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Left" Margin="6,-3,0,8" />
+    </DataTemplate>
+
     <local:ChatEntryTemplateSelector x:Key="EntrySelector"
                                      User="{StaticResource UserTemplate}"
                                      Assistant="{StaticResource AssistantTemplate}"
                                      Thinking="{StaticResource ThinkingTemplate}"
                                      Tool="{StaticResource ToolTemplate}"
                                      Error="{StaticResource ErrorTemplate}"
-                                     Notice="{StaticResource NoticeTemplate}" />
+                                     Notice="{StaticResource NoticeTemplate}"
+                                     Usage="{StaticResource UsageTemplate}" />
     </ResourceDictionary>
   </UserControl.Resources>
 
