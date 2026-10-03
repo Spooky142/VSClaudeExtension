@@ -5,6 +5,16 @@ using System.Text.Json.Serialization;
 
 namespace ClaudeForVS.Agent;
 
+/// <summary>Which backend talks to Claude.</summary>
+internal enum ChatEngineKind
+{
+    /// <summary>Calls the Claude API directly with an API key, using this extension's own tools.</summary>
+    Api,
+
+    /// <summary>Drives the Claude Code CLI, which signs in with the user's own Pro/Max plan.</summary>
+    ClaudeCode,
+}
+
 internal enum ClaudeModel
 {
     Opus,
@@ -32,6 +42,8 @@ internal sealed record AgentSettings
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter() },
     };
+
+    public ChatEngineKind Engine { get; init; } = ChatEngineKind.Api;
 
     public ClaudeModel Model { get; init; } = ClaudeModel.Opus;
 

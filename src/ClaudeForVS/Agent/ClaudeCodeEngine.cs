@@ -1,0 +1,466 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using ClaudeForVS.Git;
+using Microsoft.VisualStudio.Shell;
+
+namespace ClaudeForVS.Agent;
+
+/// <summary>
+/// Runs each message through the Claude Code CLI (<c>claude -p</c>) in the repository, signed in with the user's
+/// own plan. Follow-up messages resume the same Claude Code session. Claude Code's permission prompts come back
+/// through <see cref="ApprovalServer"/> and are shown in the extension's approval card.
+/// </summary>
+internal sealed class ClaudeCodeEngine : IChatEngine
+{
+    private const string ExtraSystemPrompt =
+        "You are running inside a Visual Studio extension's chat window, which renders your replies as Markdown. " +
+        "Keep answers concise and reference files by repository-relative paths.";
+
+    private static readonly HashSet<string> EditTools = new(StringComparer.Ordinal) { "Edit", "MultiEdit", "Write", "NotebookEdit" };
+
+    private readonly string executable;
+    private readonly ApprovalServer approvalServer;
+    private readonly string mcpConfigPath;
+    private readonly SemaphoreSlim approvalGate = new(1, 1);
+    private readonly Dictionary<string, (string Name, JsonElement Input)> pendingTools = new();
+
+    private string? sessionId;
+    private bool editsPreApproved;
+    private IChatSink? sink;
+    private CancellationToken runToken;
+    private Process? running;
+
+    public ClaudeCodeEngine(string executable, string repoRoot, ClaudeModel model, EffortLevel effort)
+    {
+        this.executable = executable;
+        this.RepoRoot = repoRoot;
+        this.Model = model;
+        this.Effort = effort;
+        this.approvalServer = new ApprovalServer(this.DecideAsync);
+
+        string dir = Path.Combine(Path.GetTempPath(), "ClaudeForVS");
+        Directory.CreateDirectory(dir);
+        this.mcpConfigPath = Path.Combine(dir, $"mcp-{Guid.NewGuid():N}.json");
+        File.WriteAllText(this.mcpConfigPath, JsonSerializer.Serialize(new
+        {
+            mcpServers = new Dictionary<string, object>
+            {
+                [ApprovalServer.ServerName] = new { type = "http", url = this.approvalServer.Url },
+            },
+        }));
+    }
+
+    public ChatEngineKind Kind => ChatEngineKind.ClaudeCode;
+
+    public string RepoRoot { get; }
+
+    public ClaudeModel Model { get; }
+
+    public EffortLevel Effort { get; set; }
+
+    public async Task SendAsync(string prompt, IChatSink chatSink, CancellationToken cancellationToken)
+    {
+        this.sink = chatSink;
+        this.runToken = cancellationToken;
+        this.pendingTools.Clear();
+
+        var args = new List<string>
+        {
+            "-p",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--model", AgentSettings.ModelId(this.Model),
+            "--permission-mode", "default",
+            "--mcp-config", this.mcpConfigPath,
+            "--permission-prompt-tool", ApprovalServer.QualifiedToolName,
+            "--disallowedTools", "AskUserQuestion", // no UI for multiple-choice questions; Claude asks in chat instead
+            "--append-system-prompt", ExtraSystemPrompt,
+        };
+        if (this.Model != ClaudeModel.Haiku)
+        {
+            args.Add("--effort");
+            args.Add(this.Effort switch
+            {
+                EffortLevel.Low => "low",
+                EffortLevel.Medium => "medium",
+                EffortLevel.XHigh => "xhigh",
+                EffortLevel.Max => "max",
+                _ => "high",
+            });
+        }
+
+        if (this.sessionId != null)
+        {
+            args.Add("--resume");
+            args.Add(this.sessionId);
+        }
+
+        var psi = new ProcessStartInfo(this.executable, string.Join(" ", args.Select(GitRunner.QuoteArgument)))
+        {
+            WorkingDirectory = this.RepoRoot,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        ClaudeCodeCli.RemoveApiKeyVariables(psi); // use the subscription login, not a stray API key
+
+        chatSink.SetStatus("Starting Claude Code…");
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException("Couldn't start Claude Code.");
+        this.running = process;
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+
+        // The prompt goes in on stdin as UTF-8 (net48 can't set the stdin encoding, so write the bytes directly).
+        byte[] promptBytes = new UTF8Encoding(false).GetBytes(prompt);
+        await process.StandardInput.BaseStream.WriteAsync(promptBytes, 0, promptBytes.Length, cancellationToken);
+        process.StandardInput.Close();
+
+        string? resultError = null;
+        bool gotResult = false;
+        using (cancellationToken.Register(() => KillTree(process)))
+        {
+            string? line;
+            while ((line = await process.StandardOutput.ReadLineAsync()) != null)
+            {
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(line);
+                    if (this.HandleEvent(doc.RootElement, chatSink) is { } outcome)
+                    {
+                        gotResult = true;
+                        resultError = outcome.Error;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Not an event (e.g. a stray log line); ignore it.
+                }
+            }
+
+            // Output has ended, so the process is exiting; don't let a stuck child hold up the UI thread.
+            if (!process.WaitForExit(10_000))
+            {
+                KillTree(process);
+            }
+        }
+
+        this.running = null;
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (resultError != null)
+        {
+            throw new InvalidOperationException(resultError);
+        }
+
+        if (!gotResult && process.ExitCode != 0)
+        {
+            string err = (await stderr).Trim();
+            throw new InvalidOperationException(err.Length > 0 ? err : $"Claude Code exited with code {process.ExitCode}.");
+        }
+    }
+
+    public void Dispose()
+    {
+        if (this.running is { } process)
+        {
+            KillTree(process);
+        }
+
+        this.approvalServer.Dispose();
+        try
+        {
+            File.Delete(this.mcpConfigPath);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    /// <summary>Handles one stream-json event. Returns a value only for the final <c>result</c> event.</summary>
+    private RunOutcome? HandleEvent(JsonElement ev, IChatSink chatSink)
+    {
+        string type = Str(ev, "type") ?? string.Empty;
+
+        // Subagents' messages carry the ID of the tool call that spawned them; show only the main conversation.
+        bool isTopLevel = !ev.TryGetProperty("parent_tool_use_id", out JsonElement parent) || parent.ValueKind == JsonValueKind.Null;
+
+        switch (type)
+        {
+            case "system":
+                switch (Str(ev, "subtype"))
+                {
+                    case "init":
+                        this.sessionId = Str(ev, "session_id") ?? this.sessionId;
+                        chatSink.SetStatus("Claude Code is working…");
+                        break;
+                    case "api_retry":
+                        chatSink.SetStatus($"Retrying ({Num(ev, "attempt")}/{Num(ev, "max_retries")})…");
+                        break;
+                }
+
+                break;
+
+            case "stream_event" when isTopLevel && ev.TryGetProperty("event", out JsonElement inner):
+                if (Str(inner, "type") == "content_block_delta" && inner.TryGetProperty("delta", out JsonElement delta))
+                {
+                    switch (Str(delta, "type"))
+                    {
+                        case "text_delta":
+                            chatSink.AppendText(Str(delta, "text") ?? string.Empty);
+                            break;
+                        case "thinking_delta":
+                            chatSink.AppendThinking(Str(delta, "thinking") ?? string.Empty);
+                            break;
+                    }
+                }
+                else if (Str(inner, "type") == "content_block_start"
+                    && inner.TryGetProperty("content_block", out JsonElement block)
+                    && Str(block, "type") == "tool_use")
+                {
+                    chatSink.SetStatus($"Preparing {Str(block, "name")}…");
+                }
+
+                break;
+
+            case "assistant" when isTopLevel:
+                // Text already streamed via deltas; remember tool calls so their results can be shown.
+                foreach (JsonElement block in Content(ev))
+                {
+                    if (Str(block, "type") == "tool_use" && Str(block, "id") is string id)
+                    {
+                        this.pendingTools[id] = (Str(block, "name") ?? "tool", block.TryGetProperty("input", out JsonElement input) ? input.Clone() : default);
+                    }
+                }
+
+                break;
+
+            case "user" when isTopLevel:
+                foreach (JsonElement block in Content(ev))
+                {
+                    if (Str(block, "type") == "tool_result"
+                        && Str(block, "tool_use_id") is string id
+                        && this.pendingTools.TryGetValue(id, out var call))
+                    {
+                        this.pendingTools.Remove(id);
+                        bool isError = block.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True;
+                        (ActivityKind kind, string title, string detail) = this.Describe(call.Name, call.Input, ResultText(block), isError);
+                        chatSink.ToolActivity(kind, title, detail);
+                    }
+                }
+
+                break;
+
+            case "result":
+                double seconds = Num(ev, "duration_ms") / 1000.0;
+                chatSink.SetStatus($"Done in {seconds:0.#}s · {Num(ev, "num_turns")} turn(s) · via Claude Code");
+                bool failed = ev.TryGetProperty("is_error", out JsonElement isErr) && isErr.ValueKind == JsonValueKind.True;
+                return new RunOutcome(failed ? (Str(ev, "result") is { Length: > 0 } msg ? msg : $"Claude Code reported an error ({Str(ev, "subtype")}).") : null);
+        }
+
+        return null;
+    }
+
+    /// <summary>Called by the approval server (on a thread-pool thread) when Claude Code needs permission.</summary>
+    private async Task<PermissionDecision> DecideAsync(string toolName, JsonElement input)
+    {
+        if (this.editsPreApproved && EditTools.Contains(toolName))
+        {
+            return new PermissionDecision(true);
+        }
+
+        IChatSink? chatSink = this.sink;
+        if (chatSink is null)
+        {
+            return new PermissionDecision(false, "No one is available to approve this.");
+        }
+
+        await this.approvalGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            (ActivityKind kind, string title, string detail) = this.DescribeRequest(toolName, input);
+            bool isEdit = EditTools.Contains(toolName);
+
+            // The chat UI must be touched on Visual Studio's main thread.
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(this.runToken);
+            chatSink.SetStatus("Waiting for your approval…");
+            Approval approval = await chatSink.RequestApprovalAsync(kind, title, detail, isEdit ? "Allow all edits" : null, this.runToken);
+
+            if (approval == Approval.AllowAll)
+            {
+                this.editsPreApproved = true;
+            }
+
+            return approval == Approval.Deny
+                ? new PermissionDecision(false, "The user declined this action. Don't retry it; ask what they'd like instead.")
+                : new PermissionDecision(true);
+        }
+        catch (OperationCanceledException)
+        {
+            return new PermissionDecision(false, "Cancelled by the user.");
+        }
+        finally
+        {
+            this.approvalGate.Release();
+        }
+    }
+
+    /// <summary>How a pending permission request is shown on the approval card.</summary>
+    private (ActivityKind Kind, string Title, string Detail) DescribeRequest(string tool, JsonElement input) => tool switch
+    {
+        "Bash" or "PowerShell" => (ActivityKind.Shell, $"Run: {Str(input, "command")}", Str(input, "description") ?? string.Empty),
+        "Edit" => (ActivityKind.Edit, $"Edit {this.Relative(Str(input, "file_path"))}", EditDiff(input)),
+        "MultiEdit" => (ActivityKind.Edit, $"Edit {this.Relative(Str(input, "file_path"))}", MultiEditDiff(input)),
+        "Write" => (ActivityKind.Create, $"Write {this.Relative(Str(input, "file_path"))}", Str(input, "content") ?? string.Empty),
+        "NotebookEdit" => (ActivityKind.Edit, $"Edit notebook {this.Relative(Str(input, "notebook_path"))}", Str(input, "new_source") ?? string.Empty),
+        "WebFetch" => (ActivityKind.Web, $"Fetch {Str(input, "url")}", Str(input, "prompt") ?? string.Empty),
+        "WebSearch" => (ActivityKind.Web, $"Search the web: {Str(input, "query")}", string.Empty),
+        _ => (ActivityKind.Other, $"Use {tool}", input.ValueKind == JsonValueKind.Undefined ? string.Empty : Pretty(input)),
+    };
+
+    /// <summary>How a completed tool call is shown in the transcript.</summary>
+    private (ActivityKind Kind, string Title, string Detail) Describe(string tool, JsonElement input, string result, bool isError)
+    {
+        (ActivityKind kind, string title, string detail) = tool switch
+        {
+            "Bash" or "PowerShell" => (ActivityKind.Shell, Str(input, "command") ?? tool, result),
+            "Read" => (ActivityKind.Read, $"Read {this.Relative(Str(input, "file_path"))}", string.Empty),
+            "Edit" => (ActivityKind.Edit, $"Edited {this.Relative(Str(input, "file_path"))}", EditDiff(input)),
+            "MultiEdit" => (ActivityKind.Edit, $"Edited {this.Relative(Str(input, "file_path"))}", MultiEditDiff(input)),
+            "Write" => (ActivityKind.Create, $"Wrote {this.Relative(Str(input, "file_path"))}", Str(input, "content") ?? string.Empty),
+            "NotebookEdit" => (ActivityKind.Edit, $"Edited notebook {this.Relative(Str(input, "notebook_path"))}", string.Empty),
+            "Glob" => (ActivityKind.Search, $"Find files: {Str(input, "pattern")}", result),
+            "Grep" => (ActivityKind.Search, $"Search: {Str(input, "pattern")}", result),
+            "WebFetch" => (ActivityKind.Web, $"Fetched {Str(input, "url")}", result),
+            "WebSearch" => (ActivityKind.Web, $"Searched the web: {Str(input, "query")}", result),
+            "TodoWrite" => (ActivityKind.Other, "Updated the task list", TodoList(input)),
+            "Task" or "Agent" => (ActivityKind.Other, $"Subagent: {Str(input, "description") ?? "task"}", result),
+            _ => (ActivityKind.Other, tool, result),
+        };
+
+        if (isError)
+        {
+            bool declined = result.IndexOf("declined", StringComparison.OrdinalIgnoreCase) >= 0
+                || result.IndexOf("denied", StringComparison.OrdinalIgnoreCase) >= 0
+                || result.IndexOf("cancelled", StringComparison.OrdinalIgnoreCase) >= 0;
+            return (declined ? ActivityKind.Declined : ActivityKind.Failed, title, result);
+        }
+
+        return (kind, title, detail);
+    }
+
+    private string Relative(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return "(unknown file)";
+        }
+
+        string root = this.RepoRoot.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        return path!.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? path.Substring(root.Length) : path;
+    }
+
+    private static string EditDiff(JsonElement input) => Diff(Str(input, "old_string") ?? string.Empty, Str(input, "new_string") ?? string.Empty);
+
+    private static string MultiEditDiff(JsonElement input)
+    {
+        if (!input.TryGetProperty("edits", out JsonElement edits) || edits.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        return string.Join("\n", edits.EnumerateArray().Select(EditDiff));
+    }
+
+    private static string Diff(string oldText, string newText)
+    {
+        IEnumerable<string> Lines(string text, string prefix) =>
+            text.Length == 0 ? [] : text.Replace("\r\n", "\n").Split('\n').Select(l => prefix + l);
+        return string.Join("\n", Lines(oldText, "- ").Concat(Lines(newText, "+ ")));
+    }
+
+    private static string TodoList(JsonElement input)
+    {
+        if (!input.TryGetProperty("todos", out JsonElement todos) || todos.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        return string.Join("\n", todos.EnumerateArray().Select(t =>
+            (Str(t, "status") switch { "completed" => "[x] ", "in_progress" => "[~] ", _ => "[ ] " }) + Str(t, "content")));
+    }
+
+    private static string ResultText(JsonElement block)
+    {
+        if (!block.TryGetProperty("content", out JsonElement content))
+        {
+            return string.Empty;
+        }
+
+        if (content.ValueKind == JsonValueKind.String)
+        {
+            return content.GetString() ?? string.Empty;
+        }
+
+        if (content.ValueKind == JsonValueKind.Array)
+        {
+            return string.Join("\n", content.EnumerateArray().Where(c => Str(c, "type") == "text").Select(c => Str(c, "text")));
+        }
+
+        return string.Empty;
+    }
+
+    private static IEnumerable<JsonElement> Content(JsonElement ev) =>
+        ev.TryGetProperty("message", out JsonElement message)
+        && message.TryGetProperty("content", out JsonElement content)
+        && content.ValueKind == JsonValueKind.Array
+            ? content.EnumerateArray()
+            : [];
+
+    private static string? Str(JsonElement element, string name) =>
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static double Num(JsonElement element, string name) =>
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number
+            ? value.GetDouble()
+            : 0;
+
+    private static string Pretty(JsonElement element) => JsonSerializer.Serialize(element, new JsonSerializerOptions { WriteIndented = true });
+
+    /// <summary>Stops Claude Code and anything it started (shell commands run as child processes).</summary>
+    private static void KillTree(Process process)
+    {
+        try
+        {
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            using var kill = Process.Start(new ProcessStartInfo("taskkill", $"/T /F /PID {process.Id}") { CreateNoWindow = true, UseShellExecute = false });
+            kill?.WaitForExit(5000);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+        }
+    }
+
+    private readonly record struct RunOutcome(string? Error);
+}

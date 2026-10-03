@@ -18,7 +18,7 @@ namespace ClaudeForVS.Agent;
 /// tool-use loop: stream a response, execute any requested tools, send results, repeat.
 /// History is append-only so the prompt cache stays valid across turns.
 /// </summary>
-internal sealed class ClaudeAgent
+internal sealed class ClaudeAgent : IChatEngine
 {
     private const int MaxToolRounds = 40;
     private const int MaxFileChars = 100_000;
@@ -55,6 +55,8 @@ internal sealed class ClaudeAgent
             use Markdown, with fenced code blocks for code. Reference files by their repository-relative paths.
             """;
     }
+
+    public ChatEngineKind Kind => ChatEngineKind.Api;
 
     public string RepoRoot { get; }
 
@@ -127,6 +129,8 @@ internal sealed class ClaudeAgent
 
         sink.AppendText($"\n\n_Stopped after {MaxToolRounds} tool rounds._");
     }
+
+    public void Dispose() => this.client.Dispose();
 
     private static ToolResultBlockParam Error(string id, string message)
         => new() { ToolUseID = id, Content = message, IsError = true };

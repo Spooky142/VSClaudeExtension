@@ -25,6 +25,18 @@ internal enum ActivityKind
     Create,
     Declined,
     Failed,
+
+    /// <summary>A shell command (Claude Code's Bash/PowerShell tools).</summary>
+    Shell,
+
+    /// <summary>A file or text search (Glob, Grep).</summary>
+    Search,
+
+    /// <summary>A web search or fetch.</summary>
+    Web,
+
+    /// <summary>Anything else, e.g. subagents, todo lists, MCP tools.</summary>
+    Other,
 }
 
 /// <summary>How the agent reports progress back to the UI. Called on the UI thread.</summary>

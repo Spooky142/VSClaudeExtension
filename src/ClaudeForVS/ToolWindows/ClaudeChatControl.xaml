@@ -144,6 +144,15 @@
           <Setter TargetName="Glyph" Property="Text" Value="&#xE7BA;" />
           <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Amber}" />
         </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Search">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE721;" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Web">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE774;" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Other">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE946;" />
+        </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
 
@@ -216,14 +225,14 @@
       </StackPanel>
     </DockPanel>
 
-    <!-- Shown until an API key is saved -->
+    <!-- Shown until the selected engine is ready (API key saved, or Claude Code installed and signed in) -->
     <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"
             BorderBrush="{StaticResource Amber}" Background="{StaticResource AmberTint}"
-            Visibility="{Binding NeedsApiKey, Converter={StaticResource BoolToVis}}">
+            Visibility="{Binding HasSetupMessage, Converter={StaticResource BoolToVis}}">
       <DockPanel>
         <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Open settings" Click="OnOpenSettings" />
         <TextBlock Style="{StaticResource Icon}" Text="&#xE8D7;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,10,0" />
-        <TextBlock Text="Add your Anthropic API key to get started." TextWrapping="Wrap" VerticalAlignment="Center" />
+        <TextBlock Text="{Binding SetupMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
       </DockPanel>
     </Border>
 

@@ -37,6 +37,10 @@ public partial class ClaudeChatControl : UserControl
             }
 
             this.PromptBox.Focus();
+            if (this.viewModel.Settings.Engine == ChatEngineKind.ClaudeCode && this.viewModel.CodeStatus is null)
+            {
+                this.viewModel.RefreshClaudeCodeStatusAsync().FileAndForget("ClaudeForVS/CodeStatus");
+            }
         };
     }
 
@@ -101,6 +105,7 @@ public partial class ClaudeChatControl : UserControl
             this.viewModel.RepoPath,
             this.viewModel.HasApiKey,
             this.viewModel.HasConversation,
+            this.viewModel.CodeStatus,
             () =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
@@ -111,6 +116,9 @@ public partial class ClaudeChatControl : UserControl
         {
             this.viewModel.ApplySettings(dialog.Result, dialog.ResultRepoPath, dialog.ResultApiKey);
         }
+
+        // Install or sign-in may have happened inside the dialog, even if it was cancelled.
+        this.viewModel.RefreshClaudeCodeStatusAsync().FileAndForget("ClaudeForVS/CodeStatus");
     }
 
     private void OnAllow(object sender, RoutedEventArgs e) => this.viewModel.Resolve(Approval.Allow);

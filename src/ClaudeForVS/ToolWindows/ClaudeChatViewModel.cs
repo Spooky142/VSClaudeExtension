@@ -20,7 +20,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 {
     private const int MaxDetailChars = 8000;
 
-    private ClaudeAgent? agent;
+    private IChatEngine? engine;
     private CancellationTokenSource? runCts;
     private TaskCompletionSource<Approval>? pendingApproval;
     private ChatEntry? currentAssistant;
@@ -35,6 +35,8 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private bool needsApiKey;
     private bool hasPendingApproval;
     private AgentSettings settings;
+    private ClaudeCodeStatus? codeStatus;
+    private string setupMessage = string.Empty;
 
     public ClaudeChatViewModel()
     {
@@ -117,6 +119,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         {
             this.Set(ref this.needsApiKey, value);
             this.OnPropertyChanged(nameof(this.HasApiKey));
+            this.UpdateSetupMessage();
         }
     }
 
@@ -129,14 +132,58 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         {
             this.Set(ref this.settings, value);
             this.OnPropertyChanged(nameof(this.ModelSummary));
+            this.UpdateSetupMessage();
         }
     }
 
-    /// <summary>Header chip text, e.g. "Opus 5.5 · High".</summary>
-    public string ModelSummary => $"{AgentSettings.ModelName(this.settings.Model)} · {AgentSettings.EffortName(this.settings.Effort)}";
+    /// <summary>Header chip text, e.g. "Opus 5.5 · High" or "Opus 5.5 · High · Claude Code".</summary>
+    public string ModelSummary =>
+        $"{AgentSettings.ModelName(this.settings.Model)} · {AgentSettings.EffortName(this.settings.Effort)}"
+        + (this.settings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty);
+
+    /// <summary>Last known Claude Code install/sign-in state, or null before the first check.</summary>
+    public ClaudeCodeStatus? CodeStatus
+    {
+        get => this.codeStatus;
+        private set
+        {
+            this.Set(ref this.codeStatus, value);
+            this.UpdateSetupMessage();
+        }
+    }
+
+    /// <summary>What still needs doing before the selected engine can be used, or empty when it's ready.</summary>
+    public string SetupMessage { get => this.setupMessage; private set => this.Set(ref this.setupMessage, value); }
+
+    public bool HasSetupMessage => this.setupMessage.Length > 0;
+
+    /// <summary>Re-checks whether Claude Code is installed and signed in.</summary>
+    public async Task RefreshClaudeCodeStatusAsync()
+    {
+        try
+        {
+            this.CodeStatus = await ClaudeCodeCli.GetStatusAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+        {
+            this.CodeStatus = new ClaudeCodeStatus(null, null, false, null, null);
+        }
+    }
+
+    private void UpdateSetupMessage()
+    {
+        this.SetupMessage = this.settings.Engine switch
+        {
+            ChatEngineKind.Api when this.needsApiKey => "Add your Anthropic API key to get started.",
+            ChatEngineKind.ClaudeCode when this.codeStatus is { Installed: false } => "Install Claude Code to use your Pro or Max plan.",
+            ChatEngineKind.ClaudeCode when this.codeStatus is { SignedIn: false } => "Sign in to Claude Code to use your Pro or Max plan.",
+            _ => string.Empty,
+        };
+        this.OnPropertyChanged(nameof(this.HasSetupMessage));
+    }
 
     /// <summary>True once the current conversation has history that a model switch would discard.</summary>
-    public bool HasConversation => this.agent != null && this.Messages.Count > 0;
+    public bool HasConversation => this.engine != null && this.Messages.Count > 0;
 
     public bool HasPendingApproval { get => this.hasPendingApproval; private set => this.Set(ref this.hasPendingApproval, value); }
 
@@ -161,6 +208,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     /// <summary>Applies the Settings dialog's result.</summary>
     public void ApplySettings(AgentSettings newSettings, string repoPath, string? newApiKey)
     {
+        bool engineChanged = newSettings.Engine != this.settings.Engine;
         bool modelChanged = newSettings.Model != this.settings.Model;
         newSettings.Save();
         this.Settings = newSettings;
@@ -172,26 +220,27 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             this.NeedsApiKey = false;
         }
 
-        if (this.agent is null)
+        if (this.engine is null)
         {
             this.Status = "Settings saved.";
             return;
         }
 
-        // A new key needs a new client; a new model can't read the old model's thinking history.
-        if (modelChanged || newApiKey != null)
+        // Each engine keeps its own history; a new model can't read the old model's thinking; a new key needs a new client.
+        if (engineChanged || modelChanged || (newApiKey != null && this.engine.Kind == ChatEngineKind.Api))
         {
             this.Stop();
             bool hadHistory = this.Messages.Count > 0;
-            this.agent = null;
+            this.DisposeEngine();
             if (hadHistory)
             {
-                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {AgentSettings.ModelName(newSettings.Model)}"));
+                string via = newSettings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty;
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {AgentSettings.ModelName(newSettings.Model)}{via}"));
             }
         }
         else
         {
-            this.agent.Effort = newSettings.Effort; // used from the next request on
+            this.engine.Effort = newSettings.Effort; // used from the next message on
         }
 
         this.Status = "Settings saved.";
@@ -200,9 +249,15 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     public void NewChat()
     {
         this.Stop();
-        this.agent = null;
+        this.DisposeEngine();
         this.Messages.Clear();
         this.Status = string.Empty;
+    }
+
+    private void DisposeEngine()
+    {
+        this.engine?.Dispose();
+        this.engine = null;
     }
 
     public void Stop()
@@ -223,14 +278,6 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             return false;
         }
 
-        string? apiKey = ApiKeyStore.Load();
-        if (apiKey is null)
-        {
-            this.NeedsApiKey = true;
-            this.Status = "Add your Anthropic API key to start.";
-            return false;
-        }
-
         string? root = GitRunner.FindRepoRoot(this.RepoPath.Trim());
         if (root is null)
         {
@@ -238,31 +285,69 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             return false;
         }
 
-        if (this.agent is null || !string.Equals(this.agent.RepoRoot, root, StringComparison.OrdinalIgnoreCase))
+        if (this.engine is null || !string.Equals(this.engine.RepoRoot, root, StringComparison.OrdinalIgnoreCase))
         {
-            if (this.agent != null)
+            IChatEngine? created = this.CreateEngine(root);
+            if (created is null)
+            {
+                return false;
+            }
+
+            if (this.engine != null)
             {
                 this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {Path.GetFileName(root)}"));
             }
 
-            this.agent = new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort);
+            this.DisposeEngine();
+            this.engine = created;
             this.RepoPath = root;
         }
 
         this.Messages.Add(new ChatEntry(ChatEntryKind.User, "You", text));
         this.PromptSent?.Invoke(this, EventArgs.Empty);
-        run = this.RunAsync(this.agent, text);
+        run = this.RunAsync(this.engine, text);
         return true;
     }
 
-    private async Task RunAsync(ClaudeAgent runAgent, string text)
+    /// <summary>Creates the engine the settings ask for, or sets a status message and returns null if it isn't ready.</summary>
+    private IChatEngine? CreateEngine(string root)
+    {
+        if (this.settings.Engine == ChatEngineKind.ClaudeCode)
+        {
+            if (ClaudeCodeCli.FindExecutable() is not string exe)
+            {
+                this.CodeStatus = new ClaudeCodeStatus(null, null, false, null, null);
+                this.Status = "Claude Code isn't installed. Install it from Settings.";
+                return null;
+            }
+
+            if (this.codeStatus is { SignedIn: false })
+            {
+                this.Status = "Claude Code isn't signed in. Sign in from Settings.";
+                return null;
+            }
+
+            return new ClaudeCodeEngine(exe, root, this.settings.Model, this.settings.Effort);
+        }
+
+        if (ApiKeyStore.Load() is not string apiKey)
+        {
+            this.NeedsApiKey = true;
+            this.Status = "Add your Anthropic API key to start.";
+            return null;
+        }
+
+        return new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort);
+    }
+
+    private async Task RunAsync(IChatEngine runEngine, string text)
     {
         this.IsBusy = true;
         using var cts = new CancellationTokenSource();
         this.runCts = cts;
         try
         {
-            await runAgent.SendAsync(text, this, cts.Token);
+            await runEngine.SendAsync(text, this, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -271,11 +356,15 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         catch (AnthropicUnauthorizedException)
         {
             this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "API key rejected", "Open settings and enter a valid Anthropic API key."));
-            this.agent = null;
+            this.DisposeEngine();
         }
         catch (Exception ex)
         {
             this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Something went wrong", ex.Message));
+            if (runEngine.Kind == ChatEngineKind.ClaudeCode)
+            {
+                await this.RefreshClaudeCodeStatusAsync(); // e.g. the sign-in expired
+            }
         }
         finally
         {
