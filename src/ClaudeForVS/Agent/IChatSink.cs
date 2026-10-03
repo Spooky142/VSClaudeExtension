@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -37,6 +38,9 @@ internal enum ActivityKind
 
     /// <summary>Anything else, e.g. subagents, todo lists, MCP tools.</summary>
     Other,
+
+    /// <summary>Claude asked the user multiple-choice questions.</summary>
+    Question,
 }
 
 /// <summary>How the agent reports progress back to the UI. Called on the UI thread.</summary>
@@ -67,5 +71,11 @@ internal interface IChatSink
     /// <param name="title">One-line summary, e.g. the git command line or "Edit src/Foo.cs".</param>
     /// <param name="detail">Optional longer preview, e.g. a diff.</param>
     /// <param name="allowAllLabel">If not null, offers a third button that approves all similar requests.</param>
+    /// <summary>
+    /// Shows Claude's multiple-choice questions. Returns each question's answer keyed by question text
+    /// (selected labels joined with ", ", or the user's own text), or null if the user skipped them.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>?> AskQuestionsAsync(IReadOnlyList<UserQuestion> questions, CancellationToken cancellationToken);
+
     Task<Approval> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken);
 }

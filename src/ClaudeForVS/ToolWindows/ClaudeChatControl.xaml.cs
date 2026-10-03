@@ -146,6 +146,10 @@ public partial class ClaudeChatControl : UserControl
         this.viewModel.RefreshClaudeCodeStatusAsync().FileAndForget("ClaudeForVS/CodeStatus");
     }
 
+    private void OnSubmitAnswers(object sender, RoutedEventArgs e) => this.viewModel.SubmitAnswers();
+
+    private void OnSkipQuestions(object sender, RoutedEventArgs e) => this.viewModel.SkipQuestions();
+
     private void OnAllow(object sender, RoutedEventArgs e) => this.viewModel.Resolve(Approval.Allow);
 
     private void OnAllowAll(object sender, RoutedEventArgs e) => this.viewModel.Resolve(Approval.AllowAll);

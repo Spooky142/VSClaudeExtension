@@ -16,6 +16,7 @@
       </ResourceDictionary.MergedDictionaries>
 
     <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    <local:EmptyToVisibilityConverter x:Key="EmptyToVis" />
 
     <!-- Whole-row toggle used by collapsible transcript rows. -->
     <Style x:Key="RowToggle" TargetType="ToggleButton">
@@ -152,6 +153,10 @@
         </DataTrigger>
         <DataTrigger Binding="{Binding Activity}" Value="Other">
           <Setter TargetName="Glyph" Property="Text" Value="&#xE946;" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Activity}" Value="Question">
+          <Setter TargetName="Glyph" Property="Text" Value="&#xE897;" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
@@ -297,6 +302,60 @@
                   ScrollChanged="OnTranscriptScrollChanged" PreviewMouseWheel="OnTranscriptMouseWheel">
       <ItemsControl ItemsSource="{Binding Messages}" ItemTemplateSelector="{StaticResource EntrySelector}" Margin="12,0,12,8" />
     </ScrollViewer>
+
+    <!-- Question card: Claude's multiple-choice questions (never shown at the same time as the approval card) -->
+    <Border Grid.Row="3" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource Accent}"
+            Background="{StaticResource UserBubble}" Padding="12,10"
+            Visibility="{Binding HasPendingQuestions, Converter={StaticResource BoolToVis}}">
+      <StackPanel>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE897;" Foreground="{StaticResource Accent}" FontSize="13" Margin="0,0,8,0" />
+          <TextBlock Text="{Binding QuestionCardTitle}" FontWeight="SemiBold" VerticalAlignment="Center" />
+        </StackPanel>
+        <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,6,0,0">
+          <ItemsControl ItemsSource="{Binding PendingQuestions}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <StackPanel Margin="0,4,0,8">
+                  <Border HorizontalAlignment="Left" CornerRadius="4" Padding="6,1" Margin="0,0,0,4"
+                          Background="{StaticResource SubtleBorder}"
+                          Visibility="{Binding HasHeader, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding Header}" FontSize="10.5" FontWeight="SemiBold" />
+                  </Border>
+                  <TextBlock Text="{Binding Question}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding Hint}" Style="{StaticResource Muted}" FontSize="11" Margin="0,2,0,6" />
+                  <ItemsControl ItemsSource="{Binding Options}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <ToggleButton Style="{StaticResource OptionCard}" IsChecked="{Binding IsSelected, Mode=TwoWay}">
+                          <StackPanel>
+                            <TextBlock Text="{Binding Label}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Description}" Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap"
+                                       Margin="0,1,0,0" Visibility="{Binding HasDescription, Converter={StaticResource BoolToVis}}" />
+                          </StackPanel>
+                        </ToggleButton>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Grid>
+                    <TextBox Style="{StaticResource Field}" Text="{Binding OtherText, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Text="Other: type your own answer…" IsHitTestVisible="False" Style="{StaticResource Muted}" Margin="8,5,0,0">
+                      <TextBlock.Visibility>
+                        <Binding Path="OtherText" Converter="{StaticResource EmptyToVis}" />
+                      </TextBlock.Visibility>
+                    </TextBlock>
+                  </Grid>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+          <Button Style="{StaticResource OutlineButton}" Content="Skip" Click="OnSkipQuestions" ToolTip="Let Claude continue without your answer" />
+          <Button Style="{StaticResource PrimaryButton}" Content="Submit" Click="OnSubmitAnswers" IsEnabled="{Binding CanSubmitAnswers}" />
+        </StackPanel>
+      </StackPanel>
+    </Border>
 
     <!-- Approval card for actions that change the repository -->
     <Border Grid.Row="3" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource Amber}"

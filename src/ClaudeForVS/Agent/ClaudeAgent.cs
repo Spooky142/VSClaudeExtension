@@ -49,6 +49,8 @@ internal sealed class ClaudeAgent : IChatEngine
             - `read_file` reads a file with line numbers.
             - `edit_file` replaces an exact string in a file; `write_file` creates or overwrites a whole file.
               The user approves edits before they're applied. Prefer `edit_file` for changes to existing files.
+            - `ask_user` shows the user 1-4 multiple-choice questions. Use it when you need a decision that's genuinely
+              theirs (for example choosing between approaches); the user can also type their own answer.
             All file paths are relative to the repository root, and files outside the repository can't be accessed.
             If the user declines an action, accept that and don't retry the same thing.
 
@@ -310,6 +312,7 @@ internal sealed class ClaudeAgent : IChatEngine
             "read_file" => Task.FromResult(this.ReadFile(input, sink)),
             "edit_file" => this.EditFileAsync(input, sink, cancellationToken),
             "write_file" => this.WriteFileAsync(input, sink, cancellationToken),
+            "ask_user" => AskUserAsync(toolUse.Input, sink, cancellationToken),
             _ => throw new ToolInputException($"Unknown tool: {toolUse.Name}"),
         };
     }
@@ -523,8 +526,81 @@ internal sealed class ClaudeAgent : IChatEngine
 
     private static string[] Lines(string text) => text.Length == 0 ? [] : text.Replace("\r\n", "\n").Split('\n');
 
+    private static async Task<string> AskUserAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        JsonElement root = JsonSerializer.SerializeToElement(input);
+        IReadOnlyList<UserQuestion> questions = UserQuestion.ParseAll(root);
+        if (questions.Count == 0)
+        {
+            throw new ToolInputException("`questions` must be a non-empty array of {question, header, options[{label, description}], multiSelect}.");
+        }
+
+        sink.SetStatus("Waiting for your answer…");
+        IReadOnlyDictionary<string, string>? answers = await sink.AskQuestionsAsync(questions, cancellationToken);
+        string title = questions.Count == 1 ? "Asked you a question" : $"Asked you {questions.Count} questions";
+        if (answers is null)
+        {
+            sink.ToolActivity(ActivityKind.Declined, title, "Skipped.");
+            return "The user skipped these questions. Continue with your best judgement, or ask in plain text.";
+        }
+
+        string summary = UserQuestion.Describe(questions, answers);
+        sink.ToolActivity(ActivityKind.Question, title, summary);
+        return "The user answered:\n" + summary;
+    }
+
     private static readonly List<ToolUnion> ToolDefinitions =
     [
+        new Tool
+        {
+            Name = "ask_user",
+            Description =
+                "Ask the user 1-4 multiple-choice questions and wait for their answers. Each question has a short " +
+                "header (max 12 characters), the question text, and 2-4 options with a label and a one-line description. " +
+                "Set multiSelect when several options can apply. The user can always type their own answer instead. " +
+                "Only ask when the decision is genuinely the user's; otherwise use your judgement.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["questions"] = JsonSerializer.SerializeToElement(new
+                    {
+                        type = "array",
+                        minItems = 1,
+                        maxItems = 4,
+                        items = new
+                        {
+                            type = "object",
+                            properties = new
+                            {
+                                question = new { type = "string", description = "The full question." },
+                                header = new { type = "string", description = "Short label, max 12 characters." },
+                                options = new
+                                {
+                                    type = "array",
+                                    minItems = 2,
+                                    maxItems = 4,
+                                    items = new
+                                    {
+                                        type = "object",
+                                        properties = new
+                                        {
+                                            label = new { type = "string" },
+                                            description = new { type = "string" },
+                                        },
+                                        required = new[] { "label", "description" },
+                                    },
+                                },
+                                multiSelect = new { type = "boolean" },
+                            },
+                            required = new[] { "question", "header", "options", "multiSelect" },
+                        },
+                    }),
+                },
+                Required = ["questions"],
+            },
+            EagerInputStreaming = true,
+        },
         new Tool
         {
             Name = "git",

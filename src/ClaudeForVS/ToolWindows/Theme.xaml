@@ -182,6 +182,46 @@
     <Setter Property="Template" Value="{StaticResource FieldTemplate}" />
   </Style>
 
+  <!-- Toggle drawn as an answer option in the question card. DataContext is an OptionViewModel
+       (IsMulti picks a square indicator instead of a round one). -->
+  <Style x:Key="OptionCard" TargetType="ToggleButton">
+    <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Margin" Value="0,0,0,5" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+          <Border x:Name="Bd" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+                  Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}" Padding="10,7">
+            <DockPanel>
+              <Border x:Name="Indicator" DockPanel.Dock="Left" Width="14" Height="14" CornerRadius="7" BorderThickness="1.5"
+                      BorderBrush="{StaticResource SubtleBorder}" VerticalAlignment="Top" Margin="0,2,10,0">
+                <Border x:Name="Fill" Width="6" Height="6" CornerRadius="3" Background="{StaticResource Accent}" Visibility="Collapsed" />
+              </Border>
+              <ContentPresenter VerticalAlignment="Center" />
+            </DockPanel>
+          </Border>
+          <ControlTemplate.Triggers>
+            <DataTrigger Binding="{Binding IsMulti}" Value="True">
+              <Setter TargetName="Indicator" Property="CornerRadius" Value="3" />
+              <Setter TargetName="Fill" Property="CornerRadius" Value="1" />
+            </DataTrigger>
+            <Trigger Property="IsMouseOver" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+            </Trigger>
+            <Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+              <Setter TargetName="Bd" Property="Background" Value="{StaticResource UserBubble}" />
+              <Setter TargetName="Indicator" Property="BorderBrush" Value="{StaticResource Accent}" />
+              <Setter TargetName="Fill" Property="Visibility" Value="Visible" />
+            </Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- Thin rounded meter for the usage strip. Foreground sets the fill colour. -->
   <Style x:Key="MeterBar" TargetType="ProgressBar">
     <Setter Property="Height" Value="4" />

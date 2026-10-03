@@ -24,6 +24,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private IChatEngine? engine;
     private CancellationTokenSource? runCts;
     private TaskCompletionSource<Approval>? pendingApproval;
+    private TaskCompletionSource<IReadOnlyDictionary<string, string>?>? pendingQuestions;
     private ChatEntry? currentAssistant;
     private ChatEntry? currentThinking;
 
@@ -419,6 +420,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     public void Stop()
     {
         this.pendingApproval?.TrySetResult(Approval.Deny);
+        this.pendingQuestions?.TrySetResult(null);
         this.runCts?.Cancel();
     }
 
@@ -568,6 +570,63 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     }
 
     void IChatSink.SetStatus(string? status) => this.Status = status ?? string.Empty;
+
+    /// <summary>Questions Claude is waiting on, shown in the question card; empty when there are none.</summary>
+    public ObservableCollection<QuestionViewModel> PendingQuestions { get; } = [];
+
+    public bool HasPendingQuestions => this.PendingQuestions.Count > 0;
+
+    public bool CanSubmitAnswers => this.PendingQuestions.Count > 0 && this.PendingQuestions.All(q => q.IsAnswered);
+
+    public string QuestionCardTitle => this.PendingQuestions.Count == 1 ? "Claude has a question" : $"Claude has {this.PendingQuestions.Count} questions";
+
+    public void SubmitAnswers()
+    {
+        if (this.CanSubmitAnswers)
+        {
+            this.pendingQuestions?.TrySetResult(this.PendingQuestions.ToDictionary(q => q.Question, q => q.Answer!));
+        }
+    }
+
+    public void SkipQuestions() => this.pendingQuestions?.TrySetResult(null);
+
+    async Task<IReadOnlyDictionary<string, string>?> IChatSink.AskQuestionsAsync(IReadOnlyList<UserQuestion> questions, CancellationToken cancellationToken)
+    {
+        this.currentAssistant = null;
+        this.currentThinking = null;
+        var tcs = new TaskCompletionSource<IReadOnlyDictionary<string, string>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        this.pendingQuestions = tcs;
+
+        this.PendingQuestions.Clear();
+        foreach (UserQuestion question in questions)
+        {
+            this.PendingQuestions.Add(new QuestionViewModel(question, this.OnAnswersChanged));
+        }
+
+        this.OnQuestionsChanged();
+        using (cancellationToken.Register(() => tcs.TrySetCanceled()))
+        {
+            try
+            {
+                return await tcs.Task;
+            }
+            finally
+            {
+                this.pendingQuestions = null;
+                this.PendingQuestions.Clear();
+                this.OnQuestionsChanged();
+            }
+        }
+    }
+
+    private void OnAnswersChanged() => this.OnPropertyChanged(nameof(this.CanSubmitAnswers));
+
+    private void OnQuestionsChanged()
+    {
+        this.OnPropertyChanged(nameof(this.HasPendingQuestions));
+        this.OnPropertyChanged(nameof(this.QuestionCardTitle));
+        this.OnPropertyChanged(nameof(this.CanSubmitAnswers));
+    }
 
     void IChatSink.ReportTokenUsage(ClaudeModel model, TokenUsage usage)
     {

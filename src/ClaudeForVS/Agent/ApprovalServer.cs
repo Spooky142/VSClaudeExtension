@@ -163,8 +163,10 @@ internal sealed class ApprovalServer : IDisposable
             decision = await this.decide(toolName, doc.RootElement.Clone()).ConfigureAwait(false);
         }
 
+        // Answered questions come back as a modified input (the original questions plus "answers").
+        JsonNode updatedInput = decision.UpdatedInputJson is string json ? JsonNode.Parse(json) ?? input : input;
         JsonObject payload = decision.Allow
-            ? new JsonObject { ["behavior"] = "allow", ["updatedInput"] = input }
+            ? new JsonObject { ["behavior"] = "allow", ["updatedInput"] = updatedInput }
             : new JsonObject { ["behavior"] = "deny", ["message"] = decision.Message ?? "The user declined this action." };
 
         return new JsonObject
@@ -191,4 +193,5 @@ internal sealed class ApprovalServer : IDisposable
     };
 }
 
-internal readonly record struct PermissionDecision(bool Allow, string? Message = null);
+/// <param name="UpdatedInputJson">Replacement tool input to run with, as JSON; null runs the original input.</param>
+internal readonly record struct PermissionDecision(bool Allow, string? Message = null, string? UpdatedInputJson = null);

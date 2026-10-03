@@ -26,6 +26,10 @@ It calls the Anthropic API directly with your own API key and doesn't depend on 
   - Models: Opus 5.5 (`claude-opus-5-5`, default), Sonnet 5.5 (`claude-sonnet-5-5`), Haiku 4.5 (`claude-haiku-4-5`).
   - Effort: Low, Medium, High (default), Extra high or Max. A new effort applies from the next message; switching model starts a new chat.
   - Haiku 4.5 has no effort setting, so effort maps to its thinking budget: Low means no thinking, then 4K, 10K, 20K or 32K tokens.
+- **Questions from Claude.** When Claude needs you to choose (for example, between approaches), a question card appears above the prompt box.
+  - It shows 1–4 questions, each with option cards, for a single choice or several, and an "Other" box for your own answer.
+  - **Submit** sends your answers and Claude carries on. **Skip** lets Claude continue with its own judgement.
+  - On Claude Code this is Claude Code's built-in `AskUserQuestion` tool; the answers go back through the approval endpoint as the tool's `answers`. On the Claude API it's the extension's own `ask_user` tool, with the same question format.
 - **Usage strip**, always shown under the header:
   - **Claude Code**: your plan's limits (5-hour, weekly, and any per-model weekly windows) with a bar, a percentage and a reset countdown. They come from the `rate_limit_event` messages Claude Code streams, update with each message, and are remembered in `%LOCALAPPDATA%\ClaudeForVS\usage.json` between restarts.
   - **Claude API**: this Visual Studio session's tokens with an estimated cost at list prices, plus per-minute rate-limit headroom from the API's `anthropic-ratelimit-*` response headers. Monthly spend isn't shown; it needs an admin key.

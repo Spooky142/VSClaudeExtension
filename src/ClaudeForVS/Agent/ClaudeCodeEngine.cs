@@ -81,7 +81,6 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             "--permission-mode", "default",
             "--mcp-config", this.mcpConfigPath,
             "--permission-prompt-tool", ApprovalServer.QualifiedToolName,
-            "--disallowedTools", "AskUserQuestion", // no UI for multiple-choice questions; Claude asks in chat instead
             "--append-system-prompt", ExtraSystemPrompt,
         };
         if (this.Model != ClaudeModel.Haiku)
@@ -292,6 +291,11 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             return new PermissionDecision(true);
         }
 
+        if (toolName == "AskUserQuestion")
+        {
+            return await this.AskQuestionsAsync(input).ConfigureAwait(false);
+        }
+
         IChatSink? chatSink = this.sink;
         if (chatSink is null)
         {
@@ -317,6 +321,46 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             return approval == Approval.Deny
                 ? new PermissionDecision(false, "The user declined this action. Don't retry it; ask what they'd like instead.")
                 : new PermissionDecision(true);
+        }
+        catch (OperationCanceledException)
+        {
+            return new PermissionDecision(false, "Cancelled by the user.");
+        }
+        finally
+        {
+            this.approvalGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Shows Claude Code's AskUserQuestion questions in the question card. Answers go back as the tool's input:
+    /// the original questions plus an "answers" map from question text to the chosen label(s) or typed text.
+    /// </summary>
+    private async Task<PermissionDecision> AskQuestionsAsync(JsonElement input)
+    {
+        IReadOnlyList<UserQuestion> questions = UserQuestion.ParseAll(input);
+        if (questions.Count == 0 || this.sink is not IChatSink chatSink)
+        {
+            return new PermissionDecision(false, "Couldn't show these questions; ask in plain text instead.");
+        }
+
+        await this.approvalGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(this.runToken);
+            chatSink.SetStatus("Waiting for your answer…");
+            IReadOnlyDictionary<string, string>? answers = await chatSink.AskQuestionsAsync(questions, this.runToken);
+            if (answers is null)
+            {
+                return new PermissionDecision(false, "The user declined to answer these questions. Continue with your best judgement, or ask in plain text.");
+            }
+
+            string updatedInput = JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["questions"] = input.GetProperty("questions"),
+                ["answers"] = answers,
+            });
+            return new PermissionDecision(true, UpdatedInputJson: updatedInput);
         }
         catch (OperationCanceledException)
         {
@@ -357,6 +401,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             "WebFetch" => (ActivityKind.Web, $"Fetched {Str(input, "url")}", result),
             "WebSearch" => (ActivityKind.Web, $"Searched the web: {Str(input, "query")}", result),
             "TodoWrite" => (ActivityKind.Other, "Updated the task list", TodoList(input)),
+            "AskUserQuestion" => (ActivityKind.Question, "Asked you " + QuestionCount(input), result),
             "Task" or "Agent" => (ActivityKind.Other, $"Subagent: {Str(input, "description") ?? "task"}", result),
             _ => (ActivityKind.Other, tool, result),
         };
@@ -427,6 +472,9 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             text.Length == 0 ? [] : text.Replace("\r\n", "\n").Split('\n').Select(l => prefix + l);
         return string.Join("\n", Lines(oldText, "- ").Concat(Lines(newText, "+ ")));
     }
+
+    private static string QuestionCount(JsonElement input) =>
+        UserQuestion.ParseAll(input).Count is int n && n == 1 ? "a question" : $"{UserQuestion.ParseAll(input).Count} questions";
 
     private static string TodoList(JsonElement input)
     {
