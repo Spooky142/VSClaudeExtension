@@ -1,0 +1,123 @@
+<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+              xmlns:vs="http://schemas.microsoft.com/visualstudio/extensibility/2022/xaml"
+              xmlns:styles="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+              xmlns:colors="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0">
+  <Grid Margin="6">
+    <Grid.Resources>
+      <BooleanToVisibilityConverter x:Key="BoolToVis" />
+      <Style TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource {x:Static styles:VsBrushes.ToolWindowTextKey}}" />
+      </Style>
+      <Style TargetType="Button" BasedOn="{StaticResource {x:Static styles:VsResourceKeys.ButtonStyleKey}}">
+        <Setter Property="Margin" Value="4,0,0,0" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="MinWidth" Value="0" />
+      </Style>
+      <Style TargetType="TextBox" BasedOn="{StaticResource {x:Static styles:VsResourceKeys.TextBoxStyleKey}}" />
+    </Grid.Resources>
+
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- Repository picker -->
+    <DockPanel Grid.Row="0" Margin="0,0,0,4">
+      <TextBlock DockPanel.Dock="Left" Text="Repo:" VerticalAlignment="Center" Margin="0,0,4,0" />
+      <Button DockPanel.Dock="Right" Content="New chat" Command="{Binding NewChatCommand}" ToolTip="Start a fresh conversation" />
+      <Button DockPanel.Dock="Right" Content="From solution" Command="{Binding UseSolutionRepoCommand}" ToolTip="Use the git repository of the open solution" />
+      <TextBox Text="{Binding RepoPath, UpdateSourceTrigger=PropertyChanged}" VerticalContentAlignment="Center" />
+    </DockPanel>
+
+    <!-- API key setup -->
+    <Border Grid.Row="1" Margin="0,0,0,4" Padding="6" BorderThickness="1"
+            BorderBrush="{DynamicResource {x:Static styles:VsBrushes.ActiveBorderKey}}"
+            Visibility="{Binding NeedsApiKey, Converter={StaticResource BoolToVis}}">
+      <StackPanel>
+        <TextBlock TextWrapping="Wrap" Margin="0,0,0,4"
+                   Text="Enter your Anthropic API key (from console.anthropic.com). It is stored encrypted for your Windows account in %LOCALAPPDATA%\ClaudeForVS." />
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Content="Save key" Command="{Binding SaveApiKeyCommand}" />
+          <TextBox Text="{Binding ApiKeyInput, UpdateSourceTrigger=PropertyChanged}" VerticalContentAlignment="Center" />
+        </DockPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- Transcript -->
+    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <ItemsControl ItemsSource="{Binding Messages}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border x:Name="Card" Margin="0,0,0,6" Padding="6" BorderThickness="2,0,0,0"
+                    BorderBrush="{DynamicResource {x:Static styles:VsBrushes.ActiveBorderKey}}">
+              <StackPanel>
+                <TextBlock x:Name="HeaderText" Text="{Binding Header}" FontWeight="SemiBold" Margin="0,0,0,2" TextWrapping="Wrap" />
+                <TextBox x:Name="Body" Text="{Binding Text, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                         BorderThickness="0" Background="Transparent" Padding="0"
+                         Foreground="{DynamicResource {x:Static styles:VsBrushes.ToolWindowTextKey}}" />
+                <TextBox Text="{Binding Detail, Mode=OneWay}" IsReadOnly="True" TextWrapping="NoWrap"
+                         HorizontalScrollBarVisibility="Auto" MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" FontSize="11" BorderThickness="0" Padding="4"
+                         Background="{DynamicResource {x:Static styles:VsBrushes.ToolWindowBackgroundKey}}"
+                         Foreground="{DynamicResource {x:Static styles:VsBrushes.GrayTextKey}}"
+                         Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}" />
+              </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+              <DataTrigger Binding="{Binding Kind}" Value="user">
+                <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource {x:Static styles:VsBrushes.AccentBorderKey}}" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding Kind}" Value="thinking">
+                <Setter TargetName="Body" Property="Foreground" Value="{DynamicResource {x:Static styles:VsBrushes.GrayTextKey}}" />
+                <Setter TargetName="Body" Property="FontStyle" Value="Italic" />
+                <Setter TargetName="HeaderText" Property="Foreground" Value="{DynamicResource {x:Static styles:VsBrushes.GrayTextKey}}" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding Kind}" Value="tool">
+                <Setter TargetName="HeaderText" Property="FontFamily" Value="Consolas" />
+                <Setter TargetName="HeaderText" Property="FontWeight" Value="Normal" />
+                <Setter TargetName="Body" Property="Visibility" Value="Collapsed" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding Kind}" Value="error">
+                <Setter TargetName="Card" Property="BorderBrush" Value="Firebrick" />
+              </DataTrigger>
+            </DataTemplate.Triggers>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <!-- Approval prompt for repository-changing git commands -->
+    <Border Grid.Row="3" Margin="0,4,0,0" Padding="6" BorderThickness="1" BorderBrush="Orange"
+            Visibility="{Binding HasPendingApproval, Converter={StaticResource BoolToVis}}">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Top" Text="Claude wants to run:" Margin="0,0,0,2" />
+        <Button DockPanel.Dock="Right" Content="Deny" Command="{Binding DenyCommand}" />
+        <Button DockPanel.Dock="Right" Content="Allow" Command="{Binding ApproveCommand}" />
+        <TextBox Text="{Binding ApprovalText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" FontFamily="Consolas" />
+      </DockPanel>
+    </Border>
+
+    <!-- Status line -->
+    <DockPanel Grid.Row="4" Margin="0,4,0,0">
+      <Button DockPanel.Dock="Right" Content="Change API key" Command="{Binding ChangeApiKeyCommand}"
+              Visibility="{Binding HasApiKey, Converter={StaticResource BoolToVis}}" />
+      <TextBlock Text="{Binding Status}" TextWrapping="Wrap" VerticalAlignment="Center"
+                 Foreground="{DynamicResource {x:Static styles:VsBrushes.GrayTextKey}}" />
+    </DockPanel>
+
+    <!-- Prompt box -->
+    <DockPanel Grid.Row="5" Margin="0,4,0,0">
+      <StackPanel DockPanel.Dock="Right" VerticalAlignment="Bottom">
+        <Button Content="Send" Command="{Binding SendCommand}" IsEnabled="{Binding IsIdle}" Margin="4,0,0,4" />
+        <Button Content="Stop" Command="{Binding StopCommand}" IsEnabled="{Binding IsBusy}" />
+      </StackPanel>
+      <TextBox Text="{Binding Prompt, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap"
+               MinHeight="60" MaxHeight="200" VerticalScrollBarVisibility="Auto" />
+    </DockPanel>
+  </Grid>
+</DataTemplate>
