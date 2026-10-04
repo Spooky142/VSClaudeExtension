@@ -23,6 +23,8 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         "You are running inside a Visual Studio extension's chat window, which renders your replies as Markdown. " +
         "Keep answers concise and reference files by repository-relative paths.";
 
+    private static readonly TimeSpan PlanUsagePollInterval = TimeSpan.FromSeconds(15);
+
     private static readonly HashSet<string> EditTools = new(StringComparer.Ordinal) { "Edit", "MultiEdit", "Write", "NotebookEdit" };
 
     private readonly string executable;
@@ -201,39 +203,49 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
         string? resultError = null;
         bool gotResult = false;
-        using (cancellationToken.Register(() => KillTree(process)))
+        using var pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task poll = PollPlanUsageAsync(chatSink, pollCts.Token);
+        try
         {
-            string? line;
-            while ((line = await process.StandardOutput.ReadLineAsync()) != null)
+            using (cancellationToken.Register(() => KillTree(process)))
             {
-                if (line.Length == 0)
+                string? line;
+                while ((line = await process.StandardOutput.ReadLineAsync()) != null)
                 {
-                    continue;
-                }
-
-                try
-                {
-                    using JsonDocument doc = JsonDocument.Parse(line);
-                    if (this.HandleEvent(doc.RootElement, chatSink) is { } outcome)
+                    if (line.Length == 0)
                     {
-                        gotResult = true;
-                        resultError = outcome.Error;
+                        continue;
+                    }
+
+                    try
+                    {
+                        using JsonDocument doc = JsonDocument.Parse(line);
+                        if (this.HandleEvent(doc.RootElement, chatSink) is { } outcome)
+                        {
+                            gotResult = true;
+                            resultError = outcome.Error;
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Not an event (e.g. a stray log line); ignore it.
                     }
                 }
-                catch (JsonException)
+
+                // Output has ended, so the process is exiting; don't let a stuck child hold up the UI thread.
+                if (!process.WaitForExit(10_000))
                 {
-                    // Not an event (e.g. a stray log line); ignore it.
+                    KillTree(process);
                 }
             }
-
-            // Output has ended, so the process is exiting; don't let a stuck child hold up the UI thread.
-            if (!process.WaitForExit(10_000))
-            {
-                KillTree(process);
-            }
+        }
+        finally
+        {
+            pollCts.Cancel();
         }
 
         this.running = null;
+        await poll;
         cancellationToken.ThrowIfCancellationRequested();
 
         // The stream only says which window is binding; fetch exact percentages for every window.
@@ -254,6 +266,25 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         {
             string err = (await stderr).Trim();
             throw new InvalidOperationException(err.Length > 0 ? err : $"Claude Code exited with code {process.ExitCode}.");
+        }
+    }
+
+    /// <summary>Refreshes plan usage every so often while a prompt runs, so the bars move before the reply ends.</summary>
+    private static async Task PollPlanUsageAsync(IChatSink chatSink, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(PlanUsagePollInterval, cancellationToken);
+                foreach (PlanLimit limit in await PlanUsageClient.FetchAsync(cancellationToken))
+                {
+                    chatSink.ReportPlanLimit(limit);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -407,6 +438,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 this.contextInput = this.liveInput + (long)Num(start, "cache_read_input_tokens");
                 this.liveOutput = 0;
                 this.liveChars = 0;
+                chatSink.ReportContext(this.contextInput);
                 break;
             case "content_block_delta" when inner.TryGetProperty("delta", out JsonElement delta):
                 this.liveChars += (Str(delta, "text") ?? Str(delta, "thinking") ?? Str(delta, "partial_json") ?? string.Empty).Length;

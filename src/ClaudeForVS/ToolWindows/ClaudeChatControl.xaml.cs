@@ -107,6 +107,11 @@ public partial class ClaudeChatControl : UserControl
             {
                 this.viewModel.RefreshClaudeCodeStatusAsync().FileAndForget("ClaudeForVS/CodeStatus");
             }
+
+            if (this.viewModel.Settings.Engine == ChatEngineKind.ClaudeCode && !this.viewModel.IsBusy)
+            {
+                this.viewModel.RefreshPlanUsageAsync().FileAndForget("ClaudeForVS/PlanUsage");
+            }
         };
     }
 

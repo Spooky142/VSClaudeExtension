@@ -18,13 +18,23 @@ dotnet test tests\ClaudeForVS.Tests -c Release
 
 xUnit tests for the logic that doesn't need Visual Studio (parsing, highlighting, prompt composition, export, command rules) plus git-backed tests for the undo snapshots, which need git on PATH. All tests should pass.
 
+## Versioning
+
+The version is `major.minor.patch`. Pick the part to bump from everything going into the commit:
+
+- **Patch** (0.3.8 → 0.3.9): bug fixes, small tweaks to existing behaviour, wording or layout adjustments.
+- **Minor** (0.3.9 → 0.4.0): new features or noticeable changes to how something works. Reset the patch number to 0.
+- **Major** (0.4.2 → 1.0.0): breaking changes (e.g. saved settings, chat history or usage files that older versions can't read, a raised minimum Visual Studio version, a removed engine or feature) or a milestone release the user calls for. Reset minor and patch to 0. Only do a major bump when the user asks for one.
+
+When asking whether to commit, say which bump you'd suggest and the version it gives, e.g. "minor, 0.3.18 → 0.4.0". The user has the final say. Mention the new version at the end of the commit message (e.g. "Bumped to 0.4.0.").
+
 ## After finishing a set of changes
 
 Ask the user whether they would like the changes committed. Do not commit, stage or bump anything until they say yes.
 
 If they say yes:
 
-1. Bump the .vsix version (patch number, e.g. 0.3.8 → 0.3.9) in all three places so they stay in step:
+1. Bump the .vsix version (see Versioning above) in all three places so they stay in step:
    - `Identity Version` in `src/ClaudeForVS/source.extension.vsixmanifest`
    - `<AssemblyVersion>` in `src/ClaudeForVS/ClaudeForVS.csproj` (same version with a trailing `.0`)
    - `<FileVersion>` in `src/ClaudeForVS/ClaudeForVS.csproj` (same value as `<AssemblyVersion>`)

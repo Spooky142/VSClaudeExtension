@@ -87,10 +87,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     public void RefreshUsage()
     {
         List<UsageMeter> meters = this.settings.Engine == ChatEngineKind.ClaudeCode ? this.PlanMeters() : this.ApiMeters();
-        if (this.ContextMeter() is UsageMeter context)
-        {
-            meters.Add(context);
-        }
+        meters.Add(this.ContextMeter());
 
         this.UsageMeters.Clear();
         foreach (UsageMeter meter in meters)
@@ -107,13 +104,17 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     private List<UsageMeter> PlanMeters()
     {
+        // The 5-hour and weekly windows always show (at 0% until known); the first other window seen takes the third slot.
         string[] order = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included", "overage"];
+        IEnumerable<string> windows = new[] { "five_hour", "seven_day" }
+            .Concat(this.planLimits.Keys
+                .Where(w => w is not "five_hour" and not "seven_day")
+                .OrderBy(w => Array.IndexOf(order, w) is int i && i >= 0 ? i : order.Length)
+                .Take(1));
         var meters = new List<UsageMeter>();
-        foreach (PlanLimit limit in this.planLimits.Values
-            .OrderBy(l => Array.IndexOf(order, l.Window) is int i && i >= 0 ? i : order.Length)
-            .Take(3))
+        foreach (string window in windows)
         {
-            string label = limit.Window switch
+            string label = window switch
             {
                 "five_hour" => "5-hour limit",
                 "seven_day" => "Weekly limit",
@@ -121,8 +122,14 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
                 "seven_day_sonnet" => "Weekly · Sonnet",
                 "seven_day_overage_included" => "Weekly · with extra",
                 "overage" => "Extra usage",
-                _ => limit.Window,
+                _ => window,
             };
+
+            if (!this.planLimits.TryGetValue(window, out PlanLimit? limit))
+            {
+                meters.Add(new UsageMeter(label, "0%", "Updates after your next message", 0, UsageSeverity.Normal));
+                continue;
+            }
 
             if (limit.ResetsAt is DateTimeOffset reset && reset <= DateTimeOffset.Now)
             {
@@ -130,9 +137,11 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
                 continue;
             }
 
+            // Without a percentage the bar still shows: full if the limit's been hit, empty otherwise.
+            double percent = limit.Utilization ?? (limit.Status == "rejected" ? 100 : 0);
             string value = limit.Utilization is double pct ? $"{pct:0}%"
                 : limit.Status switch { "rejected" => "Limit reached", "allowed_warning" => "Near limit", _ => "OK" };
-            meters.Add(new UsageMeter(label, value, FormatReset(limit.ResetsAt), limit.Utilization, UsageMeter.SeverityFor(limit.Utilization, limit.Status)));
+            meters.Add(new UsageMeter(label, value, FormatReset(limit.ResetsAt), percent, UsageMeter.SeverityFor(limit.Utilization, limit.Status)));
         }
 
         return meters;
@@ -141,13 +150,10 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     private List<UsageMeter> ApiMeters()
     {
         var meters = new List<UsageMeter>();
-        if (this.sessionTokens.Input + this.sessionTokens.Output + this.sessionTokens.CacheRead + this.sessionTokens.CacheWrite > 0)
-        {
-            TokenUsage t = this.sessionTokens;
-            string detail = $"{FormatTokens(t.Input + t.CacheWrite)} in · {FormatTokens(t.Output)} out"
-                + (t.CacheRead > 0 ? $" · {FormatTokens(t.CacheRead)} cached" : string.Empty);
-            meters.Add(new UsageMeter("This session", $"≈ ${this.sessionCost:0.00}", detail, null, UsageSeverity.Normal));
-        }
+        TokenUsage t = this.sessionTokens;
+        string sessionDetail = $"{FormatTokens(t.Input + t.CacheWrite)} in · {FormatTokens(t.Output)} out"
+            + (t.CacheRead > 0 ? $" · {FormatTokens(t.CacheRead)} cached" : string.Empty);
+        meters.Add(new UsageMeter("This session", $"≈ ${this.sessionCost:0.00}", sessionDetail, null, UsageSeverity.Normal));
 
         if (this.apiLimits is ApiRateLimits limits && limits.PercentUsed is double used)
         {
@@ -156,20 +162,21 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             string detail = reset ? "Per-minute window has reset" : FormatReset(limits.ResetsAt);
             meters.Add(new UsageMeter("Rate limit (per minute)", $"{shown:0}% used", detail, shown, UsageMeter.SeverityFor(shown)));
         }
+        else
+        {
+            meters.Add(new UsageMeter("Rate limit (per minute)", "0% used", "Updates after your next message", 0, UsageSeverity.Normal));
+        }
 
         return meters;
     }
 
-    private UsageMeter? ContextMeter()
+    private UsageMeter ContextMeter()
     {
-        if (this.contextTokens <= 0)
-        {
-            return null;
-        }
-
         long window = AgentSettings.ContextWindow(this.engine?.Model ?? this.settings.Model);
         double used = Math.Min(100, 100.0 * this.contextTokens / window);
-        return new UsageMeter("Context", $"{used:0}%", $"{FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens", used, UsageMeter.SeverityFor(used));
+        string detail = this.contextTokens > 0 ? $"{FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens"
+            : $"{FormatTokens(window)} token window · updates as Claude replies";
+        return new UsageMeter("Context", $"{used:0}%", detail, used, UsageMeter.SeverityFor(used));
     }
 
     private static string FormatTokens(long n) =>
@@ -383,6 +390,15 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
         {
             this.CodeStatus = new ClaudeCodeStatus(null, null, false, null, null);
+        }
+    }
+
+    /// <summary>Fetches the plan usage windows now, rather than waiting for the next prompt to report them.</summary>
+    public async Task RefreshPlanUsageAsync()
+    {
+        foreach (PlanLimit limit in await PlanUsageClient.FetchAsync(CancellationToken.None))
+        {
+            ((IChatSink)this).ReportPlanLimit(limit);
         }
     }
 

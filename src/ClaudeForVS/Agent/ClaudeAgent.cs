@@ -411,6 +411,13 @@ internal sealed class ClaudeAgent : IChatEngine
                 turn.CacheWriteTokens = start.Message.Usage.CacheCreationInputTokens ?? 0;
                 turn.UncachedInputTokens = start.Message.Usage.InputTokens;
                 sink.ReportLiveTokens(tokensBefore + turn.InputTokens);
+
+                // The headers and input size are known now, so the strip needn't wait for the reply to finish.
+                sink.ReportContext(turn.UncachedInputTokens + turn.CacheWriteTokens + turn.CacheReadTokens);
+                if (this.rateLimits.Latest is ApiRateLimits limits)
+                {
+                    sink.ReportApiRateLimits(limits);
+                }
             }
             else if (ev.TryPickContentBlockStart(out RawContentBlockStartEvent? blockStart))
             {
