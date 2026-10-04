@@ -28,6 +28,11 @@ internal static class SlashCommands
         ("/init", "/init", "Create or update CLAUDE.md for this repository"),
         ("/retry", "/retry", "Send your last message again"),
         ("/undo", "/undo", "Undo the file changes made by your last message"),
+        ("/diff", "/diff", "Attach your uncommitted changes to your next message"),
+        ("/output", "/output", "Attach the Output window's text to your next message"),
+        ("/openfiles", "/openfiles", "Attach the list of files open in the editor"),
+        ("/checkpoint", "/checkpoint [name]", "Save a restore point for the files"),
+        ("/restore", "/restore [name]", "Put the files back to a restore point"),
         ("/copy", "/copy", "Copy Claude's last reply"),
         ("/cost", "/cost", "Show token usage, cost and plan limits"),
         ("/context", "/context", "Show how full the context window is"),
@@ -49,7 +54,7 @@ internal static class SlashCommands
     };
 
     // Commands whose argument is free text, so completion leaves a space after them.
-    private static readonly HashSet<string> TakesText = new(StringComparer.OrdinalIgnoreCase) { "/review" };
+    private static readonly HashSet<string> TakesText = new(StringComparer.OrdinalIgnoreCase) { "/review", "/checkpoint", "/restore" };
 
     /// <summary>The command a prompt is, or null if it's an ordinary prompt (or a command for Claude Code).</summary>
     public static SlashCommand? Parse(string text)

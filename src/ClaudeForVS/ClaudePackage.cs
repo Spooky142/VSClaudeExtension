@@ -34,6 +34,7 @@ public sealed class ClaudePackage : AsyncPackage
     private const int FixTestsCommandId = 0x0107;
     private const int AddToClaudeCommandId = 0x0108;
     private const int WriteCommitMessageCommandId = 0x0109;
+    private const int AskAboutDebugStateCommandId = 0x010A;
 
     // Chat windows beyond this many are refused; each one can run its own Claude.
     private const int MaxChatWindows = 20;
@@ -81,6 +82,9 @@ public sealed class ClaudePackage : AsyncPackage
             this.AddCommand(commands, WriteTestsCommandId, () => this.Vs.GetEditorContext(), (chat, editor) =>
                 chat.AskAbout(editor, "Write unit tests for this code, following the conventions of the existing tests in this repository."));
             this.AddCommand(commands, FixErrorsCommandId, () => this.Vs.GetErrors(), (chat, errors) => chat.FixErrors(errors));
+
+            // The debugger's state is read before the chat takes focus, as the user may be about to step.
+            this.AddCommand(commands, AskAboutDebugStateCommandId, () => this.Vs.GetDebugState(), (chat, state) => chat.AskAboutDebugState(state));
         }
 
         this.solution = await this.GetServiceAsync(typeof(SVsSolution)) as IVsSolution;
@@ -127,7 +131,19 @@ public sealed class ClaudePackage : AsyncPackage
     /// Opens another chat window alongside the others, reusing one that was closed while idle. Each window has its own
     /// chat, repository and Claude, so they can work at the same time.
     /// </summary>
-    internal async System.Threading.Tasks.Task OpenNewChatWindowAsync()
+    internal System.Threading.Tasks.Task OpenNewChatWindowAsync() => this.OpenChatWindowAsync();
+
+    /// <summary>Opens a chat window for a branch of a chat (see <see cref="ClaudeChatViewModel.BranchFrom"/>), with its message in the prompt box.</summary>
+    internal async System.Threading.Tasks.Task OpenBranchAsync(ClaudeForVS.ToolWindows.SessionInfo info, string prompt)
+    {
+        await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+        ClaudeChatControl? chat = await this.OpenChatWindowAsync();
+        await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+        chat?.OpenBranch(info, prompt);
+    }
+
+    /// <summary>Opens a chat window (see <see cref="OpenNewChatWindowAsync"/>) and returns its chat, or null if there are too many.</summary>
+    private async System.Threading.Tasks.Task<ClaudeChatControl?> OpenChatWindowAsync()
     {
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
         for (int id = 1; id < MaxChatWindows; id++)
@@ -143,16 +159,18 @@ public sealed class ClaudePackage : AsyncPackage
                 closedChat.StartFresh();
                 ((IVsWindowFrame)existing.Frame).Show();
                 closedChat.FocusPrompt();
-                return;
+                return closedChat;
             }
 
             ToolWindowPane pane = await this.ShowToolWindowAsync(typeof(ClaudeToolWindow), id, create: true, this.DisposalToken);
             await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
-            (pane.Content as ClaudeChatControl)?.FocusPrompt();
-            return;
+            ClaudeChatControl? opened = pane.Content as ClaudeChatControl;
+            opened?.FocusPrompt();
+            return opened;
         }
 
         this.Vs.RequestAttention($"There are already {MaxChatWindows} chat windows open. Close one first.");
+        return null;
     }
 
     /// <summary>Git > Write Commit Message with Claude: describes the changes and puts the message in the Git Changes window.</summary>

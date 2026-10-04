@@ -155,6 +155,9 @@
           <TextBlock Style="{StaticResource Icon}" Text="&#xE723;" FontSize="10" Margin="0,0,4,0" />
           <TextBlock Text="{Binding Note}" Style="{StaticResource Muted}" FontSize="10.5" TextTrimming="CharacterEllipsis" />
         </StackPanel>
+        <TextBlock Style="{StaticResource Icon}" Text="&#xE735;" FontSize="11" Foreground="{StaticResource Accent}" Margin="6,3,0,0"
+                   ToolTip="Starred" AutomationProperties.Name="Starred message"
+                   Visibility="{Binding IsStarred, Converter={StaticResource BoolToVis}}" />
         <StackPanel x:Name="Actions" Orientation="Horizontal" Margin="0,1,0,0" Visibility="Hidden">
           <Button Style="{StaticResource MiniButton}" Content="Edit" Click="OnEditPrompt"
                   ToolTip="Take this message and Claude's replies after it out of the chat, and edit it" />
@@ -163,6 +166,10 @@
           <Button Style="{StaticResource MiniButton}" Content="Undo changes" Click="OnUndoPrompt"
                   ToolTip="Put the files Claude changed since this message back the way they were"
                   Visibility="{Binding CanUndo, Converter={StaticResource BoolToVis}}" />
+          <Button Style="{StaticResource MiniButton}" Content="Branch" Click="OnBranchPrompt"
+                  ToolTip="Open a copy of this chat as it was before this message in a new window, to try a different way forward" />
+          <Button Style="{StaticResource MiniButton}" Content="{Binding StarText}" Click="OnToggleStar"
+                  ToolTip="Star this message to find it again from the star menu in the header" />
           <Button Style="{StaticResource MiniButton}" Content="Copy" Click="OnCopyEntry" ToolTip="Copy this message" />
         </StackPanel>
       </StackPanel>
@@ -184,6 +191,11 @@
           <DockPanel Margin="0,0,0,6">
             <Button x:Name="CopyReply" DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Copy" Margin="12,0,0,0"
                     Click="OnCopyEntry" ToolTip="Copy this reply as Markdown" Visibility="Hidden" />
+            <Button x:Name="StarReply" DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="{Binding StarText}" Margin="12,0,0,0"
+                    Click="OnToggleStar" ToolTip="Star this reply to find it again from the star menu in the header" Visibility="Hidden" />
+            <TextBlock DockPanel.Dock="Right" Style="{StaticResource Icon}" Text="&#xE735;" FontSize="11" Foreground="{StaticResource Accent}"
+                       VerticalAlignment="Center" ToolTip="Starred" AutomationProperties.Name="Starred message"
+                       Visibility="{Binding IsStarred, Converter={StaticResource BoolToVis}}" />
             <StackPanel Orientation="Horizontal">
               <Border Width="20" Height="20" CornerRadius="10" Background="{StaticResource Accent}">
                 <TextBlock Text="✻" Foreground="White" FontSize="12" FontFamily="Segoe UI Symbol"
@@ -199,7 +211,11 @@
       <DataTemplate.Triggers>
         <Trigger SourceName="Bubble" Property="IsMouseOver" Value="True">
           <Setter TargetName="CopyReply" Property="Visibility" Value="Visible" />
+          <Setter TargetName="StarReply" Property="Visibility" Value="Visible" />
         </Trigger>
+        <DataTrigger Binding="{Binding CanStar}" Value="False">
+          <Setter TargetName="StarReply" Property="Visibility" Value="Collapsed" />
+        </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
 
@@ -310,7 +326,12 @@
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
         <Border Height="1" Background="{StaticResource SubtleBorder}" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="1" Text="{Binding Header}" Style="{StaticResource Muted}" FontSize="11" Margin="10,0" />
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Header}" Style="{StaticResource Muted}" FontSize="11" Margin="10,0" VerticalAlignment="Center" />
+          <Button Style="{StaticResource MiniButton}" Content="Restore files" Click="OnRestorePoint" Margin="0,0,10,0"
+                  ToolTip="Put every file back the way it was at this restore point. The conversation is left as it is."
+                  Visibility="{Binding IsRestorePoint, Converter={StaticResource BoolToVis}}" />
+        </StackPanel>
         <Border Grid.Column="2" Height="1" Background="{StaticResource SubtleBorder}" VerticalAlignment="Center" />
       </Grid>
     </DataTemplate>
@@ -339,17 +360,21 @@
             <ItemsControl ItemsSource="{Binding FileRows}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Button Style="{StaticResource FileRow}" Click="OnOpenChangedFile" IsEnabled="{Binding CanDiff}"
-                          ToolTip="{Binding StatusText}">
-                    <DockPanel>
-                      <TextBlock DockPanel.Dock="Right" Text="{Binding RemovedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
-                                 Foreground="{StaticResource RemovedRed}" Margin="6,0,0,0" />
-                      <TextBlock DockPanel.Dock="Right" Text="{Binding AddedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
-                                 Foreground="{StaticResource AddedGreen}" Margin="12,0,0,0" />
-                      <TextBlock x:Name="FilePath" Text="{Binding Path}" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
-                                 TextTrimming="CharacterEllipsis" />
-                    </DockPanel>
-                  </Button>
+                  <DockPanel>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Revert" Margin="2,0,4,0" VerticalAlignment="Center"
+                            Click="OnRevertChangedFile" ToolTip="Put just this file back the way it was before the message" />
+                    <Button Style="{StaticResource FileRow}" Click="OnOpenChangedFile" IsEnabled="{Binding CanDiff}"
+                            ToolTip="{Binding StatusText}">
+                      <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding RemovedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                   Foreground="{StaticResource RemovedRed}" Margin="6,0,0,0" />
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding AddedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                   Foreground="{StaticResource AddedGreen}" Margin="12,0,0,0" />
+                        <TextBlock x:Name="FilePath" Text="{Binding Path}" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                                   TextTrimming="CharacterEllipsis" />
+                      </DockPanel>
+                    </Button>
+                  </DockPanel>
                   <DataTemplate.Triggers>
                     <DataTrigger Binding="{Binding Stat.Status}" Value="D">
                       <Setter TargetName="FilePath" Property="TextDecorations" Value="Strikethrough" />
@@ -389,7 +414,7 @@
             </TextBlock.Style>
           </TextBlock>
           <TextBlock Text="{Binding Label}" FontSize="11.5" VerticalAlignment="Center" MaxWidth="240" TextTrimming="CharacterEllipsis" />
-          <Button Style="{StaticResource ChipCloseButton}" Content="&#xE711;" Click="OnRemoveAttachment" ToolTip="Leave this out" />
+          <Button Style="{StaticResource ChipCloseButton}" Content="&#xE711;" Click="OnRemoveAttachment" AutomationProperties.Name="Leave this out" ToolTip="Leave this out" />
         </StackPanel>
       </Border>
     </DataTemplate>
@@ -416,11 +441,12 @@
     <StackPanel Grid.Row="0">
     <DockPanel Margin="10,8,10,6">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-        <Button Style="{StaticResource IconButton}" Content="&#xE721;" ToolTip="Find in this chat (Ctrl+F)" Click="OnOpenFind" />
-        <Button Style="{StaticResource IconButton}" Content="&#xE81C;" ToolTip="History" Click="OnToggleHistory" />
-        <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="New chat" Click="OnNewChat" />
-        <Button Style="{StaticResource IconButton}" Content="&#xE78B;" ToolTip="Open another chat window, to work on something else alongside this chat" Click="OnNewChatWindow" />
-        <Button Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" Click="OnOpenSettings" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE734;" AutomationProperties.Name="Starred messages" ToolTip="Starred messages" Click="OnStarredMenu" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE721;" AutomationProperties.Name="Find in this chat (Ctrl+F)" ToolTip="Find in this chat (Ctrl+F)" Click="OnOpenFind" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE81C;" AutomationProperties.Name="History" ToolTip="History" Click="OnToggleHistory" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE710;" AutomationProperties.Name="New chat" ToolTip="New chat" Click="OnNewChat" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE78B;" AutomationProperties.Name="New chat window" ToolTip="Open another chat window, to work on something else alongside this chat" Click="OnNewChatWindow" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE713;" AutomationProperties.Name="Settings" ToolTip="Settings" Click="OnOpenSettings" />
       </StackPanel>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
         <Button Style="{StaticResource OutlineButton}" Margin="0" Padding="10,4" ToolTip="{Binding RepoTooltip}" Click="OnOpenSettings">
@@ -510,7 +536,7 @@
         <CheckBox DockPanel.Dock="Right" Content="This repository only" IsChecked="{Binding ThisRepoOnly}" VerticalAlignment="Center" Margin="10,0,0,0"
                   Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
         <Grid>
-          <TextBox x:Name="SessionSearchBox" Style="{StaticResource Field}" Text="{Binding SessionSearch, UpdateSourceTrigger=PropertyChanged, Delay=250}" />
+          <TextBox x:Name="SessionSearchBox" AutomationProperties.Name="Search chats" Style="{StaticResource Field}" Text="{Binding SessionSearch, UpdateSourceTrigger=PropertyChanged, Delay=250}" />
           <TextBlock Text="Search titles, repositories and messages…" IsHitTestVisible="False" Style="{StaticResource Muted}" Margin="8,5,0,0"
                      Visibility="{Binding Text, ElementName=SessionSearchBox, Converter={StaticResource EmptyToVis}}" />
         </Grid>
@@ -523,10 +549,10 @@
                       Background="{StaticResource SubtleFill}">
                 <DockPanel>
                   <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
-                    <Button Style="{StaticResource IconButton}" Content="{Binding PinGlyph}" ToolTip="{Binding PinToolTip}" Click="OnPinSession" />
-                    <Button Style="{StaticResource IconButton}" Content="&#xE8AC;" ToolTip="Rename" Click="OnRenameSession" />
-                    <Button Style="{StaticResource IconButton}" Content="&#xEDE1;" ToolTip="Export as Markdown" Click="OnExportSession" />
-                    <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="Delete this chat" Click="OnDeleteSession" />
+                    <Button Style="{StaticResource IconButton}" Content="{Binding PinGlyph}" AutomationProperties.Name="{Binding PinToolTip}" ToolTip="{Binding PinToolTip}" Click="OnPinSession" />
+                    <Button Style="{StaticResource IconButton}" Content="&#xE8AC;" AutomationProperties.Name="Rename" ToolTip="Rename" Click="OnRenameSession" />
+                    <Button Style="{StaticResource IconButton}" Content="&#xEDE1;" AutomationProperties.Name="Export as Markdown" ToolTip="Export as Markdown" Click="OnExportSession" />
+                    <Button Style="{StaticResource IconButton}" Content="&#xE74D;" AutomationProperties.Name="Delete this chat" ToolTip="Delete this chat" Click="OnDeleteSession" />
                   </StackPanel>
                   <Grid>
                     <Button Style="{StaticResource SessionRow}" Click="OnOpenSession" ToolTip="{Binding Tooltip}"
@@ -546,7 +572,7 @@
                         </StackPanel>
                       </DockPanel>
                     </Button>
-                    <TextBox Style="{StaticResource Field}" Margin="8,8,4,8" Text="{Binding EditTitle, UpdateSourceTrigger=PropertyChanged}"
+                    <TextBox AutomationProperties.Name="Chat title" Style="{StaticResource Field}" Margin="8,8,4,8" Text="{Binding EditTitle, UpdateSourceTrigger=PropertyChanged}"
                              Visibility="{Binding IsRenaming, Converter={StaticResource BoolToVis}}"
                              IsVisibleChanged="OnRenameBoxVisible" KeyDown="OnRenameKeyDown" LostKeyboardFocus="OnRenameLostFocus" />
                   </Grid>
@@ -591,13 +617,13 @@
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock x:Name="FindCount" Style="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="8,0,6,0" />
-          <Button Style="{StaticResource IconButton}" Content="&#xE70E;" ToolTip="Previous match (Shift+Enter)" Click="OnFindPrevious" />
-          <Button Style="{StaticResource IconButton}" Content="&#xE70D;" ToolTip="Next match (Enter)" Click="OnFindNext" />
-          <Button Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Close (Esc)" Click="OnCloseFind" />
+          <Button Style="{StaticResource IconButton}" Content="&#xE70E;" AutomationProperties.Name="Previous match (Shift+Enter)" ToolTip="Previous match (Shift+Enter)" Click="OnFindPrevious" />
+          <Button Style="{StaticResource IconButton}" Content="&#xE70D;" AutomationProperties.Name="Next match (Enter)" ToolTip="Next match (Enter)" Click="OnFindNext" />
+          <Button Style="{StaticResource IconButton}" Content="&#xE711;" AutomationProperties.Name="Close (Esc)" ToolTip="Close (Esc)" Click="OnCloseFind" />
         </StackPanel>
         <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE721;" FontSize="12" VerticalAlignment="Center" Margin="2,0,8,0" />
         <Grid>
-          <TextBox x:Name="FindBox" Style="{StaticResource Field}" TextChanged="OnFindTextChanged" PreviewKeyDown="OnFindKeyDown" />
+          <TextBox x:Name="FindBox" AutomationProperties.Name="Find in this chat" Style="{StaticResource Field}" TextChanged="OnFindTextChanged" PreviewKeyDown="OnFindKeyDown" />
           <TextBlock Text="Find in this chat…" IsHitTestVisible="False" Style="{StaticResource Muted}" Margin="8,5,0,0"
                      Visibility="{Binding Text, ElementName=FindBox, Converter={StaticResource EmptyToVis}}" />
         </Grid>
@@ -616,11 +642,35 @@
     </Border>
 
     <!-- Transcript -->
-    <ScrollViewer x:Name="Transcript" Grid.Row="2"
+    <ScrollViewer x:Name="Transcript" AutomationProperties.Name="Conversation" Grid.Row="2"
                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                   ScrollChanged="OnTranscriptScrollChanged" PreviewMouseWheel="OnTranscriptMouseWheel">
-      <ItemsControl ItemsSource="{Binding Messages}" ItemTemplateSelector="{StaticResource EntrySelector}" Margin="12,0,12,8" />
+      <ItemsControl x:Name="TranscriptItems" ItemsSource="{Binding Messages}" ItemTemplateSelector="{StaticResource EntrySelector}" Margin="12,0,12,8" />
     </ScrollViewer>
+
+    <!-- Empty state: shown over the transcript until the chat has its first entry. -->
+    <StackPanel Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24,0,24,24" IsHitTestVisible="False">
+      <StackPanel.Style>
+        <Style TargetType="StackPanel">
+          <Setter Property="Visibility" Value="Collapsed" />
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding Messages.Count}" Value="0">
+              <Setter Property="Visibility" Value="Visible" />
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+      </StackPanel.Style>
+      <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource Accent}" HorizontalAlignment="Center">
+        <TextBlock Text="✻" Foreground="White" FontSize="22" FontFamily="Segoe UI Symbol"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-2,0,0" />
+      </Border>
+      <TextBlock Text="What would you like to work on?" FontSize="16" FontWeight="SemiBold" TextAlignment="Center"
+                 TextWrapping="Wrap" Margin="0,14,0,0" />
+      <TextBlock Style="{StaticResource Muted}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0"
+                 Text="Type a message below to start a chat about this repository." />
+      <TextBlock Style="{StaticResource Muted}" FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,12,0,0"
+                 Text="/ for commands · @ to mention a file · paste or drop images to attach them" />
+    </StackPanel>
 
     <!-- Task list: Claude's latest TodoWrite / todo_write list. Click the header to collapse it, × to hide it. -->
     <Border Grid.Row="3" Margin="10,4,10,4" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
@@ -628,7 +678,7 @@
       <StackPanel>
         <DockPanel>
           <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE711;" Width="26" Height="26" Margin="0,0,2,0"
-                  ToolTip="Hide the task list (it comes back when Claude updates it)" Click="OnHideTasks" />
+                  AutomationProperties.Name="Hide the task list" ToolTip="Hide the task list (it comes back when Claude updates it)" Click="OnHideTasks" />
           <ToggleButton x:Name="TasksToggle" Style="{StaticResource RowToggle}" IsChecked="{Binding TasksExpanded}" ToolTip="Show or hide the tasks">
             <DockPanel Margin="8,5">
               <TextBlock DockPanel.Dock="Right" FontSize="9" Margin="8,0,0,0" VerticalAlignment="Center">
@@ -685,7 +735,7 @@
       <StackPanel>
         <StackPanel Orientation="Horizontal">
           <TextBlock Style="{StaticResource Icon}" Text="&#xE897;" Foreground="{StaticResource Accent}" FontSize="13" Margin="0,0,8,0" />
-          <TextBlock Text="{Binding QuestionCardTitle}" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <TextBlock Text="{Binding QuestionCardTitle}" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.LiveSetting="Assertive" />
         </StackPanel>
         <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,6,0,0">
           <ItemsControl ItemsSource="{Binding PendingQuestions}">
@@ -713,7 +763,7 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                   <Grid>
-                    <TextBox Style="{StaticResource Field}" Text="{Binding OtherText, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox AutomationProperties.Name="Your own answer" Style="{StaticResource Field}" Text="{Binding OtherText, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Text="Other: type your own answer…" IsHitTestVisible="False" Style="{StaticResource Muted}" Margin="8,5,0,0">
                       <TextBlock.Visibility>
                         <Binding Path="OtherText" Converter="{StaticResource EmptyToVis}" />
@@ -739,7 +789,7 @@
       <StackPanel>
         <StackPanel Orientation="Horizontal">
           <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,8,0" />
-          <TextBlock Text="Claude wants to make a change" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <TextBlock Text="Claude wants to make a change" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.LiveSetting="Assertive" />
         </StackPanel>
         <TextBlock Text="{Binding ApprovalTitle}" FontFamily="{StaticResource MonoFont}" FontSize="12" TextWrapping="Wrap" Margin="21,4,0,0" />
         <Border Margin="0,8,0,0" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
@@ -792,7 +842,7 @@
            AllowsTransparency="True" StaysOpen="True" Width="{Binding ActualWidth, ElementName=Composer}">
       <Border Margin="0,0,0,4" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Padding="4"
               Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}">
-        <ListBox x:Name="SuggestionList" MaxHeight="260" BorderThickness="0" Background="Transparent" Focusable="False"
+        <ListBox x:Name="SuggestionList" AutomationProperties.Name="Suggestions" MaxHeight="260" BorderThickness="0" Background="Transparent" Focusable="False"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" PreviewMouseLeftButtonUp="OnSuggestionClicked">
           <ListBox.ItemContainerStyle>
             <Style TargetType="ListBoxItem">
@@ -860,7 +910,7 @@
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
-        <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="200" AllowDrop="True"
+        <TextBox x:Name="PromptBox" AutomationProperties.Name="Message to Claude" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="200" AllowDrop="True"
                  VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" PreviewKeyDown="OnPromptKeyDown"
                  TextChanged="OnPromptTextChanged" LostKeyboardFocus="OnPromptLostFocus" SelectionChanged="OnPromptSelectionChanged"
                  Background="Transparent" BorderThickness="0" Padding="0" FontSize="13"
@@ -886,9 +936,9 @@
           </TextBlock.Style>
         </TextBlock>
         <Grid Grid.Column="1" VerticalAlignment="Bottom" Margin="8,0,0,0">
-          <Button Style="{StaticResource RoundButton}" Content="&#xE724;" ToolTip="Send (Enter)" Click="OnSend"
+          <Button Style="{StaticResource RoundButton}" Content="&#xE724;" AutomationProperties.Name="Send (Enter)" ToolTip="Send (Enter)" Click="OnSend"
                   Visibility="{Binding IsIdle, Converter={StaticResource BoolToVis}}" />
-          <Button Style="{StaticResource RoundButton}" Content="&#xE71A;" ToolTip="Stop" Click="OnStop"
+          <Button Style="{StaticResource RoundButton}" Content="&#xE71A;" AutomationProperties.Name="Stop" ToolTip="Stop" Click="OnStop"
                   Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
         </Grid>
       </Grid>
@@ -899,7 +949,7 @@
     <DockPanel Grid.Row="7" Margin="14,0,14,8">
       <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="11" Text="Enter to send · Shift+Enter for new line · ↑ for history"
                  ToolTip="Type / for commands and @ to mention a file. Paste or drop images to attach them. Ctrl+F searches the chat." />
-      <TextBlock Style="{StaticResource Muted}" FontSize="11" Text="{Binding Status}" TextTrimming="CharacterEllipsis"
+      <TextBlock Style="{StaticResource Muted}" FontSize="11" Text="{Binding Status}" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" AutomationProperties.Name="Status"
                  ToolTip="{Binding Status}" Margin="0,0,12,0" />
     </DockPanel>
     </Grid>

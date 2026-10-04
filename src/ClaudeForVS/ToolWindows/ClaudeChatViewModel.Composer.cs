@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using ClaudeForVS.Agent;
 using ClaudeForVS.Git;
@@ -332,6 +334,41 @@ internal sealed partial class ClaudeChatViewModel
                 run = this.UndoAsync(undo);
                 return true;
 
+            case "/diff":
+                run = this.AttachDiffAsync();
+                return true;
+
+            case "/output":
+                if (this.ReadOutputWindow() is not (string paneName, string paneText) || paneText.Trim().Length == 0)
+                {
+                    this.Status = "The Output window has nothing to attach. Show the pane you want in the Output window first.";
+                    return false;
+                }
+
+                this.AddAttachment(Attachment.ForOutput(paneName, paneText));
+                this.Status = $"Attached the \"{(paneName.Length > 0 ? paneName : "Output")}\" pane. Send your message when you're ready.";
+                return true;
+
+            case "/openfiles":
+                IReadOnlyList<(string Path, bool Unsaved)> documents = this.ListOpenDocuments();
+                if (documents.Count == 0)
+                {
+                    this.Status = "No files are open in the editor.";
+                    return false;
+                }
+
+                this.AddAttachment(Attachment.ForOpenFiles(documents, this.RepoRoot ?? this.RepoPath));
+                this.Status = "Attached the list of open files. Send your message when you're ready.";
+                return true;
+
+            case "/checkpoint":
+                run = this.CreateRestorePointAsync(command.Argument);
+                return true;
+
+            case "/restore":
+                run = this.RestoreCommandAsync(command.Argument);
+                return true;
+
             case "/model":
                 return this.SetFromCommand(command, v => v switch
                 {
@@ -363,6 +400,51 @@ internal sealed partial class ClaudeChatViewModel
 
             default:
                 return false;
+        }
+    }
+
+    // Longer diffs are cut; Claude can run git diff itself for the rest.
+    private const int MaxAttachedDiffChars = 60_000;
+
+    /// <summary>/diff: attaches the repository's uncommitted changes (against HEAD) and the names of untracked files.</summary>
+    private async Task AttachDiffAsync()
+    {
+        if (this.RepoRoot is not string root)
+        {
+            this.Status = "Set the repository in Settings first.";
+            return;
+        }
+
+        try
+        {
+            this.Status = "Reading the uncommitted changes…";
+            (int code, string diff) = await GitRunner.RunAsync(root, ["diff", "HEAD", "--no-ext-diff", "--no-textconv", "--no-color"], CancellationToken.None, includeStderr: false);
+            if (code != 0)
+            {
+                // No commits yet: there's no HEAD to compare with.
+                (code, diff) = await GitRunner.RunAsync(root, ["diff", "--no-ext-diff", "--no-textconv", "--no-color"], CancellationToken.None, includeStderr: false);
+            }
+
+            (_, string others) = await GitRunner.RunAsync(root, ["ls-files", "--others", "--exclude-standard"], CancellationToken.None, includeStderr: false);
+            List<string> untracked = others.Replace("\r\n", "\n").Split(['\n'], StringSplitOptions.RemoveEmptyEntries).ToList();
+            if (diff.Length > MaxAttachedDiffChars)
+            {
+                diff = diff.Substring(0, MaxAttachedDiffChars) + "\n… (diff cut; run git diff for the rest)";
+            }
+
+            this.Status = string.Empty;
+            if (diff.Trim().Length == 0 && untracked.Count == 0)
+            {
+                this.Status = "There are no uncommitted changes to attach.";
+                return;
+            }
+
+            this.AddAttachment(Attachment.ForDiff(diff, untracked));
+            this.Status = "Attached your uncommitted changes. Send your message when you're ready.";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            this.Status = "Couldn't read the changes: " + ex.Message;
         }
     }
 
@@ -420,6 +502,19 @@ internal sealed partial class ClaudeChatViewModel
             if (settingsFiles.Count > 0)
             {
                 sb.Append("- Permission rules from " + string.Join(", ", settingsFiles.Select(f => $"`{f}`")) + "\n");
+            }
+
+            HookRules hookRules = this.engine is ClaudeAgent running ? running.Hooks
+                : this.RepoRoot is string hookRepo ? HookRules.Load(hookRepo) : HookRules.Empty;
+            if (hookRules.Count > 0)
+            {
+                sb.Append($"- {(hookRules.Count == 1 ? "1 hook" : $"{hookRules.Count} hooks")} in {string.Join(", ", hookRules.Files.Select(f => $"`{f}`"))}"
+                    + (this.settings.RunHooks ? string.Empty : " (not run: turn on **Run hooks** in Settings)") + "\n");
+            }
+
+            if (this.settings.SpendLimitUsd > 0)
+            {
+                sb.Append($"- Spending limit ${this.settings.SpendLimitUsd:0.00} per chat\n");
             }
 
             if (this.engine is ClaudeAgent { McpServers.Count: > 0 } withMcp)

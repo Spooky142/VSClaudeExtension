@@ -157,6 +157,40 @@ internal sealed class ChatEntry : INotifyPropertyChanged
 
     public string RemovedText => $"−{this.files.Sum(f => f.Removed):N0}";
 
+    // ===== Starred messages (prompts and Claude's replies) =====
+
+    private bool isStarred;
+
+    /// <summary>True if the user starred this message to find it again from the header's star menu. Saved with the chat.</summary>
+    public bool IsStarred
+    {
+        get => this.isStarred;
+        set
+        {
+            if (this.isStarred != value)
+            {
+                this.isStarred = value;
+                this.OnPropertyChanged();
+                this.OnPropertyChanged(nameof(this.StarText));
+            }
+        }
+    }
+
+    public string StarText => this.isStarred ? "Unstar" : "Star";
+
+    /// <summary>Prompts and Claude's replies can be starred; the extension's own replies and notes can't.</summary>
+    public bool CanStar => this.Kind == ChatEntryKind.User || (this.Kind == ChatEntryKind.Assistant && !this.IsLocalReply);
+
+    /// <summary>The message's first line of text, cut short, for lists.</summary>
+    public string Excerpt
+    {
+        get
+        {
+            string first = this.Text.Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? string.Empty;
+            return first.Length > 70 ? first.Substring(0, 70) + "…" : first;
+        }
+    }
+
     // ===== User prompts only =====
 
     /// <summary>What was attached to a prompt, e.g. "Foo.cs:12-30 · 1 image"; shown under the bubble.</summary>
@@ -178,6 +212,7 @@ internal sealed class ChatEntry : INotifyPropertyChanged
         {
             this.snapshotBefore = value;
             this.OnPropertyChanged(nameof(this.CanUndo));
+            this.OnPropertyChanged(nameof(this.IsRestorePoint));
         }
     }
 
@@ -191,6 +226,12 @@ internal sealed class ChatEntry : INotifyPropertyChanged
             this.OnPropertyChanged(nameof(this.CanUndo));
         }
     }
+
+    /// <summary>
+    /// True for a notice made by /checkpoint, whose <see cref="SnapshotBefore"/> is the working tree as it was then, so
+    /// the files can be put back to it.
+    /// </summary>
+    public bool IsRestorePoint => this.Kind == ChatEntryKind.Notice && this.snapshotBefore != null;
 
     /// <summary>True when files changed while this prompt ran, so its changes can be undone.</summary>
     public bool CanUndo => this.Kind == ChatEntryKind.User && this.snapshotBefore != null && this.snapshotAfter != null && this.snapshotBefore != this.snapshotAfter;

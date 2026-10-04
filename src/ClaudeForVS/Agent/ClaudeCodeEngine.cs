@@ -25,7 +25,8 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         "Keep answers concise and reference files by repository-relative paths. " +
         "The " + ApprovalServer.DiagnosticsTool + " tool lists Visual Studio's Error List (build errors and live IntelliSense errors in open files); " +
         "check it after changing code. " + ApprovalServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
-        "projects `dotnet build` can't build. The user may approve only some of the changes in an edit; you're then told what was left out.";
+        "projects `dotnet build` can't build. " + ApprovalServer.DebugTool + " reads Visual Studio's debugger (the exception, call stack and locals when the " +
+        "user has paused at a breakpoint or exception). The user may approve only some of the changes in an edit; you're then told what was left out.";
 
     private static readonly TimeSpan PlanUsagePollInterval = TimeSpan.FromSeconds(15);
 
@@ -642,6 +643,10 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 IReadOnlyList<ErrorListItem> after = await vs.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
                 return ($"{outcome.Summary}\n{Diagnostics.Format(after, this.RepoRoot, string.Empty, includeWarnings: true)}", !outcome.Succeeded);
 
+            case "get_debug_state":
+                DebugState state = await vs.GetDebugStateAsync(cancellationToken).ConfigureAwait(false);
+                return (DebugReport.Format(state, this.RepoRoot, input.ValueKind == JsonValueKind.Object && input.TryGetProperty("frames", out JsonElement framesEl) && framesEl.TryGetInt32(out int frames) ? frames : DebugReport.DefaultFrames), false);
+
             default:
                 return ($"Unknown tool: {name}", true);
         }
@@ -650,7 +655,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     private async Task<PermissionDecision> DecideCoreAsync(string toolName, JsonElement input, string? toolUseId)
     {
         // Reading the Error List never needs asking; a build is treated like a command.
-        if (toolName == ApprovalServer.DiagnosticsTool)
+        if (toolName is ApprovalServer.DiagnosticsTool or ApprovalServer.DebugTool)
         {
             return new PermissionDecision(true);
         }
@@ -877,6 +882,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             "WebSearch" => (ActivityKind.Web, $"Searched the web: {Str(input, "query")}", result),
             "TodoWrite" => (ActivityKind.Other, "Updated the task list", TaskList.Format(TaskList.Parse(input))),
             ApprovalServer.DiagnosticsTool => (ActivityKind.Search, "Checked the Error List", result),
+            ApprovalServer.DebugTool => (ActivityKind.Search, "Read the debugger's state", result),
             ApprovalServer.BuildTool => (result.StartsWith("Build succeeded", StringComparison.Ordinal) ? ActivityKind.Shell : ActivityKind.Failed, "Built the solution", result),
             "AskUserQuestion" => (ActivityKind.Question, "Asked you " + QuestionCount(input), result),
             "Task" or "Agent" => (ActivityKind.Other, $"Subagent: {Str(input, "description") ?? "task"}", result),

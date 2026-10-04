@@ -64,6 +64,9 @@ internal sealed record SavedEntry
 
     public string? SnapshotAfter { get; init; }
 
+    /// <summary>The message was starred by the user. Older chats don't have it, which reads as not starred.</summary>
+    public bool Starred { get; init; }
+
     /// <summary>Set on the files-changed row under a reply, which is saved as a tool row; see <see cref="ChatEntryKind.Changes"/>.</summary>
     public IReadOnlyList<FileStat>? Files { get; init; }
 }

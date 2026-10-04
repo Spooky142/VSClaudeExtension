@@ -70,6 +70,18 @@ internal sealed record AgentSettings
     /// </summary>
     public string? PinnedRepoPath { get; init; }
 
+    /// <summary>
+    /// Run the hooks in Claude Code's settings files on the Claude API engine. Off by default, since hooks are commands.
+    /// (Claude Code runs its own hooks regardless.)
+    /// </summary>
+    public bool RunHooks { get; init; }
+
+    /// <summary>
+    /// A cost, in US dollars, that one chat on the Claude API engine shouldn't pass: Claude stops and asks before
+    /// going on. 0 means no limit.
+    /// </summary>
+    public double SpendLimitUsd { get; init; }
+
     public static AgentSettings Load()
     {
         try

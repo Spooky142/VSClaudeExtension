@@ -8,6 +8,7 @@ using System.Windows.Interop;
 using ClaudeForVS.Agent;
 using EnvDTE;
 using EnvDTE80;
+using EnvDTE90a;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -284,6 +285,234 @@ internal sealed class VsIntegration : IVisualStudioHost
         return failed == 0
             ? new BuildOutcome(true, "Build succeeded.")
             : new BuildOutcome(false, $"Build failed: {failed} project{(failed == 1 ? "" : "s")} didn't build.");
+    }
+
+    /// <summary>The name and text of the Output window's active pane, or null if there's none or it can't be read.</summary>
+    public (string Name, string Text)? GetOutputWindowText()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (this.Dte?.Windows.Item(EnvDTE.Constants.vsWindowKindOutput)?.Object is OutputWindow output
+                && output.ActivePane is OutputWindowPane pane)
+            {
+                TextDocument document = pane.TextDocument;
+                string text = document.StartPoint.CreateEditPoint().GetText(document.EndPoint);
+                return (pane.Name ?? string.Empty, text);
+            }
+        }
+        catch (Exception ex) when (ex is COMException or ArgumentException or NullReferenceException or InvalidCastException)
+        {
+        }
+
+        return null;
+    }
+
+    /// <summary>The files open in the editor, and whether each has unsaved changes.</summary>
+    public IReadOnlyList<(string Path, bool Unsaved)> GetOpenDocuments()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var result = new List<(string, bool)>();
+        try
+        {
+            if (this.Dte?.Documents is Documents documents)
+            {
+                foreach (Document document in documents)
+                {
+                    if (!string.IsNullOrEmpty(document.FullName) && File.Exists(document.FullName))
+                    {
+                        result.Add((document.FullName, !document.Saved));
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is COMException or InvalidCastException or NullReferenceException)
+        {
+        }
+
+        return result;
+    }
+
+    public async System.Threading.Tasks.Task<DebugState> GetDebugStateAsync(System.Threading.CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        return this.GetDebugState();
+    }
+
+    /// <summary>True while the debugger is stopped at a breakpoint, an exception or a step.</summary>
+    public bool IsDebuggerPaused
+    {
+        get
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                return this.Dte?.Debugger?.CurrentMode == dbgDebugMode.dbgBreakMode;
+            }
+            catch (COMException)
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>The debugger's state; when paused, the exception, call stack and the current frame's arguments and locals.</summary>
+    public DebugState GetDebugState()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        Debugger? debugger = this.Dte?.Debugger;
+        if (debugger is null)
+        {
+            return DebugState.NotDebugging;
+        }
+
+        try
+        {
+            switch (debugger.CurrentMode)
+            {
+                case dbgDebugMode.dbgDesignMode:
+                    return DebugState.NotDebugging;
+                case dbgDebugMode.dbgRunMode:
+                    return new DebugState(DebugMode.Running, null, null, null, [], [], [], null, ProgramName(debugger));
+            }
+
+            string? reason = debugger.LastBreakReason switch
+            {
+                dbgEventReason.dbgEventReasonBreakpoint => "breakpoint hit",
+                dbgEventReason.dbgEventReasonStep => "stepped",
+                dbgEventReason.dbgEventReasonUserBreak => "paused by the user",
+                dbgEventReason.dbgEventReasonExceptionThrown => "exception thrown",
+                dbgEventReason.dbgEventReasonExceptionNotHandled => "unhandled exception",
+                _ => null,
+            };
+
+            string? exceptionType = null;
+            string? exceptionMessage = null;
+            if (debugger.LastBreakReason is dbgEventReason.dbgEventReasonExceptionThrown or dbgEventReason.dbgEventReasonExceptionNotHandled)
+            {
+                // Function evaluation can be refused (e.g. in native code or while another thread is mid-call), so each part
+                // falls back to something cheaper: the expression's own type, then its displayed value.
+                exceptionType = Evaluate(debugger, "$exception.GetType().FullName") is string typeName ? typeName.Trim('"') : Evaluate(debugger, "$exception", wantType: true);
+                exceptionMessage = Evaluate(debugger, "$exception.Message") is string message ? message.Trim('"')
+                    : Evaluate(debugger, "$exception") is string shown ? shown.Trim('{', '}', '"') : null;
+                if (exceptionType is null && exceptionMessage is null)
+                {
+                    exceptionType = "(the exception's details couldn't be read; see the Exception Helper or the Locals window)";
+                }
+            }
+
+            var stack = new List<DebugFrame>();
+            try
+            {
+                foreach (StackFrame frame in debugger.CurrentThread.StackFrames)
+                {
+                    stack.Add(ToFrame(frame));
+                    if (stack.Count >= DebugReport.MaxFrames)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is COMException or NullReferenceException or InvalidCastException)
+            {
+                // Some frames (or the whole stack) can't be read, e.g. in native code.
+            }
+
+            int? threads = null;
+            try
+            {
+                threads = debugger.CurrentProgram?.Threads?.Count;
+            }
+            catch (Exception ex) when (ex is COMException or NullReferenceException)
+            {
+            }
+
+            StackFrame? current = debugger.CurrentStackFrame;
+            return new DebugState(
+                DebugMode.Paused,
+                reason,
+                exceptionType,
+                exceptionMessage,
+                stack,
+                current is null ? [] : ToValues(current.Arguments),
+                current is null ? [] : ToValues(current.Locals),
+                threads,
+                ProgramName(debugger));
+        }
+        catch (COMException)
+        {
+            return DebugState.NotDebugging;
+        }
+    }
+
+    private static string? ProgramName(Debugger debugger)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return debugger.CurrentProgram?.Name is { Length: > 0 } name ? Path.GetFileName(name) : null;
+        }
+        catch (Exception ex) when (ex is COMException or NullReferenceException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Evaluates an expression in the paused program: its value, or its type if <paramref name="wantType"/>; null if it can't be evaluated.</summary>
+    private static string? Evaluate(Debugger debugger, string expression, bool wantType = false)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            EnvDTE.Expression result = debugger.GetExpression(expression, false, 2000);
+            return result.IsValidValue ? (wantType ? result.Type : result.Value) : null;
+        }
+        catch (Exception ex) when (ex is COMException or ArgumentException or NullReferenceException)
+        {
+            return null;
+        }
+    }
+
+    private static DebugFrame ToFrame(StackFrame frame)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        string? file = null;
+        int line = 0;
+        if (frame is StackFrame2 detailed)
+        {
+            try
+            {
+                file = string.IsNullOrEmpty(detailed.FileName) ? null : detailed.FileName;
+                line = (int)detailed.LineNumber;
+            }
+            catch (Exception ex) when (ex is COMException or NotImplementedException)
+            {
+            }
+        }
+
+        return new DebugFrame(frame.FunctionName ?? "(unknown)", file, line, frame.Module);
+    }
+
+    private static List<DebugValue> ToValues(Expressions expressions)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var values = new List<DebugValue>();
+        try
+        {
+            foreach (EnvDTE.Expression expression in expressions)
+            {
+                values.Add(new DebugValue(expression.Name ?? string.Empty, expression.Type ?? string.Empty, expression.Value ?? string.Empty));
+                if (values.Count >= 60)
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is COMException or NullReferenceException)
+        {
+        }
+
+        return values;
     }
 
     /// <summary>The files, folders and projects selected in Solution Explorer (in solution or folder view).</summary>

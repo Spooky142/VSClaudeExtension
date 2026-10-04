@@ -52,6 +52,10 @@ public partial class ClaudeChatControl : UserControl
         this.viewModel.Confirm = message =>
             MessageBox.Show(message, "Claude", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
         this.viewModel.ChooseExportPath = ChooseExportPath;
+        this.viewModel.BranchRequested += (_, branch) =>
+            this.package.JoinableTaskFactory.RunAsync(() => this.package.OpenBranchAsync(branch.Info, branch.Prompt)).Task.FileAndForget("ClaudeForVS/Branch");
+        this.viewModel.ReadOutputWindow = () => this.package.Vs.GetOutputWindowText();
+        this.viewModel.ListOpenDocuments = () => this.package.Vs.GetOpenDocuments();
         this.viewModel.CopyText = text =>
         {
             try
@@ -161,6 +165,15 @@ public partial class ClaudeChatControl : UserControl
     /// <summary>Starts a new, empty chat in this window (used when a closed window is reopened for another chat).</summary>
     internal void StartFresh() => this.viewModel.NewChat();
 
+    /// <summary>Opens a branch of another chat here, with the message it was branched from waiting in the prompt box.</summary>
+    internal void OpenBranch(SessionInfo info, string prompt)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        this.viewModel.OpenSession(new SessionItem(info, isCurrent: false));
+        this.SetPromptText(prompt);
+        this.PromptBox.Focus();
+    }
+
     /// <summary>Tools > Claude Chat: show the chat with the prompt box focused.</summary>
     internal void FocusPrompt()
     {
@@ -240,6 +253,26 @@ public partial class ClaudeChatControl : UserControl
 
         this.viewModel.AddAttachment(Attachment.ForErrors(errors, this.viewModel.RepoRoot ?? this.viewModel.RepoPath));
         this.SendOrFill(errors.Count == 1 ? "Fix this error." : "Fix these errors.");
+        this.PromptBox.Focus();
+    }
+
+    /// <summary>The Debug menu's "Ask Claude About This Break": attaches the exception, call stack and locals and asks what's wrong.</summary>
+    internal void AskAboutDebugState(DebugState state)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        this.viewModel.ShowHistory = false;
+        if (state.Mode != DebugMode.Paused)
+        {
+            this.viewModel.ShowStatus(state.Mode == DebugMode.Running
+                ? "The program is still running. Pause it at a breakpoint or an exception first."
+                : "Visual Studio isn't debugging anything right now.");
+            return;
+        }
+
+        this.viewModel.AddAttachment(Attachment.ForDebugState(state, this.viewModel.RepoRoot ?? this.viewModel.RepoPath));
+        this.SendOrFill(state.ExceptionType != null
+            ? "I'm debugging and hit this exception. Explain what's going wrong and how to fix it."
+            : "I'm paused in the debugger. Explain what's going on here and what could be wrong.");
         this.PromptBox.Focus();
     }
 
@@ -375,6 +408,71 @@ public partial class ClaudeChatControl : UserControl
         if (ContextOf<ChatEntry>(sender) is ChatEntry entry)
         {
             this.viewModel.UndoAsync(entry).FileAndForget("ClaudeForVS/Undo");
+        }
+    }
+
+    private void OnBranchPrompt(object sender, RoutedEventArgs e)
+    {
+        if (ContextOf<ChatEntry>(sender) is ChatEntry entry)
+        {
+            this.viewModel.BranchFrom(entry);
+        }
+    }
+
+    private void OnToggleStar(object sender, RoutedEventArgs e)
+    {
+        if (ContextOf<ChatEntry>(sender) is ChatEntry entry)
+        {
+            this.viewModel.ToggleStar(entry);
+        }
+    }
+
+    /// <summary>The header's star button: lists the starred messages, and jumps to the one picked.</summary>
+    private void OnStarredMenu(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu { PlacementTarget = sender as UIElement, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+        IReadOnlyList<ChatEntry> starred = this.viewModel.StarredMessages();
+        if (starred.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = "No starred messages. Hover over a message and choose Star.", IsEnabled = false });
+        }
+
+        foreach (ChatEntry entry in starred)
+        {
+            var item = new MenuItem { Header = (entry.Kind == ChatEntryKind.User ? "You: " : "Claude: ") + entry.Excerpt.Replace("_", "__") };
+            item.Click += (_, _) => this.ScrollToEntry(entry);
+            menu.Items.Add(item);
+        }
+
+        menu.IsOpen = true;
+    }
+
+    /// <summary>Scrolls the transcript so a message sits near the top, and stops following new output.</summary>
+    private void ScrollToEntry(ChatEntry entry)
+    {
+        if (this.TranscriptItems.ItemContainerGenerator.ContainerFromItem(entry) is not FrameworkElement container || this.Transcript.Content is not UIElement content)
+        {
+            return;
+        }
+
+        this.followOutput = false;
+        Point inContent = container.TranslatePoint(new Point(0, 0), content);
+        this.Transcript.ScrollToVerticalOffset(Math.Max(0, inContent.Y - 12));
+    }
+
+    private void OnRestorePoint(object sender, RoutedEventArgs e)
+    {
+        if (ContextOf<ChatEntry>(sender) is ChatEntry entry)
+        {
+            this.viewModel.RestoreToAsync(entry).FileAndForget("ClaudeForVS/RestorePoint");
+        }
+    }
+
+    private void OnRevertChangedFile(object sender, RoutedEventArgs e)
+    {
+        if (ContextOf<ChangedFileRow>(sender) is ChangedFileRow row)
+        {
+            this.viewModel.RevertFileAsync(row).FileAndForget("ClaudeForVS/RevertFile");
         }
     }
 

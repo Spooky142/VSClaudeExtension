@@ -181,7 +181,7 @@ internal sealed partial class ClaudeChatViewModel
         };
     }
 
-    private List<SavedEntry> SavedEntries() => this.Messages
+    private List<SavedEntry> SavedEntries(IEnumerable<ChatEntry>? entries = null) => (entries ?? this.Messages)
         .Select(m => m.Kind == ChatEntryKind.Changes
             ? new SavedEntry
             {
@@ -204,6 +204,7 @@ internal sealed partial class ClaudeChatViewModel
                 Checkpoint = m.Checkpoint,
                 SnapshotBefore = m.SnapshotBefore,
                 SnapshotAfter = m.SnapshotAfter,
+                Starred = m.IsStarred,
             })
         .ToList();
 
@@ -284,6 +285,7 @@ internal sealed partial class ClaudeChatViewModel
                     Checkpoint = e.Checkpoint,
                     SnapshotBefore = e.SnapshotBefore,
                     SnapshotAfter = e.SnapshotAfter,
+                    IsStarred = e.Starred,
                 });
         }
 
@@ -462,6 +464,90 @@ internal sealed partial class ClaudeChatViewModel
         {
             this.Status = "Couldn't save the export: " + ex.Message;
         }
+    }
+
+    /// <summary>Stars or unstars a message, and saves the chat so the star is kept.</summary>
+    public void ToggleStar(ChatEntry entry)
+    {
+        if (!entry.CanStar)
+        {
+            return;
+        }
+
+        entry.IsStarred = !entry.IsStarred;
+        this.OnPropertyChanged(nameof(this.HasStarred));
+        this.SaveChat();
+    }
+
+    public bool HasStarred => this.Messages.Any(m => m.IsStarred);
+
+    /// <summary>The starred messages, in the order they appear in the chat.</summary>
+    public IReadOnlyList<ChatEntry> StarredMessages() => this.Messages.Where(m => m.IsStarred).ToList();
+
+    /// <summary>
+    /// Raised when a chat has been branched: the new saved chat, and the text of the message it was branched from, which
+    /// the new window puts in its prompt box.
+    /// </summary>
+    public event EventHandler<(SessionInfo Info, string Prompt)>? BranchRequested;
+
+    /// <summary>
+    /// Saves a copy of the chat as it was just before a message, to continue in another window, with that message waiting
+    /// in its prompt box. This chat is left as it is, so both ways forward can be tried.
+    /// </summary>
+    public void BranchFrom(ChatEntry prompt)
+    {
+        int index = this.Messages.IndexOf(prompt);
+        if (this.IsBusy || index < 0 || prompt.Kind != ChatEntryKind.User)
+        {
+            return;
+        }
+
+        this.SaveChat();
+        if (this.CurrentInfo() is not SessionInfo current)
+        {
+            return;
+        }
+
+        List<ChatEntry> before = this.Messages.Take(index).ToList();
+        string title = "Branch: " + current.Title;
+        SessionInfo info = current with
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Title = title.Length > 80 ? title.Substring(0, 80) + "…" : title,
+            Created = DateTimeOffset.Now,
+            Updated = DateTimeOffset.Now,
+            MessageCount = before.Count(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant && !m.IsLocalReply),
+            Pinned = false,
+            ClaudeCodeSessionId = null,
+            ClaudeCodeLastMessageId = null,
+            ClaudeCodeResumeAt = null,
+        };
+
+        if (current.Engine == ChatEngineKind.ClaudeCode && prompt.Checkpoint is not { Length: 0 })
+        {
+            // Claude Code forks its own session at that message when the branch sends its first one.
+            string[] parts = prompt.Checkpoint?.Split('|') ?? [];
+            if (parts.Length != 2)
+            {
+                this.Status = "This message can't be branched from: it was sent by an older version of the extension, or the conversation has changed since.";
+                return;
+            }
+
+            info = info with { ClaudeCodeSessionId = parts[0], ClaudeCodeLastMessageId = parts[1], ClaudeCodeResumeAt = prompt.Checkpoint };
+        }
+
+        try
+        {
+            SessionStore.Save(info, this.SavedEntries(before));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            this.Status = "Couldn't save the branch: " + ex.Message;
+            return;
+        }
+
+        this.Status = "Branched into a new window. This chat is unchanged.";
+        this.BranchRequested?.Invoke(this, (info, prompt.Text));
     }
 
     /// <summary>Gives a freshly created engine the context of the chat that was opened from History.</summary>

@@ -142,6 +142,15 @@ public class SlashCommandTests
     }
 
     [Fact]
+    public void RestorePointCommandsKeepTheirName()
+    {
+        Assert.Equal(new SlashCommand("/checkpoint", "before the refactor"), SlashCommands.Parse("/checkpoint before the refactor"));
+        Assert.Equal(new SlashCommand("/checkpoint", string.Empty), SlashCommands.Parse("/checkpoint"));
+        Assert.Equal(new SlashCommand("/restore", "before"), SlashCommands.Parse("/restore before"));
+        Assert.Equal(["/checkpoint "], SlashCommands.Suggest("/check").Select(s => s.Insert));
+    }
+
+    [Fact]
     public void ReviewKeepsItsFocus()
     {
         Assert.Equal(new SlashCommand("/review", "the Parser changes"), SlashCommands.Parse("/review the Parser changes"));

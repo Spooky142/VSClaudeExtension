@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -10,6 +11,17 @@ using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeForVS.ToolWindows;
+
+/// <summary>One entry in the always-allowed list: the saved rule, and how it's shown (tools and trusted hooks are kept in the same list as commands).</summary>
+internal sealed record AllowedRule(string Rule, string Display)
+{
+    public static string Label(string rule) =>
+        rule.StartsWith("hooks:", StringComparison.Ordinal) ? "Run this repository's hooks (trusted until they change)"
+        : rule == "build_solution" ? "Build the solution in Visual Studio"
+        : rule == "run_tests" ? "Run tests"
+        : rule.StartsWith("mcp__", StringComparison.Ordinal) ? "MCP tool: " + rule.Substring(5).Replace("__", " · ")
+        : rule;
+}
 
 /// <summary>Engine, model, effort, repository and API key. Read the result properties after ShowModal() returns true.</summary>
 public partial class SettingsDialog : DialogWindow
@@ -48,6 +60,8 @@ public partial class SettingsDialog : DialogWindow
         this.EffortRadio(settings.Effort).IsChecked = true;
         (settings.Mode switch { AgentMode.Auto => this.ModeAuto, AgentMode.Plan => this.ModePlan, _ => this.ModeCoding }).IsChecked = true;
         this.RepoBox.Text = repoPath;
+        this.RunHooksBox.IsChecked = settings.RunHooks;
+        this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.UpdateRepoHint();
         this.UpdateAllowedCommands();
         this.ApiKeyHint.Text = hasApiKey
@@ -137,7 +151,7 @@ public partial class SettingsDialog : DialogWindow
 
     private void UpdateEngineUi()
     {
-        if (this.CodePanel is null || this.ApiKeySection is null)
+        if (this.CodePanel is null || this.ApiKeySection is null || this.ApiOptionsSection is null)
         {
             return;
         }
@@ -145,6 +159,7 @@ public partial class SettingsDialog : DialogWindow
         bool code = this.SelectedEngine == ChatEngineKind.ClaudeCode;
         this.CodePanel.Visibility = code ? Visibility.Visible : Visibility.Collapsed;
         this.ApiKeySection.Visibility = code ? Visibility.Collapsed : Visibility.Visible;
+        this.ApiOptionsSection.Visibility = code ? Visibility.Collapsed : Visibility.Visible;
 
         // Per-token prices only apply to the API; Claude Code usage comes out of the plan.
         Visibility prices = code ? Visibility.Collapsed : Visibility.Visible;
@@ -279,7 +294,7 @@ public partial class SettingsDialog : DialogWindow
 
         string? root = Git.GitRunner.FindRepoRoot(this.RepoBox.Text.Trim());
         IReadOnlyList<string> rules = root is null ? [] : CommandRules.List(root);
-        this.AllowedCommandsList.ItemsSource = rules;
+        this.AllowedCommandsList.ItemsSource = rules.Select(r => new AllowedRule(r, AllowedRule.Label(r))).ToList();
         this.AllowedCommandsHint.Text = root is null
             ? "Choose a repository to see the commands allowed in it."
             : rules.Count == 0
@@ -289,9 +304,9 @@ public partial class SettingsDialog : DialogWindow
 
     private void OnRemoveAllowedCommand(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is string rule && Git.GitRunner.FindRepoRoot(this.RepoBox.Text.Trim()) is string root)
+        if ((sender as FrameworkElement)?.DataContext is AllowedRule allowed && Git.GitRunner.FindRepoRoot(this.RepoBox.Text.Trim()) is string root)
         {
-            CommandRules.Remove(root, rule);
+            CommandRules.Remove(root, allowed.Rule);
             this.UpdateAllowedCommands();
         }
     }
@@ -354,6 +369,8 @@ public partial class SettingsDialog : DialogWindow
             Effort = this.SelectedEffort,
             Mode = this.SelectedMode,
             PinnedRepoPath = follows ? null : root ?? text,
+            RunHooks = this.RunHooksBox.IsChecked == true,
+            SpendLimitUsd = double.TryParse(this.SpendLimitBox.Text.Trim().TrimStart('$'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out double limit) && limit > 0 ? limit : 0,
         };
         this.ResultRepoPath = text.Length == 0 ? this.SolutionRepoRoot() ?? string.Empty : root ?? text;
         this.ResultApiKey = this.ApiKeyBox.Password.Trim() is { Length: > 0 } key ? key : null;

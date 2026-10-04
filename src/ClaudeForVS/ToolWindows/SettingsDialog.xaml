@@ -140,7 +140,7 @@
       <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Content="Use solution" Click="OnUseSolution"
               ToolTip="Use the git repository of the open solution" />
       <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Content="Browse…" Click="OnBrowse" />
-      <TextBox x:Name="RepoBox" Style="{StaticResource Field}" TextChanged="OnRepoChanged" />
+      <TextBox x:Name="RepoBox" AutomationProperties.Name="Repository folder" Style="{StaticResource Field}" TextChanged="OnRepoChanged" />
     </DockPanel>
     <DockPanel Margin="2,6,0,0">
       <TextBlock x:Name="RepoHintIcon" DockPanel.Dock="Left" Style="{StaticResource Icon}" FontSize="11" Margin="0,1,6,0" VerticalAlignment="Top" />
@@ -157,7 +157,7 @@
             <DockPanel>
               <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE74D;" Width="24" Height="24"
                       ToolTip="Ask again before running this" Click="OnRemoveAllowedCommand" />
-              <TextBlock Text="{Binding}" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+              <TextBlock Text="{Binding Display}" ToolTip="{Binding Rule}" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
             </DockPanel>
           </Border>
         </DataTemplate>
@@ -165,10 +165,26 @@
     </ItemsControl>
     <TextBlock x:Name="AllowedCommandsHint" Style="{StaticResource CardNote}" Margin="2,2,0,0" />
 
+    <!-- Claude API engine's extras: hooks and a spending limit -->
+    <StackPanel x:Name="ApiOptionsSection">
+      <TextBlock Style="{StaticResource SectionTitle}" Text="Claude API options" />
+      <CheckBox x:Name="RunHooksBox" Content="Run hooks from Claude Code's settings files"
+                AutomationProperties.Name="Run hooks from Claude Code's settings files" />
+      <TextBlock Style="{StaticResource CardNote}" Margin="22,2,0,0"
+                 Text="Hooks are commands from ~/.claude/settings.json and the repository's .claude settings that run before and after tools, when you send a message, and when Claude finishes. Ones from the repository ask for your approval first. Claude Code runs its own hooks whatever this says." />
+      <DockPanel Margin="0,12,0,0">
+        <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" Text="Spending limit per chat ($)" />
+        <TextBox x:Name="SpendLimitBox" Style="{StaticResource Field}" Width="90" HorizontalAlignment="Left"
+                 AutomationProperties.Name="Spending limit per chat in dollars" />
+      </DockPanel>
+      <TextBlock Style="{StaticResource CardNote}" Margin="2,6,0,0"
+                 Text="Claude stops and asks before going past this estimated cost in one chat. Leave it empty for no limit." />
+    </StackPanel>
+
     <!-- API key (Claude API engine only) -->
     <StackPanel x:Name="ApiKeySection">
       <TextBlock Style="{StaticResource SectionTitle}" Text="Anthropic API key" />
-      <PasswordBox x:Name="ApiKeyBox" Style="{StaticResource PasswordField}" />
+      <PasswordBox x:Name="ApiKeyBox" AutomationProperties.Name="Anthropic API key" Style="{StaticResource PasswordField}" />
       <TextBlock x:Name="ApiKeyHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
     </StackPanel>
 

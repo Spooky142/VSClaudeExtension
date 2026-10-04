@@ -234,6 +234,184 @@ internal sealed partial class ClaudeChatViewModel
         return false;
     }
 
+    /// <summary>The files a restore would touch, one per line, with what would happen to each.</summary>
+    private static string DescribeRestore(IReadOnlyList<SnapshotChange> changes) =>
+        string.Join("\n", changes.Take(15).Select(c => $"    {c.Status switch { 'A' => "delete", 'D' => "restore", _ => "revert" }}  {c.Path}"))
+        + (changes.Count > 15 ? $"\n    … and {changes.Count - 15} more" : string.Empty);
+
+    /// <summary>Puts one file a prompt changed back the way it was before that prompt, after the user confirms.</summary>
+    public async Task RevertFileAsync(ChangedFileRow row)
+    {
+        if (this.IsBusy || row.Entry.SnapshotBefore is not string before || this.RepoRoot is not string root)
+        {
+            return;
+        }
+
+        this.IsBusy = true;
+        try
+        {
+            this.Status = "Checking the file…";
+            string? now = await WorkingTreeSnapshot.CaptureAsync(root, CancellationToken.None);
+            if (now is null)
+            {
+                this.Status = "Couldn't read the working tree, so nothing was reverted.";
+                return;
+            }
+
+            SnapshotChange? change = (await WorkingTreeSnapshot.ChangesAsync(root, before, now, CancellationToken.None))
+                .FirstOrDefault(c => string.Equals(c.Path, row.Path, StringComparison.OrdinalIgnoreCase));
+            this.Status = string.Empty;
+            if (change is null)
+            {
+                this.Status = $"{row.Path} is already the way it was before that message.";
+                return;
+            }
+
+            bool editedSince = row.Entry.SnapshotAfter is string after && after != now
+                && (await WorkingTreeSnapshot.ChangesAsync(root, after, now, CancellationToken.None)).Any(c => string.Equals(c.Path, row.Path, StringComparison.OrdinalIgnoreCase));
+            string verb = change.Status switch { 'A' => "Delete", 'D' => "Restore", _ => "Put back" };
+            string warning = editedSince ? "\n\nThis file has changed since that message finished (your own edits or later messages). Those changes will be lost too." : string.Empty;
+            if (!this.Confirm($"{verb} {row.Path} the way it was before this message?{warning}"))
+            {
+                return;
+            }
+
+            if (await WorkingTreeSnapshot.RestoreAsync(root, before, [change], CancellationToken.None) is string error)
+            {
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Couldn't revert the file", error));
+                return;
+            }
+
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"Reverted {row.Path}"));
+            this.PromptSent?.Invoke(this, EventArgs.Empty);
+            this.SaveChat();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Couldn't revert the file", ex.Message));
+        }
+        finally
+        {
+            this.IsBusy = false;
+        }
+    }
+
+    /// <summary>/checkpoint: remembers how every file is right now, as a restore point in the transcript.</summary>
+    public async Task CreateRestorePointAsync(string name)
+    {
+        if (this.IsBusy)
+        {
+            return;
+        }
+
+        if (this.RepoRoot is not string root)
+        {
+            this.Status = "Send a message or set the repository in Settings first, so there's a repository to save a restore point of.";
+            return;
+        }
+
+        this.IsBusy = true;
+        try
+        {
+            this.Status = "Saving a restore point…";
+            string? tree = await WorkingTreeSnapshot.CaptureAsync(root, CancellationToken.None);
+            this.Status = string.Empty;
+            if (tree is null)
+            {
+                this.Status = "Couldn't read the working tree, so no restore point was saved.";
+                return;
+            }
+
+            name = name.Trim();
+            string label = name.Length > 0 ? name : DateTime.Now.ToString("HH:mm", System.Globalization.CultureInfo.CurrentCulture);
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"Restore point: {label}") { SnapshotBefore = tree });
+            this.PromptSent?.Invoke(this, EventArgs.Empty);
+            this.Status = "Saved a restore point. Restore it from its row or with /restore.";
+            this.SaveChat();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            this.Status = "Couldn't save a restore point: " + ex.Message;
+        }
+        finally
+        {
+            this.IsBusy = false;
+        }
+    }
+
+    /// <summary>/restore [name]: restores the named restore point (the latest if no name is given).</summary>
+    public Task RestoreCommandAsync(string name)
+    {
+        List<ChatEntry> points = this.Messages.Where(m => m.IsRestorePoint).ToList();
+        name = name.Trim();
+        ChatEntry? point = name.Length == 0
+            ? points.LastOrDefault()
+            : points.LastOrDefault(p => p.Header.EndsWith(name, StringComparison.OrdinalIgnoreCase))
+                ?? points.LastOrDefault(p => p.Header.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0);
+        if (point is null)
+        {
+            this.Status = points.Count == 0
+                ? "There are no restore points in this chat. /checkpoint [name] saves one."
+                : $"No restore point matches \"{name}\". They are: {string.Join(", ", points.Select(p => p.Header.Replace("Restore point: ", string.Empty)))}.";
+            return Task.CompletedTask;
+        }
+
+        return this.RestoreToAsync(point);
+    }
+
+    /// <summary>Puts every file back the way it was at a restore point, after the user confirms the list.</summary>
+    public async Task RestoreToAsync(ChatEntry point)
+    {
+        if (this.IsBusy || point.SnapshotBefore is not string tree || this.RepoRoot is not string root)
+        {
+            return;
+        }
+
+        this.IsBusy = true;
+        try
+        {
+            this.Status = "Checking which files changed…";
+            string? now = await WorkingTreeSnapshot.CaptureAsync(root, CancellationToken.None);
+            if (now is null)
+            {
+                this.Status = "Couldn't read the working tree, so nothing was restored.";
+                return;
+            }
+
+            IReadOnlyList<SnapshotChange> changes = await WorkingTreeSnapshot.ChangesAsync(root, tree, now, CancellationToken.None);
+            this.Status = string.Empty;
+            if (changes.Count == 0)
+            {
+                this.Status = "Nothing to restore: the files are already as they were at that restore point.";
+                return;
+            }
+
+            string files = changes.Count == 1 ? "1 file" : $"{changes.Count} files";
+            if (!this.Confirm($"Put {files} back the way {(changes.Count == 1 ? "it was" : "they were")} at \"{point.Header.Replace("Restore point: ", string.Empty)}\"?\n\n{DescribeRestore(changes)}\n\nChanges made to {(changes.Count == 1 ? "it" : "them")} since then, by Claude or by you, will be lost. The conversation is left as it is."))
+            {
+                return;
+            }
+
+            if (await WorkingTreeSnapshot.RestoreAsync(root, tree, changes, CancellationToken.None) is string error)
+            {
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Couldn't restore every file", error));
+                return;
+            }
+
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"Restored {files} to \"{point.Header.Replace("Restore point: ", string.Empty)}\""));
+            this.PromptSent?.Invoke(this, EventArgs.Empty);
+            this.SaveChat();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Couldn't restore the files", ex.Message));
+        }
+        finally
+        {
+            this.IsBusy = false;
+        }
+    }
+
     /// <summary>Puts every file changed since a prompt started back the way it was, after the user confirms the list.</summary>
     public async Task UndoAsync(ChatEntry entry)
     {
@@ -267,8 +445,7 @@ internal sealed partial class ClaudeChatViewModel
             IReadOnlyList<SnapshotChange> later = entry.SnapshotAfter is string after && after != now
                 ? await WorkingTreeSnapshot.ChangesAsync(root, after, now, CancellationToken.None)
                 : [];
-            string list = string.Join("\n", changes.Take(15).Select(c => $"    {c.Status switch { 'A' => "delete", 'D' => "restore", _ => "revert" }}  {c.Path}"))
-                + (changes.Count > 15 ? $"\n    … and {changes.Count - 15} more" : string.Empty);
+            string list = DescribeRestore(changes);
             string warning = later.Count > 0
                 ? $"\n\n{later.Count} of these {(later.Count == 1 ? "file has" : "files have")} changed since that message finished (your own edits or later messages). Those changes will be lost too."
                 : string.Empty;

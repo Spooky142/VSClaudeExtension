@@ -30,6 +30,18 @@ internal enum AttachmentKind
 
     /// <summary>A folder or project from Solution Explorer, with the files in it.</summary>
     Folder,
+
+    /// <summary>The debugger paused at a breakpoint or exception: the exception, call stack and locals.</summary>
+    Debug,
+
+    /// <summary>The repository's uncommitted changes, from /diff.</summary>
+    Diff,
+
+    /// <summary>The text of the Output window's active pane, from /output.</summary>
+    Output,
+
+    /// <summary>The files open in the editor, from /openfiles.</summary>
+    OpenFiles,
 }
 
 /// <summary>Reading what Test Explorer's Copy puts on the clipboard.</summary>
@@ -88,6 +100,10 @@ internal sealed class Attachment
         AttachmentKind.Image => "", // picture
         AttachmentKind.Tests => "", // bug
         AttachmentKind.Folder => "", // folder
+        AttachmentKind.Debug => "", // bug
+        AttachmentKind.Diff => "", // edit
+        AttachmentKind.Output => "", // list
+        AttachmentKind.OpenFiles => "", // documents
         _ => "", // document
     };
 
@@ -255,6 +271,55 @@ internal sealed class Attachment
             : $"{errors.Count} Error List {(errors.Count == 1 ? "item" : "items")}";
         string tip = string.Join("\n", errors.Take(8).Select(e => $"{e.Code} {e.Description}".Trim())) + (errors.Count > 8 ? $"\n… and {errors.Count - 8} more" : string.Empty);
         return new Attachment(AttachmentKind.Errors, label, tip, context.ToString().TrimEnd());
+    }
+
+    /// <summary>The debugger paused at a breakpoint or exception.</summary>
+    public static Attachment ForDebugState(DebugState state, string repoRoot)
+    {
+        string report = DebugReport.Format(state, repoRoot);
+        string label = state.ExceptionType != null ? ShortTestName(state.ExceptionType) : "Debugger break";
+        string tip = state.Stack.Count > 0 ? $"{state.Stack[0].Function}\n{state.Stack.Count} stack frames, {state.Locals.Count} locals" : "Paused in the debugger";
+        return new Attachment(AttachmentKind.Debug, label, tip, "The state of Visual Studio's debugger, which is paused:\n" + Fence(report, "debugger.txt"));
+    }
+
+    /// <summary>The repository's uncommitted changes (a unified diff, plus the names of untracked files).</summary>
+    public static Attachment ForDiff(string diff, IReadOnlyList<string> untracked)
+    {
+        var context = new StringBuilder("The repository's uncommitted changes (git diff HEAD):\n").Append(Fence(diff.Length == 0 ? "(no changes to tracked files)" : diff, "changes.diff"));
+        if (untracked.Count > 0)
+        {
+            context.Append("\nUntracked files (not in the diff above):\n").Append(string.Join("\n", untracked.Take(100)));
+            if (untracked.Count > 100)
+            {
+                context.Append($"\n… and {untracked.Count - 100} more");
+            }
+        }
+
+        int files = diff.Split('\n').Count(l => l.StartsWith("diff --git ", StringComparison.Ordinal));
+        string label = files + untracked.Count == 0 ? "No changes" : $"{files + untracked.Count} changed {(files + untracked.Count == 1 ? "file" : "files")}";
+        return new Attachment(AttachmentKind.Diff, label, $"{files} modified, {untracked.Count} untracked", context.ToString());
+    }
+
+    /// <summary>The text of an Output window pane.</summary>
+    public static Attachment ForOutput(string paneName, string text)
+    {
+        // The end is what matters: a build's errors come last.
+        // Cut here, leaving room for the note: Fence would otherwise cut the end off.
+        const string Note = "… (earlier output left out)\n";
+        string shown = text.Length > MaxSelectionChars ? Note + text.Substring(text.Length - (MaxSelectionChars - Note.Length)) : text;
+        string name = paneName.Length > 0 ? paneName : "Output";
+        return new Attachment(AttachmentKind.Output, name, $"The Output window's \"{name}\" pane, {text.Split('\n').Length:N0} lines", $"The text of the \"{name}\" pane in Visual Studio's Output window:\n" + Fence(shown, "output.txt"));
+    }
+
+    /// <summary>The files open in the editor.</summary>
+    public static Attachment ForOpenFiles(IReadOnlyList<(string Path, bool Unsaved)> documents, string repoRoot)
+    {
+        string list = string.Join("\n", documents.Select(d => $"- {DisplayPath(d.Path, repoRoot)}{(d.Unsaved ? " (unsaved changes)" : string.Empty)}"));
+        return new Attachment(
+            AttachmentKind.OpenFiles,
+            $"{documents.Count} open {(documents.Count == 1 ? "file" : "files")}",
+            string.Join("\n", documents.Take(10).Select(d => Path.GetFileName(d.Path))) + (documents.Count > 10 ? $"\n… and {documents.Count - 10} more" : string.Empty),
+            "The files the user has open in Visual Studio's editor:\n" + list);
     }
 
     public static Attachment ForImage(PromptImage image, ImageSource? thumbnail, string name) =>

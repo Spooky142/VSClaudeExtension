@@ -45,6 +45,11 @@
       <Group guid="guidClaudeCmdSet" id="GitChangesGroup" priority="0x0600">
         <Parent guid="guidGitCmdSet" id="GitChangesActionsMenu" />
       </Group>
+
+      <!-- The Debug menu. -->
+      <Group guid="guidClaudeCmdSet" id="DebugMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_DEBUG" />
+      </Group>
     </Groups>
 
     <Buttons>
@@ -113,6 +118,14 @@
           <ButtonText>Write Commit Message with Claude</ButtonText>
         </Strings>
       </Button>
+
+      <!-- Always enabled, so it works before the package has loaded; it says so if the debugger isn't paused. -->
+      <Button guid="guidClaudeCmdSet" id="AskAboutDebugStateCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="DebugMenuGroup" />
+        <Strings>
+          <ButtonText>Ask Claude About This Break</ButtonText>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -139,6 +152,9 @@
     <CommandPlacement guid="guidClaudeCmdSet" id="WriteCommitMessageCommandId" priority="0x0100">
       <Parent guid="guidClaudeCmdSet" id="GitChangesGroup" />
     </CommandPlacement>
+    <CommandPlacement guid="guidClaudeCmdSet" id="AskAboutDebugStateCommandId" priority="0x0500">
+      <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
+    </CommandPlacement>
   </CommandPlacements>
 
   <KeyBindings>
@@ -158,6 +174,7 @@
       <IDSymbol name="SolutionExplorerGroup" value="0x1026" />
       <IDSymbol name="GitMenuGroup" value="0x1027" />
       <IDSymbol name="GitChangesGroup" value="0x1028" />
+      <IDSymbol name="DebugMenuGroup" value="0x1029" />
       <IDSymbol name="ShowClaudeWindowCommandId" value="0x0100" />
       <IDSymbol name="AskAboutSelectionCommandId" value="0x0101" />
       <IDSymbol name="ExplainCommandId" value="0x0102" />
@@ -168,6 +185,7 @@
       <IDSymbol name="FixTestsCommandId" value="0x0107" />
       <IDSymbol name="AddToClaudeCommandId" value="0x0108" />
       <IDSymbol name="WriteCommitMessageCommandId" value="0x0109" />
+      <IDSymbol name="AskAboutDebugStateCommandId" value="0x010A" />
     </GuidSymbol>
 
     <!-- Test Explorer's command set and context menu. -->

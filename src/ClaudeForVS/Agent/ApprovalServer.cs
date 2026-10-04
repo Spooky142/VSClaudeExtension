@@ -28,7 +28,9 @@ internal sealed class ApprovalServer : IDisposable
 
     public const string BuildTool = "mcp__" + ServerName + "__build_solution";
 
-    private readonly HttpListener listener = new();
+    public const string DebugTool = "mcp__" + ServerName + "__get_debug_state";
+
+    private readonly HttpListener listener;
     private readonly Func<string, JsonElement, string?, Task<PermissionDecision>> decide;
     private readonly Func<string, JsonElement, Task<(string Text, bool IsError)>> runTool;
 
@@ -50,17 +52,21 @@ internal sealed class ApprovalServer : IDisposable
         {
             int port = random.Next(49152, 65000);
             string prefix = $"http://localhost:{port}/{token}/";
+
+            // A listener that failed to start can't be used again, so each attempt gets its own.
+            var candidate = new HttpListener();
             try
             {
-                this.listener.Prefixes.Clear();
-                this.listener.Prefixes.Add(prefix);
-                this.listener.Start();
+                candidate.Prefixes.Add(prefix);
+                candidate.Start();
+                this.listener = candidate;
                 this.Url = prefix + "mcp";
                 break;
             }
             catch (HttpListenerException) when (attempt < 20)
             {
                 // Port in use; try another.
+                candidate.Close();
             }
         }
 
@@ -256,6 +262,23 @@ internal static class VisualStudioTools
                 "Build the solution open in Visual Studio (Build > Build Solution), wait for it to finish, and return the result with the " +
                 "Error List's errors and warnings. Works for projects `dotnet build` can't build, such as C++ or older .NET Framework ones.",
             ["inputSchema"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() },
+        },
+        new JsonObject
+        {
+            ["name"] = "get_debug_state",
+            ["description"] =
+                "Read Visual Studio's debugger: whether a program is being debugged and, when it's paused at a breakpoint or an exception, " +
+                "the exception, the call stack and the current frame's arguments and locals. Use it when the user is stuck on a bug they're " +
+                "debugging; then read the source files in the stack with the usual tools.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["frames"] = new JsonObject { ["type"] = "integer", ["description"] = "How many stack frames to list (default 15, max 50)." },
+                },
+            },
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
         },
     ];
 }

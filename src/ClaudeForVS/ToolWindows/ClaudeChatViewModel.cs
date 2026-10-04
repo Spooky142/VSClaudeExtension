@@ -226,6 +226,12 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     /// <summary>Puts text on the clipboard; false if the clipboard is busy. Set by the view.</summary>
     public Func<string, bool> CopyText { get; set; } = _ => false;
 
+    /// <summary>The name and text of the Output window's active pane (for /output); null if it can't be read.</summary>
+    public Func<(string Name, string Text)?> ReadOutputWindow { get; set; } = () => null;
+
+    /// <summary>The files open in the editor (for /openfiles).</summary>
+    public Func<IReadOnlyList<(string Path, bool Unsaved)>> ListOpenDocuments { get; set; } = () => [];
+
     public ObservableCollection<ChatEntry> Messages { get; } = [];
 
     /// <summary>Prompts sent before, for Up/Down recall.</summary>
@@ -553,6 +559,10 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         {
             this.engine.Effort = newSettings.Effort; // used from the next message on
             this.engine.Mode = newSettings.Mode;
+            if (this.engine is ClaudeAgent agent)
+            {
+                ApplyApiSettings(agent, newSettings);
+            }
         }
 
         this.Status = "Settings saved.";
@@ -690,7 +700,16 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             return null;
         }
 
-        return new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode);
+        var agent = new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode);
+        ApplyApiSettings(agent, this.settings);
+        return agent;
+    }
+
+    /// <summary>The settings that only the Claude API engine has, which can change between messages.</summary>
+    private static void ApplyApiSettings(ClaudeAgent agent, AgentSettings settings)
+    {
+        agent.HooksEnabled = settings.RunHooks;
+        agent.SpendLimitUsd = settings.SpendLimitUsd;
     }
 
     /// <param name="prompt">The prompt being answered; a restore point is taken around it so its changes can be undone. Null for commands.</param>

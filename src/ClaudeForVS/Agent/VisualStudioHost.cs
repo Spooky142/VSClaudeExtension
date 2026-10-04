@@ -24,6 +24,9 @@ internal interface IVisualStudioHost
 
     /// <summary>Builds the open solution the way Build > Build Solution does, and waits for it to finish.</summary>
     Task<BuildOutcome> BuildSolutionAsync(CancellationToken cancellationToken);
+
+    /// <summary>Whether the debugger is paused, and if so the exception, call stack and locals.</summary>
+    Task<DebugState> GetDebugStateAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>Where the engines find Visual Studio. Null outside Visual Studio (e.g. in tests).</summary>
