@@ -16,7 +16,7 @@ The package is written to `src/ClaudeForVS/bin/Release/net48/ClaudeForVS.vsix`. 
 dotnet test tests\ClaudeForVS.Tests -c Release
 ```
 
-xUnit tests for the logic that doesn't need Visual Studio (parsing, Claude Code's stream output, slash and custom commands, highlighting, prompt composition, export, command rules, CLAUDE.md loading, `run_command`) plus git-backed tests for the undo snapshots, which need git on PATH. All tests should pass.
+xUnit tests for the logic that doesn't need Visual Studio (parsing, Claude Code's stream output, slash and custom commands, highlighting, prompt composition, export, command rules, CLAUDE.md loading, `run_command`, `glob`/`grep`, web results) plus git-backed tests for the undo snapshots and diff stats, which need git on PATH. All tests should pass.
 
 ## Versioning
 

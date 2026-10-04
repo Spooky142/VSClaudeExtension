@@ -135,18 +135,29 @@ internal sealed partial class ClaudeChatViewModel
     }
 
     private List<SavedEntry> SavedEntries() => this.Messages
-        .Select(m => new SavedEntry
-        {
-            Kind = m.Kind,
-            Header = m.Header,
-            Text = m.Text,
-            Detail = string.Join("\n", m.DetailLines.Select(l => l.Text)),
-            Activity = m.Activity,
-            Note = m.HasNote ? m.Note : null,
-            Checkpoint = m.Checkpoint,
-            SnapshotBefore = m.SnapshotBefore,
-            SnapshotAfter = m.SnapshotAfter,
-        })
+        .Select(m => m.Kind == ChatEntryKind.Changes
+            ? new SavedEntry
+            {
+                Kind = ChatEntryKind.Tool,
+                Header = ChatEntry.Summarize(m.Files),
+                Detail = string.Join("\n", m.FileRows.Select(f => $"{f.StatusText,-8}  {f.AddedText} {f.RemovedText}  {f.Path}")),
+                Activity = ActivityKind.Edit,
+                SnapshotBefore = m.SnapshotBefore,
+                SnapshotAfter = m.SnapshotAfter,
+                Files = m.Files,
+            }
+            : new SavedEntry
+            {
+                Kind = m.Kind,
+                Header = m.Header,
+                Text = m.Text,
+                Detail = string.Join("\n", m.DetailLines.Select(l => l.Text)),
+                Activity = m.Activity,
+                Note = m.HasNote ? m.Note : null,
+                Checkpoint = m.Checkpoint,
+                SnapshotBefore = m.SnapshotBefore,
+                SnapshotAfter = m.SnapshotAfter,
+            })
         .ToList();
 
     /// <summary>Writes the current chat to disk so it can be reopened later.</summary>
@@ -211,6 +222,8 @@ internal sealed partial class ClaudeChatViewModel
             // Chats saved by 0.3.9-0.3.10 kept the token count in the header.
             this.Messages.Add(e.Kind == ChatEntryKind.Usage && e.Text.Length == 0
                 ? new ChatEntry(e.Kind, string.Empty, e.Header)
+                : e.Kind == ChatEntryKind.Tool && e.Files is { Count: > 0 }
+                ? new ChatEntry(ChatEntryKind.Changes, string.Empty) { Files = e.Files, SnapshotBefore = e.SnapshotBefore, SnapshotAfter = e.SnapshotAfter }
                 : new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity)
                 {
                     Note = e.Note ?? string.Empty,

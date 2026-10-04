@@ -12,6 +12,14 @@ namespace ClaudeForVS.Git;
 /// <param name="Path">Repository-relative path with forward slashes.</param>
 internal sealed record SnapshotChange(char Status, string Path);
 
+/// <summary>A changed file with its line counts.</summary>
+/// <param name="Status">'A' added, 'D' deleted or 'M' modified, as in <see cref="SnapshotChange"/>.</param>
+/// <param name="Path">Repository-relative path with forward slashes.</param>
+/// <param name="Added">Lines added; 0 for binary files.</param>
+/// <param name="Removed">Lines removed; 0 for binary files.</param>
+/// <param name="Binary">True when git can't count lines in the file.</param>
+internal sealed record FileStat(char Status, string Path, int Added, int Removed, bool Binary);
+
 /// <summary>
 /// Records the whole working tree (tracked and untracked files, minus ignored ones) as a git tree object, without
 /// touching the index, branches or stash, so Claude's changes since a snapshot can be listed and undone.
@@ -73,6 +81,54 @@ internal static class WorkingTreeSnapshot
         (int code, string output) = await GitRunner.RunAsync(
             repoRoot, ["diff", "--name-status", "--no-renames", "-z", fromTree, toTree], cancellationToken, includeStderr: false).ConfigureAwait(false);
         return code == 0 ? ParseNameStatus(output) : [];
+    }
+
+    /// <summary>Files that differ between two snapshots, with lines added and removed in each.</summary>
+    public static async Task<IReadOnlyList<FileStat>> StatsAsync(string repoRoot, string fromTree, string toTree, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<SnapshotChange> changes = await ChangesAsync(repoRoot, fromTree, toTree, cancellationToken).ConfigureAwait(false);
+        if (changes.Count == 0)
+        {
+            return [];
+        }
+
+        (int code, string output) = await GitRunner.RunAsync(
+            repoRoot, ["diff", "--numstat", "--no-renames", "-z", fromTree, toTree], cancellationToken, includeStderr: false).ConfigureAwait(false);
+        Dictionary<string, (int Added, int Removed, bool Binary)> counts = code == 0 ? ParseNumstat(output) : [];
+        return changes
+            .Select(c => counts.TryGetValue(c.Path, out var n) ? new FileStat(c.Status, c.Path, n.Added, n.Removed, n.Binary) : new FileStat(c.Status, c.Path, 0, 0, false))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Parses <c>git diff --numstat --no-renames -z</c> output: "added\tremoved\tpath", each NUL-terminated, with "-"
+    /// for both counts when the file is binary.
+    /// </summary>
+    internal static Dictionary<string, (int Added, int Removed, bool Binary)> ParseNumstat(string output)
+    {
+        var counts = new Dictionary<string, (int, int, bool)>(StringComparer.Ordinal);
+        foreach (string record in output.Split('\0'))
+        {
+            string[] parts = record.Split(['\t'], 3);
+            if (parts.Length != 3 || parts[2].Length == 0)
+            {
+                continue;
+            }
+
+            bool binary = parts[0] == "-" && parts[1] == "-";
+            int.TryParse(parts[0], out int added);
+            int.TryParse(parts[1], out int removed);
+            counts[parts[2]] = (added, removed, binary);
+        }
+
+        return counts;
+    }
+
+    /// <summary>A file's text as it was in a snapshot, or null if it wasn't in it.</summary>
+    public static async Task<string?> ReadFileAsync(string repoRoot, string tree, string path, CancellationToken cancellationToken)
+    {
+        (int code, string text) = await GitRunner.RunAsync(repoRoot, ["show", $"{tree}:{path}"], cancellationToken, includeStderr: false).ConfigureAwait(false);
+        return code == 0 ? text.TrimStart('﻿') : null;
     }
 
     /// <summary>Parses <c>git diff --name-status -z</c> output: a status, then a path, each NUL-terminated.</summary>

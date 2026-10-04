@@ -66,6 +66,33 @@
       </Setter>
     </Style>
 
+    <!-- A file in the files-changed row; clicking it opens the file's diff. -->
+    <Style x:Key="FileRow" TargetType="Button">
+      <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="Transparent" Padding="10,3">
+              <ContentPresenter HorizontalAlignment="Stretch" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <!-- One line of tool output or diff. -->
     <DataTemplate x:Key="DiffLineTemplate">
       <Border x:Name="Bg" Padding="8,0">
@@ -260,6 +287,56 @@
       <TextBlock Text="{Binding Text}" Style="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Left" Margin="12,0,0,10" />
     </DataTemplate>
 
+    <!-- The files a prompt changed: "3 files changed +42 −10", expanding to one row per file that opens its diff. -->
+    <DataTemplate x:Key="ChangesTemplate">
+      <Border Margin="0,4,24,4" HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+        <StackPanel>
+          <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" ToolTip="Show the files Claude changed">
+            <DockPanel Margin="8,5">
+              <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;" Margin="10,0,0,0" />
+              <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE70F;" Foreground="{StaticResource Accent}" Margin="0,0,8,0" />
+              <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="{Binding FilesChangedText}" FontSize="11.5" />
+                <TextBlock Text="{Binding AddedText}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" Foreground="{StaticResource AddedGreen}" Margin="10,0,0,0" />
+                <TextBlock Text="{Binding RemovedText}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" Foreground="{StaticResource RemovedRed}" Margin="6,0,0,0" />
+              </StackPanel>
+            </DockPanel>
+          </ToggleButton>
+          <Border x:Name="Details" Visibility="Collapsed" BorderThickness="0,1,0,0" BorderBrush="{StaticResource SubtleBorder}" Padding="0,3">
+            <ItemsControl ItemsSource="{Binding FileRows}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Style="{StaticResource FileRow}" Click="OnOpenChangedFile" IsEnabled="{Binding CanDiff}"
+                          ToolTip="{Binding StatusText}">
+                    <DockPanel>
+                      <TextBlock DockPanel.Dock="Right" Text="{Binding RemovedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                 Foreground="{StaticResource RemovedRed}" Margin="6,0,0,0" />
+                      <TextBlock DockPanel.Dock="Right" Text="{Binding AddedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                 Foreground="{StaticResource AddedGreen}" Margin="12,0,0,0" />
+                      <TextBlock x:Name="FilePath" Text="{Binding Path}" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                                 TextTrimming="CharacterEllipsis" />
+                    </DockPanel>
+                  </Button>
+                  <DataTemplate.Triggers>
+                    <DataTrigger Binding="{Binding Stat.Status}" Value="D">
+                      <Setter TargetName="FilePath" Property="TextDecorations" Value="Strikethrough" />
+                      <Setter TargetName="FilePath" Property="Opacity" Value="0.7" />
+                    </DataTrigger>
+                  </DataTemplate.Triggers>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Border>
+        </StackPanel>
+      </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding IsChecked, ElementName=Toggle}" Value="True">
+          <Setter TargetName="Details" Property="Visibility" Value="Visible" />
+          <Setter TargetName="Chevron" Property="Text" Value="&#xE70D;" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+
     <!-- An attachment above the prompt box: image thumbnail or icon, label, and × to remove it. -->
     <DataTemplate x:Key="AttachmentChip">
       <Border Margin="0,0,6,6" CornerRadius="10" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
@@ -291,7 +368,8 @@
                                      Tool="{StaticResource ToolTemplate}"
                                      Error="{StaticResource ErrorTemplate}"
                                      Notice="{StaticResource NoticeTemplate}"
-                                     Usage="{StaticResource UsageTemplate}" />
+                                     Usage="{StaticResource UsageTemplate}"
+                                     Changes="{StaticResource ChangesTemplate}" />
     </ResourceDictionary>
   </UserControl.Resources>
 

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using ClaudeForVS.Agent;
+using ClaudeForVS.Git;
 
 namespace ClaudeForVS.ToolWindows;
 
@@ -36,6 +37,17 @@ internal static class ChatExporter
 
                 case ChatEntryKind.Assistant:
                     md.Append("## Claude\n\n").Append(entry.Text.Trim()).Append("\n\n");
+                    break;
+
+                case ChatEntryKind.Tool when entry.Files is { Count: > 0 } files:
+                    md.Append("_").Append(ChatEntry.Summarize(files)).Append("_\n\n");
+                    foreach (FileStat file in files)
+                    {
+                        string counts = file.Binary ? "binary" : $"+{file.Added} −{file.Removed}";
+                        md.Append("- `").Append(file.Path.Replace("`", "'")).Append("` ").Append(counts).Append('\n');
+                    }
+
+                    md.Append('\n');
                     break;
 
                 case ChatEntryKind.Tool:

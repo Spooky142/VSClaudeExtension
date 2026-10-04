@@ -707,6 +707,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
                 this.chatHasCost |= this.promptHasCost;
             }
 
+            ChatEntry? usageEntry = this.liveUsageEntry;
             this.liveUsageEntry = null;
             this.currentAssistant = null;
             this.currentThinking = null;
@@ -716,6 +717,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             if (prompt?.SnapshotBefore != null)
             {
                 prompt.SnapshotAfter = await WorkingTreeSnapshot.CaptureAsync(runEngine.RepoRoot, CancellationToken.None);
+                await this.ShowChangedFilesAsync(runEngine.RepoRoot, prompt, usageEntry);
             }
 
             if (ReferenceEquals(this.engine, runEngine))

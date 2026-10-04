@@ -20,8 +20,11 @@ internal sealed class ChatEntryTemplateSelector : DataTemplateSelector
 
     public DataTemplate? Usage { get; set; }
 
+    public DataTemplate? Changes { get; set; }
+
     public override DataTemplate? SelectTemplate(object item, DependencyObject container) => (item as ChatEntry)?.Kind switch
     {
+        ChatEntryKind.Changes => this.Changes,
         ChatEntryKind.User => this.User,
         ChatEntryKind.Assistant => this.Assistant,
         ChatEntryKind.Thinking => this.Thinking,

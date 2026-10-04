@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeForVS.Agent;
+using ClaudeForVS.Git;
 
 namespace ClaudeForVS.ToolWindows;
 
@@ -61,6 +62,9 @@ internal sealed record SavedEntry
     public string? SnapshotBefore { get; init; }
 
     public string? SnapshotAfter { get; init; }
+
+    /// <summary>Set on the files-changed row under a reply, which is saved as a tool row; see <see cref="ChatEntryKind.Changes"/>.</summary>
+    public IReadOnlyList<FileStat>? Files { get; init; }
 }
 
 /// <summary>

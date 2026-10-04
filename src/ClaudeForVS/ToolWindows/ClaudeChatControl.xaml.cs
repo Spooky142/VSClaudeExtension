@@ -357,6 +357,24 @@ public partial class ClaudeChatControl : UserControl
         }
     }
 
+    private void OnOpenChangedFile(object sender, RoutedEventArgs e)
+    {
+        if (ContextOf<ChangedFileRow>(sender) is not ChangedFileRow row)
+        {
+            return;
+        }
+
+        this.package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            FileChange? change = await this.viewModel.LoadChangeAsync(row);
+            await this.package.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (change != null)
+            {
+                this.ShowDiff(change, $"{row.Path} ({row.StatusText.ToLowerInvariant()} by Claude)", "after");
+            }
+        }).Task.FileAndForget("ClaudeForVS/ChangedFileDiff");
+    }
+
     private void OnOpenApprovalDiff(object sender, RoutedEventArgs e)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -366,12 +384,12 @@ public partial class ClaudeChatControl : UserControl
         }
     }
 
-    private void ShowDiff(FileChange change, string caption)
+    private void ShowDiff(FileChange change, string caption, string afterLabel = "proposed")
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try
         {
-            this.package.Vs.ShowDiff(change, caption);
+            this.package.Vs.ShowDiff(change, caption, afterLabel);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
         {

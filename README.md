@@ -24,6 +24,7 @@ It works with either your own Anthropic API key, calling the API directly, or th
   - **Your own commands**: Markdown files in the repository's `.claude/commands` or `~/.claude/commands` (subfolders allowed) become `/file-name`, as in Claude Code. Frontmatter `description` and `argument-hint` show in completion, and `$ARGUMENTS`, `$1`–`$9` are filled in from what you type after the name. A repository command wins over a personal one with the same name. On the Claude API engine only that text substitution happens; on Claude Code the command is passed to Claude Code, which supports everything its commands can do.
   - Anything else starting with `/` is sent as typed, so Claude Code's own commands still work.
 - **Find in the chat** (**Ctrl+F**, or the magnifier in the header) searches messages and replies. **Enter** / **Shift+Enter** (or **F3** / **Shift+F3**) move between matches and **Esc** closes it.
+- **Files changed.** When a message changes files (on either engine), a row under Claude's reply shows how many files changed and the lines added and removed, e.g. **3 files changed +42 −10**. Expand it to list each file; click one to open what that message did to it in Visual Studio's diff viewer.
 - **Going back.** Hover over one of your messages:
   - **Edit** takes it and Claude's replies after it out of the chat and puts it back in the prompt box. Files are left as they are.
   - **Retry** sends it again.
@@ -50,6 +51,8 @@ It works with either your own Anthropic API key, calling the API directly, or th
   - Haiku 4.5 has no effort setting, so effort maps to its thinking budget: Low means no thinking, then 4K, 10K, 20K or 32K tokens.
 - **The Claude API engine's tools.**
   - `git`: read-only commands (`status`, `diff`, `log`, `show`, `blame`, `grep`, `ls-files`, branch/tag/remote listing, …) run immediately. Anything that changes the repo or contacts a remote (`commit`, `checkout`, `reset`, `push`, `merge`, `stash`, …) shows an **Allow / Deny** prompt first.
+  - `glob` finds files by pattern (`*.cs`, `src/**/*.xaml`) and `grep` searches their contents with a regular expression, with optional context lines, a folder or file to search, and a glob filter. Both cover tracked and untracked files but skip git-ignored, binary and very large ones.
+  - `web_search` and `web_fetch` are Anthropic's server-side tools, so Claude can look up documentation or an error message. Results show in the transcript. Searches are billed at $10 per 1,000 on top of tokens and are included in the cost estimate; a fetched page costs only the tokens it adds.
   - `read_file`, `edit_file` and `write_file` work only on files inside the repository. Absolute paths, `..` escapes, anything under `.git`, and paths through symlinks or junctions are refused. Every edit shows a preview, which can be opened in Visual Studio's diff viewer, and needs approval; **Allow all edits** skips the prompt for the rest of that chat. Edits keep the file's encoding and line endings.
   - `delete_file` and `move_file` delete, move or rename single files inside the repository, with the same rules and approval as edits.
   - `run_command` runs a Windows PowerShell command in the repository (for example `dotnet build` or `dotnet test`) so Claude can check its changes. Each command needs approval, and **Always allow** remembers plain commands (no pipes, redirects or chaining) for that repository in `%LOCALAPPDATA%\ClaudeForVS\allowed-commands.json`. Commands stop after 5 minutes unless Claude asks for longer (up to 30), and are blocked in Plan mode.
@@ -78,10 +81,11 @@ It works with either your own Anthropic API key, calling the API directly, or th
 | `src/ClaudeForVS/Agent/ClaudeAgent.cs` | Claude API engine: streaming tool-use loop against the Messages API, plus tool implementations |
 | `src/ClaudeForVS/Agent/ClaudeCodeEngine.cs`, `ApprovalServer.cs` | Claude Code engine: runs `claude -p` and answers its permission prompts |
 | `src/ClaudeForVS/Agent/RepoFiles.cs` | Repository sandbox for file reads and writes |
+| `src/ClaudeForVS/Agent/RepoSearch.cs` | The `glob` and `grep` tools |
 | `src/ClaudeForVS/Agent/ShellRunner.cs`, `CommandRules.cs` | PowerShell commands for `run_command`, and the always-allowed command rules |
 | `src/ClaudeForVS/Agent/ProjectInstructions.cs` | Loads `CLAUDE.md` files for the Claude API engine |
 | `src/ClaudeForVS/Agent/ApiKeyStore.cs` | DPAPI-encrypted API key in `%LOCALAPPDATA%\ClaudeForVS` |
-| `src/ClaudeForVS/Git/` | Runs git (PATH, or the copy bundled with Visual Studio) with a read-only allowlist; working-tree snapshots for undo |
+| `src/ClaudeForVS/Git/` | Runs git (PATH, or the copy bundled with Visual Studio) with a read-only allowlist; working-tree snapshots for undo and the files-changed row |
 | `tests/ClaudeForVS.Tests/` | xUnit tests |
 
 This is an in-process VSSDK package (.NET Framework 4.8, WPF). It uses the Anthropic C# SDK's netstandard2.0 build. Most of the SDK's dependencies resolve to the copies Visual Studio already ships, through VS's binding redirects. The rest (Anthropic, Markdig, Microsoft.Extensions.AI.Abstractions, System.Net.ServerSentEvents) ship in the VSIX and load from the extension folder via `[ProvideBindingPath]`.
@@ -95,7 +99,7 @@ dotnet test tests\ClaudeForVS.Tests -c Release
 
 The package is written to `src/ClaudeForVS/bin/Release/net48/ClaudeForVS.vsix`. The build should finish with 0 warnings and 0 errors.
 
-The tests cover the logic that doesn't need Visual Studio: parsing (including Claude Code's stream output), slash and custom commands, highlighting, prompt composition, export, command rules, `CLAUDE.md` loading and `run_command`. The undo snapshot tests need git on PATH.
+The tests cover the logic that doesn't need Visual Studio: parsing (including Claude Code's stream output), slash and custom commands, highlighting, prompt composition, export, command rules, `CLAUDE.md` loading, `run_command`, `glob`/`grep` and web results. The undo snapshot and diff-stat tests need git on PATH.
 
 GitHub Actions (`.github/workflows/build.yml`) runs the same build and tests on every push and pull request, and keeps the `.vsix` as an artifact.
 

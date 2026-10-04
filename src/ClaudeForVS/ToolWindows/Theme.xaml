@@ -16,6 +16,8 @@
   <SolidColorBrush x:Key="SubtleBorder" Color="#38808080" />
   <SolidColorBrush x:Key="AddedTint" Color="#332EA043" />
   <SolidColorBrush x:Key="RemovedTint" Color="#33F85149" />
+  <SolidColorBrush x:Key="AddedGreen" Color="#2EA043" />
+  <SolidColorBrush x:Key="RemovedRed" Color="#E5484D" />
   <SolidColorBrush x:Key="Amber" Color="#E3A33A" />
   <SolidColorBrush x:Key="AmberTint" Color="#14E3A33A" />
   <SolidColorBrush x:Key="ErrorRed" Color="#E5484D" />

@@ -92,6 +92,79 @@ internal sealed partial class ClaudeChatViewModel
         return true;
     }
 
+    /// <summary>
+    /// Adds a row listing the files a prompt changed, with lines added and removed, under Claude's reply and above the
+    /// prompt's token count. Nothing is added if no files changed.
+    /// </summary>
+    private async Task ShowChangedFilesAsync(string root, ChatEntry prompt, ChatEntry? usageEntry)
+    {
+        if (prompt.SnapshotBefore is not string before || prompt.SnapshotAfter is not string after || before == after || !this.Messages.Contains(prompt))
+        {
+            return;
+        }
+
+        IReadOnlyList<FileStat> files;
+        try
+        {
+            files = await WorkingTreeSnapshot.StatsAsync(root, before, after, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return;
+        }
+
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        var entry = new ChatEntry(ChatEntryKind.Changes, string.Empty) { Files = files, SnapshotBefore = before, SnapshotAfter = after };
+        int at = usageEntry is null ? -1 : this.Messages.IndexOf(usageEntry);
+        if (at >= 0)
+        {
+            this.Messages.Insert(at, entry);
+        }
+        else
+        {
+            this.Messages.Add(entry);
+        }
+    }
+
+    /// <summary>A changed file's text before and after the prompt that changed it, for the diff viewer.</summary>
+    public async Task<FileChange?> LoadChangeAsync(ChangedFileRow row)
+    {
+        if (row.Entry.SnapshotBefore is not string before || row.Entry.SnapshotAfter is not string after || this.RepoRoot is not string root)
+        {
+            return null;
+        }
+
+        try
+        {
+            string? oldText = row.Stat.Status == 'A' ? string.Empty : await WorkingTreeSnapshot.ReadFileAsync(root, before, row.Path, CancellationToken.None);
+            string? newText = row.Stat.Status == 'D' ? string.Empty : await WorkingTreeSnapshot.ReadFileAsync(root, after, row.Path, CancellationToken.None);
+            if (oldText is null || newText is null)
+            {
+                this.Status = "That change can't be shown any more: git no longer has the snapshot.";
+                return null;
+            }
+
+            // Git may store LF where the working tree has CRLF (core.autocrlf); match the file so only real changes show.
+            string full = Path.Combine(root, row.Path.Replace('/', Path.DirectorySeparatorChar));
+            if (FileChange.ReadOrEmpty(full).Contains("\r\n"))
+            {
+                oldText = RepoFiles.NormalizeNewlines(oldText, "\r\n");
+                newText = RepoFiles.NormalizeNewlines(newText, "\r\n");
+            }
+
+            return new FileChange(full, oldText, newText);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            this.Status = "Couldn't read the change: " + ex.Message;
+            return null;
+        }
+    }
+
     /// <summary>Puts every file changed since a prompt started back the way it was, after the user confirms the list.</summary>
     public async Task UndoAsync(ChatEntry entry)
     {

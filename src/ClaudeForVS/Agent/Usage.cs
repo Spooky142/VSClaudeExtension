@@ -10,10 +10,11 @@ using System.Threading.Tasks;
 namespace ClaudeForVS.Agent;
 
 /// <summary>Tokens used by one API response.</summary>
-internal readonly record struct TokenUsage(long Input, long CacheWrite, long CacheRead, long Output)
+/// <param name="WebSearches">Web searches run by the response, which are billed per search.</param>
+internal readonly record struct TokenUsage(long Input, long CacheWrite, long CacheRead, long Output, long WebSearches = 0)
 {
     public static TokenUsage operator +(TokenUsage a, TokenUsage b) =>
-        new(a.Input + b.Input, a.CacheWrite + b.CacheWrite, a.CacheRead + b.CacheRead, a.Output + b.Output);
+        new(a.Input + b.Input, a.CacheWrite + b.CacheWrite, a.CacheRead + b.CacheRead, a.Output + b.Output, a.WebSearches + b.WebSearches);
 }
 
 /// <summary>One Claude plan usage window (5-hour, weekly, ...) as last reported by Claude Code.</summary>
@@ -49,6 +50,9 @@ internal sealed record ApiRateLimits(
 /// <summary>Published per-token prices, used for the session cost estimate (USD per million tokens).</summary>
 internal static class ModelPricing
 {
+    /// <summary>Web search is $10 per 1,000 searches; web fetch costs only the tokens it adds.</summary>
+    private const double PerWebSearch = 0.01;
+
     public static double EstimateCost(ClaudeModel model, TokenUsage usage)
     {
         (double input, double output, double cacheRead, double cacheWrite) = model switch
@@ -57,7 +61,8 @@ internal static class ModelPricing
             ClaudeModel.Haiku => (1.00, 5.00, 0.10, 1.25),
             _ => (4.00, 20.00, 0.20, 5.00),
         };
-        return ((usage.Input * input) + (usage.Output * output) + (usage.CacheRead * cacheRead) + (usage.CacheWrite * cacheWrite)) / 1_000_000;
+        return (((usage.Input * input) + (usage.Output * output) + (usage.CacheRead * cacheRead) + (usage.CacheWrite * cacheWrite)) / 1_000_000)
+            + (usage.WebSearches * PerWebSearch);
     }
 }
 

@@ -113,7 +113,8 @@ internal sealed class VsIntegration
     /// Opens Visual Studio's side-by-side diff for a change. When the file on disk already matches the "after"
     /// side, the real file is shown on the right so it can be edited there.
     /// </summary>
-    public void ShowDiff(FileChange change, string caption)
+    /// <param name="afterLabel">What the right-hand side is called when it isn't the file on disk.</param>
+    public void ShowDiff(FileChange change, string caption, string afterLabel = "proposed")
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         if (this.services.GetService(typeof(SVsDifferenceService)) is not IVsDifferenceService diff)
@@ -131,12 +132,12 @@ internal sealed class VsIntegration
 
         string right = change.FullPath;
         string rightLabel = $"{name} (now)";
-        if (!string.Equals(FileChange.ReadOrEmpty(change.FullPath), change.After, StringComparison.Ordinal))
+        if (!File.Exists(change.FullPath) || !string.Equals(FileChange.ReadOrEmpty(change.FullPath), change.After, StringComparison.Ordinal))
         {
             right = Path.Combine(folder, "after-" + name);
             File.WriteAllText(right, change.After);
             options |= __VSDIFFSERVICEOPTIONS.VSDIFFOPT_RightFileIsTemporary;
-            rightLabel = $"{name} (proposed)";
+            rightLabel = $"{name} ({afterLabel})";
         }
 
         diff.OpenComparisonWindow2(left, right, caption, change.FullPath, $"{name} (before)", rightLabel, caption, null, (uint)options);

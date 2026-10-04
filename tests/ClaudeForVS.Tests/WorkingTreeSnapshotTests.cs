@@ -89,6 +89,37 @@ public sealed class WorkingTreeSnapshotTests : IDisposable
         Assert.Empty(await WorkingTreeSnapshot.ChangesAsync(this.repo, first!, second!, CancellationToken.None));
     }
 
+    [Fact]
+    public void NumstatOutputIsParsed()
+    {
+        var counts = WorkingTreeSnapshot.ParseNumstat("3\t1\ta.txt\0-\t-\timg.png\0" + "0\t5\tdir/with space.txt\0");
+        Assert.Equal((3, 1, false), counts["a.txt"]);
+        Assert.Equal((0, 0, true), counts["img.png"]);
+        Assert.Equal((0, 5, false), counts["dir/with space.txt"]);
+    }
+
+    [Fact]
+    public async Task StatsCountLinesAndOldTextCanBeReadBackAsync()
+    {
+        await this.GitAsync("init");
+        this.Write("a.txt", "one\ntwo\nthree\n");
+        this.Write("gone.txt", "x\ny\n");
+        string? before = await WorkingTreeSnapshot.CaptureAsync(this.repo, CancellationToken.None);
+
+        this.Write("a.txt", "one\n2\nthree\nfour\n");
+        this.Write("new.txt", "hello\n");
+        File.Delete(Path.Combine(this.repo, "gone.txt"));
+        string? after = await WorkingTreeSnapshot.CaptureAsync(this.repo, CancellationToken.None);
+
+        var stats = await WorkingTreeSnapshot.StatsAsync(this.repo, before!, after!, CancellationToken.None);
+        Assert.Equal(
+            [new FileStat('M', "a.txt", 2, 1, false), new FileStat('D', "gone.txt", 0, 2, false), new FileStat('A', "new.txt", 1, 0, false)],
+            stats.OrderBy(s => s.Path));
+
+        Assert.Equal("x\ny\n", (await WorkingTreeSnapshot.ReadFileAsync(this.repo, before!, "gone.txt", CancellationToken.None))?.Replace("\r\n", "\n"));
+        Assert.Null(await WorkingTreeSnapshot.ReadFileAsync(this.repo, before!, "new.txt", CancellationToken.None));
+    }
+
     private void Write(string path, string text)
     {
         string full = Path.Combine(this.repo, path);

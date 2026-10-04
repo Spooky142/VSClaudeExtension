@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using ClaudeForVS.Agent;
+using ClaudeForVS.Git;
 
 namespace ClaudeForVS.ToolWindows;
 
@@ -20,6 +21,31 @@ internal enum ChatEntryKind
 
     /// <summary>A small footer with the tokens used by the prompt above.</summary>
     Usage,
+
+    /// <summary>
+    /// The files the prompt above changed, with line counts. Saved as a <see cref="Tool"/> entry with
+    /// <see cref="SavedEntry.Files"/> set, so versions without this kind show it as an ordinary tool row.
+    /// </summary>
+    Changes,
+}
+
+/// <summary>One file in a <see cref="ChatEntryKind.Changes"/> entry.</summary>
+internal sealed class ChangedFileRow(ChatEntry entry, FileStat stat)
+{
+    public ChatEntry Entry { get; } = entry;
+
+    public FileStat Stat { get; } = stat;
+
+    public string Path => this.Stat.Path;
+
+    public string StatusText => this.Stat.Status switch { 'A' => "Added", 'D' => "Deleted", _ => "Modified" };
+
+    public string AddedText => this.Stat.Binary ? "binary" : $"+{this.Stat.Added:N0}";
+
+    public string RemovedText => this.Stat.Binary ? string.Empty : $"−{this.Stat.Removed:N0}";
+
+    /// <summary>Line-by-line diffs can only be shown for text files.</summary>
+    public bool CanDiff => !this.Stat.Binary;
 }
 
 internal enum DiffLineKind
@@ -66,6 +92,7 @@ internal sealed class ChatEntry : INotifyPropertyChanged
     private string text;
     private string? snapshotBefore;
     private string? snapshotAfter;
+    private IReadOnlyList<FileStat> files = [];
 
     public ChatEntry(ChatEntryKind kind, string header, string text = "", string detail = "", ActivityKind activity = ActivityKind.Git, FileChange? change = null)
     {
@@ -97,6 +124,31 @@ internal sealed class ChatEntry : INotifyPropertyChanged
 
     public bool HasChange => this.Change != null;
 
+    // ===== Changes entries only =====
+
+    /// <summary>The files a prompt changed, between <see cref="SnapshotBefore"/> and <see cref="SnapshotAfter"/>.</summary>
+    public IReadOnlyList<FileStat> Files
+    {
+        get => this.files;
+        init
+        {
+            this.files = value;
+            this.FileRows = value.Select(f => new ChangedFileRow(this, f)).ToList();
+        }
+    }
+
+    public IReadOnlyList<ChangedFileRow> FileRows { get; private init; } = [];
+
+    /// <summary>"3 files changed · +42 −10", for exports and older versions.</summary>
+    public static string Summarize(IReadOnlyList<FileStat> files) =>
+        $"{(files.Count == 1 ? "1 file" : $"{files.Count:N0} files")} changed · +{files.Sum(f => f.Added):N0} −{files.Sum(f => f.Removed):N0}";
+
+    public string FilesChangedText => this.files.Count == 1 ? "1 file changed" : $"{this.files.Count:N0} files changed";
+
+    public string AddedText => $"+{this.files.Sum(f => f.Added):N0}";
+
+    public string RemovedText => $"−{this.files.Sum(f => f.Removed):N0}";
+
     // ===== User prompts only =====
 
     /// <summary>What was attached to a prompt, e.g. "Foo.cs:12-30 · 1 image"; shown under the bubble.</summary>
@@ -110,7 +162,7 @@ internal sealed class ChatEntry : INotifyPropertyChanged
     /// <summary>Exactly what was sent (attached context and images included), for retrying it. Not saved with the chat.</summary>
     public ChatPrompt? SentPrompt { get; set; }
 
-    /// <summary>Working tree snapshot taken just before this prompt ran.</summary>
+    /// <summary>Working tree snapshot taken just before this prompt ran (or, on a Changes entry, before the prompt above it).</summary>
     public string? SnapshotBefore
     {
         get => this.snapshotBefore;
@@ -133,7 +185,7 @@ internal sealed class ChatEntry : INotifyPropertyChanged
     }
 
     /// <summary>True when files changed while this prompt ran, so its changes can be undone.</summary>
-    public bool CanUndo => this.snapshotBefore != null && this.snapshotAfter != null && this.snapshotBefore != this.snapshotAfter;
+    public bool CanUndo => this.Kind == ChatEntryKind.User && this.snapshotBefore != null && this.snapshotAfter != null && this.snapshotBefore != this.snapshotAfter;
 
     /// <summary>Markdown body (rendered for user/assistant entries, plain for thinking and errors).</summary>
     public string Text

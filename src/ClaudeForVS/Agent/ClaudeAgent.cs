@@ -26,6 +26,9 @@ internal sealed class ClaudeAgent : IChatEngine
     private const int DefaultCommandSeconds = 300;
     private const int MaxCommandSeconds = 1800;
 
+    // Web searches and fetches allowed per response; each search is billed on top of tokens.
+    private const int MaxWebUses = 8;
+
     private const long MaxOutputTokens = 64000;
 
     // At this share of the context window the conversation is summarized and restarted from the summary.
@@ -78,6 +81,8 @@ internal sealed class ClaudeAgent : IChatEngine
             Tools:
             - `git` runs git commands. Read-only commands run immediately. Commands that change the repository or talk
               to a remote (commit, checkout, reset, push, merge, stash, etc.) need the user's approval first.
+            - `glob` finds files by name pattern and `grep` searches file contents with a regular expression. Both
+              cover tracked and untracked files but skip git-ignored ones. Prefer them to `git ls-files`/`git grep`.
             - `read_file` reads a file with line numbers.
             - `edit_file` replaces an exact string in a file; `write_file` creates or overwrites a whole file.
               The user approves edits before they're applied. Prefer `edit_file` for changes to existing files.
@@ -86,6 +91,8 @@ internal sealed class ClaudeAgent : IChatEngine
               making changes. The user approves commands before they run.
             - `ask_user` shows the user 1-4 multiple-choice questions. Use it when you need a decision that's genuinely
               theirs (for example choosing between approaches); the user can also type their own answer.
+            - `web_search` and `web_fetch` search the web and read pages, e.g. for library documentation or an error
+              message. Look at the repository first; use the web for what it can't tell you.
             All file paths are relative to the repository root, and files outside the repository can't be accessed.
             If the user declines an action, accept that and don't retry the same thing.
 
@@ -215,20 +222,30 @@ internal sealed class ClaudeAgent : IChatEngine
             this.history.Add(new() { Role = Role.User, Content = content });
         }
 
+        // A response the API paused mid-turn (during long web searches); the next request continues it.
+        List<ContentBlockParam>? paused = null;
         for (int round = 0; round < MaxToolRounds; round++)
         {
-            if (round > 0)
+            if (round > 0 && paused is null)
             {
                 promptTokens += await this.CompactIfNeededAsync(sink, midTask: true, cancellationToken);
             }
 
             sink.SetStatus("Waiting for Claude…");
             StreamedTurn turn = await this.StreamTurnAsync(sink, promptTokens, cancellationToken);
+            if (paused != null)
+            {
+                // The continuation belongs to the same assistant message.
+                this.history.RemoveAt(this.history.Count - 1);
+                turn.Content.InsertRange(0, paused);
+                paused = null;
+            }
+
             this.history.Add(new() { Role = Role.Assistant, Content = turn.Content });
             promptTokens += turn.InputTokens + turn.OutputTokens;
             sink.ReportLiveTokens(promptTokens);
             sink.SetStatus(null); // token counts are shown below the reply, not in the footer
-            sink.ReportTokenUsage(this.Model, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens));
+            sink.ReportTokenUsage(this.Model, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens, turn.WebSearches));
             this.contextTokens = turn.UncachedInputTokens + turn.CacheWriteTokens + turn.CacheReadTokens + turn.OutputTokens;
             sink.ReportContext(this.contextTokens);
             if (this.rateLimits.Latest is ApiRateLimits limits)
@@ -240,6 +257,12 @@ internal sealed class ClaudeAgent : IChatEngine
             {
                 sink.AppendText("\n\n_Claude declined to continue with this request._");
                 return;
+            }
+
+            if (turn.StopReason == "pause_turn")
+            {
+                paused = turn.Content;
+                continue;
             }
 
             if (turn.StopReason == "max_tokens")
@@ -458,6 +481,27 @@ internal sealed class ClaudeAgent : IChatEngine
                     b.ToolName = toolUse.Name;
                     sink.SetStatus($"Preparing {toolUse.Name}…");
                 }
+                else if (blockStart.ContentBlock.TryPickServerToolUse(out ServerToolUseBlock? serverTool))
+                {
+                    // Web search and fetch run on Anthropic's side; their results arrive as the next block.
+                    b.Kind = BlockKind.ServerToolUse;
+                    b.Raw = serverTool.RawData;
+                    b.ToolId = RawString(serverTool.RawData, "id");
+                    b.ToolName = RawString(serverTool.RawData, "name");
+                    sink.SetStatus(b.ToolName == "web_fetch" ? "Fetching a web page…" : "Searching the web…");
+                }
+                else if (blockStart.ContentBlock.TryPickWebSearchToolResult(out WebSearchToolResultBlock? searchResult))
+                {
+                    b.Kind = BlockKind.ServerToolResult;
+                    b.Raw = searchResult.RawData;
+                    this.ReportWebResult(searchResult.RawData, blocks.Values, sink);
+                }
+                else if (blockStart.ContentBlock.TryPickWebFetchToolResult(out WebFetchToolResultBlock? fetchResult))
+                {
+                    b.Kind = BlockKind.ServerToolResult;
+                    b.Raw = fetchResult.RawData;
+                    this.ReportWebResult(fetchResult.RawData, blocks.Values, sink);
+                }
 
                 blocks[blockStart.Index] = b;
             }
@@ -493,6 +537,7 @@ internal sealed class ClaudeAgent : IChatEngine
             {
                 turn.StopReason = messageDelta.Delta.StopReason?.Raw();
                 turn.OutputTokens = messageDelta.Usage.OutputTokens;
+                turn.WebSearches = messageDelta.Usage.ServerToolUse?.WebSearchRequests ?? 0;
             }
         }
 
@@ -515,11 +560,93 @@ internal sealed class ClaudeAgent : IChatEngine
                     turn.Content.Add(toolUse);
                     turn.ToolUses.Add(toolUse);
                     break;
+                case BlockKind.ServerToolUse:
+                    // The input streams in like a client tool's; if it didn't, it came whole with the block.
+                    JsonElement serverInput = b.Text.Length > 0
+                        ? JsonSerializer.SerializeToElement(ParseToolInput(b.Text.ToString()))
+                        : b.Raw.TryGetValue("input", out JsonElement given) ? given : JsonSerializer.SerializeToElement(new { });
+                    turn.Content.Add(ServerToolUseBlockParam.FromRawUnchecked(new Dictionary<string, JsonElement>
+                    {
+                        ["type"] = JsonSerializer.SerializeToElement("server_tool_use"),
+                        ["id"] = JsonSerializer.SerializeToElement(b.ToolId),
+                        ["name"] = JsonSerializer.SerializeToElement(b.ToolName),
+                        ["input"] = serverInput,
+                    }));
+                    break;
+                case BlockKind.ServerToolResult:
+                    // Sent back as received (encrypted content included) so Claude can cite the results in later turns.
+                    var result = new Dictionary<string, JsonElement>();
+                    foreach (string key in new[] { "type", "tool_use_id", "content" })
+                    {
+                        if (b.Raw.TryGetValue(key, out JsonElement value))
+                        {
+                            result[key] = value;
+                        }
+                    }
+
+                    turn.Content.Add(RawString(b.Raw, "type") == "web_fetch_tool_result"
+                        ? WebFetchToolResultBlockParam.FromRawUnchecked(result)
+                        : WebSearchToolResultBlockParam.FromRawUnchecked(result));
+                    break;
             }
         }
 
         return turn;
     }
+
+    /// <summary>Shows a finished web search or fetch in the transcript.</summary>
+    private void ReportWebResult(IReadOnlyDictionary<string, JsonElement> result, IEnumerable<BlockBuilder> blocks, IChatSink sink)
+    {
+        string id = RawString(result, "tool_use_id");
+        BlockBuilder? call = blocks.LastOrDefault(b => b.Kind == BlockKind.ServerToolUse && b.ToolId == id);
+        JsonElement input = call is null ? default
+            : call.Text.Length > 0 ? JsonSerializer.SerializeToElement(ParseToolInput(call.Text.ToString()))
+            : call.Raw.TryGetValue("input", out JsonElement given) ? given : default;
+        (ActivityKind kind, string title, string detail) = DescribeWebResult(
+            RawString(result, "type"), input, result.TryGetValue("content", out JsonElement content) ? content : default);
+        sink.ToolActivity(kind, title, detail);
+        sink.SetStatus("Waiting for Claude…");
+    }
+
+    /// <summary>The transcript row for a web search or fetch: its title (the query or URL) and the results or error.</summary>
+    internal static (ActivityKind Kind, string Title, string Detail) DescribeWebResult(string type, JsonElement input, JsonElement content)
+    {
+        static string Str(JsonElement e, string name) =>
+            e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : string.Empty;
+
+        bool fetch = type == "web_fetch_tool_result";
+        string title = fetch ? $"Fetched {Str(input, "url")}".TrimEnd() : $"Searched the web: {Str(input, "query")}".TrimEnd(' ', ':');
+        string error = Str(content, "error_code");
+        if (error.Length > 0)
+        {
+            return (ActivityKind.Failed, fetch ? $"Couldn't fetch {Str(input, "url")}".TrimEnd() : $"Web search failed: {Str(input, "query")}".TrimEnd(' ', ':'), error.Replace('_', ' '));
+        }
+
+        if (fetch)
+        {
+            // The page is a document block; its title, when known, is the most useful thing to show.
+            JsonElement document = content.ValueKind == JsonValueKind.Object && content.TryGetProperty("content", out JsonElement d) ? d : default;
+            string pageTitle = Str(document, "title");
+            string url = Str(content, "url") is { Length: > 0 } u ? u : Str(input, "url");
+            return (ActivityKind.Web, title, pageTitle.Length > 0 ? $"{pageTitle}\n{url}" : url);
+        }
+
+        var lines = new List<string>();
+        if (content.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement hit in content.EnumerateArray())
+            {
+                string hitTitle = Str(hit, "title");
+                string hitUrl = Str(hit, "url");
+                lines.Add(hitTitle.Length > 0 ? $"{hitTitle} — {hitUrl}" : hitUrl);
+            }
+        }
+
+        return (ActivityKind.Web, title, lines.Count == 0 ? "No results." : string.Join("\n", lines));
+    }
+
+    private static string RawString(IReadOnlyDictionary<string, JsonElement> raw, string name) =>
+        raw.TryGetValue(name, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : string.Empty;
 
     /// <summary>
     /// Tools stream their input eagerly, so the JSON may be incomplete if the response was cut off.
@@ -548,6 +675,8 @@ internal sealed class ClaudeAgent : IChatEngine
         return toolUse.Name switch
         {
             "git" => this.RunGitAsync(input, sink, cancellationToken),
+            "glob" => this.GlobAsync(input, sink, cancellationToken),
+            "grep" => this.GrepAsync(input, sink, cancellationToken),
             "read_file" => Task.FromResult(this.ReadFile(input, sink)),
             "edit_file" => this.EditFileAsync(input, sink, cancellationToken),
             "write_file" => this.WriteFileAsync(input, sink, cancellationToken),
@@ -604,6 +733,73 @@ internal sealed class ClaudeAgent : IChatEngine
         return exitCode == 0
             ? (output.Length == 0 ? "(no output)" : output)
             : $"git exited with code {exitCode}.\n{output}";
+    }
+
+    private async Task<string> GlobAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string pattern = RequireString(input, "pattern");
+        string folder = this.OptionalRepoPath(input, "path", folderOnly: true);
+        string where = folder.Length > 0 ? $" in {folder}" : string.Empty;
+
+        sink.SetStatus($"Finding {pattern}{where}");
+        IReadOnlyList<string> all = await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken);
+        IReadOnlyList<string> matches = RepoSearch.Glob(all, pattern, folder);
+        string list = string.Join("\n", matches.Take(RepoSearch.MaxGlobResults));
+        string more = matches.Count > RepoSearch.MaxGlobResults
+            ? $"\n[{matches.Count - RepoSearch.MaxGlobResults} more files; narrow the pattern or path.]"
+            : string.Empty;
+
+        string count = matches.Count == 1 ? "1 file" : $"{matches.Count} files";
+        sink.ToolActivity(ActivityKind.Search, $"Glob {pattern}{where}", matches.Count == 0 ? "No files found." : $"{count}\n{list}{more}");
+        return matches.Count == 0 ? "No files found." : list + more;
+    }
+
+    private async Task<string> GrepAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string pattern = RequireString(input, "pattern");
+        string scope = this.OptionalRepoPath(input, "path", folderOnly: false);
+        string? glob = input.TryGetValue("glob", out JsonElement g) && g.ValueKind == JsonValueKind.String && g.GetString()!.Trim().Length > 0
+            ? g.GetString()!.Trim()
+            : null;
+        bool ignoreCase = input.TryGetValue("case_insensitive", out JsonElement ci) && ci.ValueKind == JsonValueKind.True;
+        string modeName = input.TryGetValue("output_mode", out JsonElement m) && m.ValueKind == JsonValueKind.String ? m.GetString()! : "content";
+        GrepOutput mode = modeName switch
+        {
+            "content" => GrepOutput.Content,
+            "files_with_matches" => GrepOutput.FilesWithMatches,
+            "count" => GrepOutput.Count,
+            _ => throw new ToolInputException("`output_mode` must be \"content\", \"files_with_matches\" or \"count\"."),
+        };
+        int context = Math.Max(0, Math.Min(10, OptionalInt(input, "context") ?? 0));
+        int maxResults = Math.Max(1, Math.Min(2000, OptionalInt(input, "max_results") ?? 200));
+
+        string where = (scope.Length > 0 ? $" in {scope}" : string.Empty) + (glob is null ? string.Empty : $" ({glob})");
+        sink.SetStatus($"Searching for {pattern}{where}");
+        IReadOnlyList<string> all = await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken);
+        bool scopeIsFile = scope.Length > 0 && File.Exists(Path.Combine(this.RepoRoot, scope));
+        IEnumerable<string> files = glob is null || scopeIsFile ? RepoSearch.Under(all, scope) : RepoSearch.Glob(all, glob, scope);
+        string result = await Task.Run(
+            () => RepoSearch.Grep(this.RepoRoot, files, pattern, ignoreCase, mode, context, maxResults, cancellationToken), cancellationToken);
+        sink.ToolActivity(ActivityKind.Search, $"Grep {pattern}{where}", result);
+        return result;
+    }
+
+    /// <summary>An optional repository-relative path argument, checked and normalized to forward slashes; empty for the root.</summary>
+    private string OptionalRepoPath(IReadOnlyDictionary<string, JsonElement> input, string name, bool folderOnly)
+    {
+        if (!input.TryGetValue(name, out JsonElement el) || el.ValueKind != JsonValueKind.String
+            || el.GetString()!.Trim() is not { Length: > 0 } path || path is "." or "/" or "\\")
+        {
+            return string.Empty;
+        }
+
+        string full = this.files.Resolve(path);
+        if (!Directory.Exists(full) && (folderOnly || !File.Exists(full)))
+        {
+            throw new ToolInputException(folderOnly ? $"Directory not found: {path}" : $"Not found: {path}");
+        }
+
+        return this.files.Relative(full).Replace('\\', '/');
     }
 
     private string ReadFile(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink)
@@ -1032,6 +1228,52 @@ internal sealed class ClaudeAgent : IChatEngine
         },
         new Tool
         {
+            Name = "glob",
+            Description =
+                "Find files by path pattern. `*` and `?` match within one folder, `**` across folders, `{a,b}` either. " +
+                "A pattern without a slash matches file names at any depth (\"*.cs\"); one with a slash matches the path " +
+                "relative to `path` (\"src/**/*Tests.cs\"). Matching is case-insensitive. Covers tracked and untracked " +
+                $"files but not git-ignored ones. Returns up to {RepoSearch.MaxGlobResults} paths, sorted.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["pattern"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The glob, e.g. \"*.csproj\" or \"src/**/*.xaml\"." }),
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Folder to search in, relative to the repository root. Default: the root." }),
+                },
+                Required = ["pattern"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "grep",
+            Description =
+                "Search file contents line by line with a .NET regular expression (escape regex characters such as " +
+                "`(`, `.` or `{` to match them literally). Covers tracked and untracked files but not git-ignored, binary " +
+                "or very large ones. Narrow the search with `path` (a folder or a file) and `glob` (e.g. \"*.cs\"). " +
+                "output_mode \"content\" (default) returns \"path:line:text\" for each match, with `context` lines around " +
+                "it marked \"path-line-text\"; \"files_with_matches\" returns only paths; \"count\" returns matches per file.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["pattern"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The regular expression." }),
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Folder or file to search, relative to the repository root. Default: the whole repository." }),
+                    ["glob"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Only search files matching this glob, as in the glob tool." }),
+                    ["case_insensitive"] = JsonSerializer.SerializeToElement(new { type = "boolean", description = "Ignore case. Default false." }),
+                    ["output_mode"] = JsonSerializer.SerializeToElement(new { type = "string", @enum = new[] { "content", "files_with_matches", "count" } }),
+                    ["context"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "Lines of context before and after each match (content mode), 0-10. Default 0." }),
+                    ["max_results"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "Most matching lines (or files) to return. Default 200." }),
+                },
+                Required = ["pattern"],
+            },
+            EagerInputStreaming = true,
+        },
+        new WebSearchTool20250305 { MaxUses = MaxWebUses },
+        new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = 50_000 },
+        new Tool
+        {
             Name = "read_file",
             Description =
                 "Read a text file from the working tree. Each line is prefixed with its line number and a tab; the prefix " +
@@ -1143,7 +1385,7 @@ internal sealed class ClaudeAgent : IChatEngine
         },
     ];
 
-    private enum BlockKind { Other, Text, Thinking, RedactedThinking, ToolUse }
+    private enum BlockKind { Other, Text, Thinking, RedactedThinking, ToolUse, ServerToolUse, ServerToolResult }
 
     private sealed class BlockBuilder
     {
@@ -1153,6 +1395,9 @@ internal sealed class ClaudeAgent : IChatEngine
         public string Data = string.Empty;
         public string ToolId = string.Empty;
         public string ToolName = string.Empty;
+
+        // Server tool blocks as received.
+        public IReadOnlyDictionary<string, JsonElement> Raw = new Dictionary<string, JsonElement>();
     }
 
     private sealed class StreamedTurn
@@ -1165,6 +1410,7 @@ internal sealed class ClaudeAgent : IChatEngine
         public long CacheWriteTokens;
         public long UncachedInputTokens;
         public long OutputTokens;
+        public long WebSearches;
     }
 }
 
