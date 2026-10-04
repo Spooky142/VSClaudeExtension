@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -12,6 +13,11 @@ namespace ClaudeForVS.ToolWindows;
 /// <summary>Find in this chat: searches the rendered messages and replies, and selects each match in turn.</summary>
 public partial class ClaudeChatControl
 {
+    // The current match is marked in yellow rather than the usual selection blue. The selection layer is drawn over the
+    // text, so dark themes get a deeper yellow at lower opacity to keep light text readable.
+    private static readonly Brush LightMatchBrush = Frozen(Color.FromRgb(0xFF, 0xE0, 0x1A));
+    private static readonly Brush DarkMatchBrush = Frozen(Color.FromRgb(0xE8, 0xB4, 0x00));
+
     // The current match, as the index of its message among those searched and the offset of its start in that message.
     // Kept as positions rather than TextPointers because a streaming reply re-renders its document.
     private (int View, int Offset)? currentMatch;
@@ -142,9 +148,17 @@ public partial class ClaudeChatControl
 
         MarkdownView target = views[match.View];
         target.IsInactiveSelectionHighlightEnabled = true; // show the match while focus stays in the find box
+        (target.SelectionBrush, target.SelectionOpacity) = this.IsDarkTheme() ? (DarkMatchBrush, 0.55) : (LightMatchBrush, 0.75);
         target.Selection.Select(match.Start, match.End);
         this.selectedView = target;
         this.ScrollToMatch(target, match.Start);
+    }
+
+    private static Brush Frozen(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
     }
 
     private void ClearFindSelection()
@@ -153,6 +167,8 @@ public partial class ClaudeChatControl
         {
             view.Selection.Select(view.Document.ContentStart, view.Document.ContentStart);
             view.IsInactiveSelectionHighlightEnabled = false;
+            view.ClearValue(TextBoxBase.SelectionBrushProperty); // back to the normal selection colour
+            view.ClearValue(TextBoxBase.SelectionOpacityProperty);
             this.selectedView = null;
         }
     }
