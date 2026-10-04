@@ -27,6 +27,24 @@
       <Group guid="guidClaudeCmdSet" id="ErrorListGroup" priority="0x0600">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ERRORLIST" />
       </Group>
+
+      <!-- Test Explorer's context menu (its menu ID isn't in the SDK headers; see TestWindowCommands in Visual Studio's TestWindow assembly). -->
+      <Group guid="guidClaudeCmdSet" id="TestExplorerGroup" priority="0x0600">
+        <Parent guid="guidTestExplorerCmdSet" id="TestExplorerContextMenu" />
+      </Group>
+
+      <!-- Solution Explorer: files, folders, projects, the solution, and multiple selections. -->
+      <Group guid="guidClaudeCmdSet" id="SolutionExplorerGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+      </Group>
+
+      <!-- Git: the top-level Git menu, and the "..." actions menu in the Git Changes window. -->
+      <Group guid="guidClaudeCmdSet" id="GitMenuGroup" priority="0x0600">
+        <Parent guid="guidGitCmdSet" id="GitRootMenu" />
+      </Group>
+      <Group guid="guidClaudeCmdSet" id="GitChangesGroup" priority="0x0600">
+        <Parent guid="guidGitCmdSet" id="GitChangesActionsMenu" />
+      </Group>
     </Groups>
 
     <Buttons>
@@ -34,6 +52,12 @@
         <Parent guid="guidClaudeCmdSet" id="ClaudeMenuGroup" />
         <Strings>
           <ButtonText>Claude Chat</ButtonText>
+        </Strings>
+      </Button>
+      <Button guid="guidClaudeCmdSet" id="NewChatWindowCommandId" priority="0x0200" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="ClaudeMenuGroup" />
+        <Strings>
+          <ButtonText>New Claude Chat Window</ButtonText>
         </Strings>
       </Button>
 
@@ -68,8 +92,54 @@
           <ButtonText>Fix with Claude</ButtonText>
         </Strings>
       </Button>
+
+      <Button guid="guidClaudeCmdSet" id="FixTestsCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="TestExplorerGroup" />
+        <Strings>
+          <ButtonText>Fix with Claude</ButtonText>
+        </Strings>
+      </Button>
+
+      <Button guid="guidClaudeCmdSet" id="AddToClaudeCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="SolutionExplorerGroup" />
+        <Strings>
+          <ButtonText>Add to Claude</ButtonText>
+        </Strings>
+      </Button>
+
+      <Button guid="guidClaudeCmdSet" id="WriteCommitMessageCommandId" priority="0x0100" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="GitMenuGroup" />
+        <Strings>
+          <ButtonText>Write Commit Message with Claude</ButtonText>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
+
+  <!-- The same groups on more menus. -->
+  <CommandPlacements>
+    <CommandPlacement guid="guidClaudeCmdSet" id="SolutionExplorerGroup" priority="0x0600">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_FOLDERNODE" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClaudeCmdSet" id="SolutionExplorerGroup" priority="0x0600">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_PROJNODE" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClaudeCmdSet" id="SolutionExplorerGroup" priority="0x0600">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_SOLNNODE" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClaudeCmdSet" id="SolutionExplorerGroup" priority="0x0600">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_XPROJ_MULTIITEM" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClaudeCmdSet" id="SolutionExplorerGroup" priority="0x0600">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_XPROJ_PROJITEM" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClaudeCmdSet" id="SolutionExplorerGroup" priority="0x0600">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_XPROJ_MULTIPROJ" />
+    </CommandPlacement>
+    <CommandPlacement guid="guidClaudeCmdSet" id="WriteCommitMessageCommandId" priority="0x0100">
+      <Parent guid="guidClaudeCmdSet" id="GitChangesGroup" />
+    </CommandPlacement>
+  </CommandPlacements>
 
   <KeyBindings>
     <!-- Opens (or focuses) the chat from anywhere. Rebind in Tools > Options > Environment > Keyboard ("Tools.ClaudeChat"). -->
@@ -84,12 +154,31 @@
       <IDSymbol name="EditorClaudeMenu" value="0x1022" />
       <IDSymbol name="EditorClaudeMenuGroup" value="0x1023" />
       <IDSymbol name="ErrorListGroup" value="0x1024" />
+      <IDSymbol name="TestExplorerGroup" value="0x1025" />
+      <IDSymbol name="SolutionExplorerGroup" value="0x1026" />
+      <IDSymbol name="GitMenuGroup" value="0x1027" />
+      <IDSymbol name="GitChangesGroup" value="0x1028" />
       <IDSymbol name="ShowClaudeWindowCommandId" value="0x0100" />
       <IDSymbol name="AskAboutSelectionCommandId" value="0x0101" />
       <IDSymbol name="ExplainCommandId" value="0x0102" />
       <IDSymbol name="FixCommandId" value="0x0103" />
       <IDSymbol name="WriteTestsCommandId" value="0x0104" />
       <IDSymbol name="FixErrorsCommandId" value="0x0105" />
+      <IDSymbol name="NewChatWindowCommandId" value="0x0106" />
+      <IDSymbol name="FixTestsCommandId" value="0x0107" />
+      <IDSymbol name="AddToClaudeCommandId" value="0x0108" />
+      <IDSymbol name="WriteCommitMessageCommandId" value="0x0109" />
+    </GuidSymbol>
+
+    <!-- Test Explorer's command set and context menu. -->
+    <GuidSymbol name="guidTestExplorerCmdSet" value="{1e198c22-5980-4e7e-92f3-f73168d1fb63}">
+      <IDSymbol name="TestExplorerContextMenu" value="0x0002" />
+    </GuidSymbol>
+
+    <!-- Visual Studio's Git command set: the Git menu, and Git Changes' actions menu. -->
+    <GuidSymbol name="guidGitCmdSet" value="{57735d06-c920-4415-a2e0-7d6e6fbdfa99}">
+      <IDSymbol name="GitRootMenu" value="0xF000" />
+      <IDSymbol name="GitChangesActionsMenu" value="0xF010" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

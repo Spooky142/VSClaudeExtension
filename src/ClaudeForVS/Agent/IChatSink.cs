@@ -17,6 +17,25 @@ internal enum Approval
     AllowAll,
 }
 
+/// <summary>The user's answer to an approval request.</summary>
+/// <param name="PartialAfter">
+/// For file changes shown with a checkbox per change: the file's text with only the changes the user kept, when they
+/// left some out. Null when the whole change was approved (or denied).
+/// </param>
+internal readonly record struct ApprovalResult(Approval Decision, string? PartialAfter = null)
+{
+    public static implicit operator ApprovalResult(Approval decision) => new(decision);
+}
+
+/// <summary>One item on Claude's task list.</summary>
+/// <param name="Status">"pending", "in_progress" or "completed".</param>
+/// <param name="ActiveForm">What Claude is doing while it's in progress, e.g. "Running the tests"; may be empty.</param>
+internal sealed record TaskItem(string Content, string Status, string ActiveForm)
+{
+    /// <summary>What the task list shows: what Claude is doing for the task in progress, otherwise the task.</summary>
+    public string Display => this.Status == "in_progress" && this.ActiveForm.Length > 0 ? this.ActiveForm : this.Content;
+}
+
 /// <summary>What a tool call did; the UI picks an icon and diff colouring from it.</summary>
 internal enum ActivityKind
 {
@@ -110,5 +129,12 @@ internal interface IChatSink
     /// <param name="detail">Optional longer preview, e.g. a diff.</param>
     /// <param name="allowAllLabel">If not null, offers a third button that approves all similar requests.</param>
     /// <param name="change">For file edits, the whole file before and after, so it can be opened in a diff viewer.</param>
-    Task<Approval> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null);
+    /// <param name="canKeepSome">
+    /// True if the engine can apply just some of <paramref name="change"/>'s changes; the card then shows a checkbox
+    /// for each, and <see cref="ApprovalResult.PartialAfter"/> says what to write.
+    /// </param>
+    Task<ApprovalResult> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null, bool canKeepSome = false);
+
+    /// <summary>Claude's current task list, replacing any shown before.</summary>
+    void ReportTasks(IReadOnlyList<TaskItem> tasks);
 }

@@ -10,25 +10,34 @@ using System.Threading.Tasks;
 namespace ClaudeForVS.Agent;
 
 /// <summary>
-/// A minimal MCP server (Streamable HTTP, JSON responses only) exposing one tool, <c>approve</c>, that Claude Code
-/// calls through <c>--permission-prompt-tool</c> whenever it needs permission. Bound to localhost under a random
-/// path so other local processes can't find it by guessing.
+/// A minimal MCP server (Streamable HTTP, JSON responses only) for Claude Code. Its <c>approve</c> tool is what Claude
+/// Code calls through <c>--permission-prompt-tool</c> whenever it needs permission; its other tools give Claude
+/// things only Visual Studio knows (see <see cref="VisualStudioTools"/>). Bound to localhost under a random path so
+/// other local processes can't find it by guessing.
 /// </summary>
 internal sealed class ApprovalServer : IDisposable
 {
-    public const string ServerName = "vsapproval";
+    public const string ServerName = "visualstudio";
     public const string ToolName = "approve";
 
     /// <summary>The name Claude Code knows the tool by.</summary>
     public const string QualifiedToolName = "mcp__" + ServerName + "__" + ToolName;
 
+    /// <summary>The Visual Studio tools offered alongside <c>approve</c>, as Claude Code names them.</summary>
+    public const string DiagnosticsTool = "mcp__" + ServerName + "__get_diagnostics";
+
+    public const string BuildTool = "mcp__" + ServerName + "__build_solution";
+
     private readonly HttpListener listener = new();
     private readonly Func<string, JsonElement, string?, Task<PermissionDecision>> decide;
+    private readonly Func<string, JsonElement, Task<(string Text, bool IsError)>> runTool;
 
     /// <param name="decide">Called with Claude Code's tool name, input and tool call ID (if given); returns the user's decision.</param>
-    public ApprovalServer(Func<string, JsonElement, string?, Task<PermissionDecision>> decide)
+    /// <param name="runTool">Runs one of the Visual Studio tools by its short name (e.g. "get_diagnostics").</param>
+    public ApprovalServer(Func<string, JsonElement, string?, Task<PermissionDecision>> decide, Func<string, JsonElement, Task<(string Text, bool IsError)>> runTool)
     {
         this.decide = decide;
+        this.runTool = runTool;
         byte[] secret = new byte[18];
         using (var rng = RandomNumberGenerator.Create())
         {
@@ -126,7 +135,7 @@ internal sealed class ApprovalServer : IDisposable
                     ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = "1.0.0" },
                 },
                 "ping" => new JsonObject(),
-                "tools/list" => new JsonObject { ["tools"] = new JsonArray(ToolDefinition()) },
+                "tools/list" => new JsonObject { ["tools"] = new JsonArray([ToolDefinition(), .. VisualStudioTools.Definitions()]) },
                 "tools/call" => await this.CallToolAsync(request?["params"]).ConfigureAwait(false),
                 _ => null!,
             };
@@ -154,6 +163,27 @@ internal sealed class ApprovalServer : IDisposable
     private async Task<JsonNode> CallToolAsync(JsonNode? parameters)
     {
         JsonNode? args = parameters?["arguments"];
+        string called = parameters?["name"] is JsonValue n && n.TryGetValue(out string? calledName) ? calledName! : ToolName;
+        if (called != ToolName)
+        {
+            (string text, bool isError) result;
+            try
+            {
+                using JsonDocument argsDoc = JsonDocument.Parse(args?.ToJsonString() ?? "{}");
+                result = await this.runTool(called, argsDoc.RootElement.Clone()).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ToolInputException or IOException or OperationCanceledException or System.Runtime.InteropServices.COMException)
+            {
+                result = (ex.Message, true);
+            }
+
+            return new JsonObject
+            {
+                ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = result.text }),
+                ["isError"] = result.isError,
+            };
+        }
+
         string toolName = args?["tool_name"]?.GetValue<string>() ?? "unknown";
         JsonNode input = args?["input"]?.DeepClone() ?? new JsonObject();
         string? toolUseId = args?["tool_use_id"] is JsonValue id && id.TryGetValue(out string? value) ? value : null;
@@ -196,3 +226,36 @@ internal sealed class ApprovalServer : IDisposable
 
 /// <param name="UpdatedInputJson">Replacement tool input to run with, as JSON; null runs the original input.</param>
 internal readonly record struct PermissionDecision(bool Allow, string? Message = null, string? UpdatedInputJson = null);
+
+/// <summary>The Visual Studio tools the extension's MCP server offers Claude Code: the Error List, and building the solution.</summary>
+internal static class VisualStudioTools
+{
+    public static JsonNode[] Definitions() =>
+    [
+        new JsonObject
+        {
+            ["name"] = "get_diagnostics",
+            ["description"] =
+                "List the errors and warnings in Visual Studio's Error List: errors from the last build, and the live (IntelliSense) " +
+                "errors in files open in the editor. Use it after editing code to check for mistakes, before or instead of a full build.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Only list problems in this file or folder (relative to the repository root)." },
+                    ["severity"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("error", "warning"), ["description"] = "\"error\" for errors only; \"warning\" (default) for errors and warnings." },
+                },
+            },
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "build_solution",
+            ["description"] =
+                "Build the solution open in Visual Studio (Build > Build Solution), wait for it to finish, and return the result with the " +
+                "Error List's errors and warnings. Works for projects `dotnet build` can't build, such as C++ or older .NET Framework ones.",
+            ["inputSchema"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() },
+        },
+    ];
+}

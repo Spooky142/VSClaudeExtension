@@ -86,6 +86,13 @@ internal static class CommandRules
             && IsSafe(words));
     }
 
+    /// <summary>
+    /// True if the user chose "Always allow" for a tool that isn't a command line, e.g. an MCP tool
+    /// ("mcp__server__tool") or "build_solution"; those are kept in the same list, by exact name.
+    /// </summary>
+    public static bool IsToolAllowed(string repoRoot, string toolName) =>
+        List(repoRoot).Contains(toolName, StringComparer.Ordinal);
+
     public static IReadOnlyList<string> List(string repoRoot)
     {
         lock (Gate)

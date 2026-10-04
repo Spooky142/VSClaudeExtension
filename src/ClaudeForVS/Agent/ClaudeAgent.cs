@@ -6,8 +6,10 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 using Anthropic;
 using Anthropic.Models.Messages;
+using ClaudeForVS.Agent.Mcp;
 using ClaudeForVS.Git;
 using ApiEffort = Anthropic.Models.Messages.Effort;
 
@@ -54,12 +56,24 @@ internal sealed class ClaudeAgent : IChatEngine
     private const string PlanModeRefusal =
         "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes in Settings.";
 
+    private const string SettingsRefusal =
+        "The user's permission settings (.claude/settings.json) don't allow this, so it wasn't done. Don't try to get around that; ask the user if it matters.";
+
+    // How long an MCP server gets to start and list its tools.
+    private static readonly TimeSpan McpStartTimeout = TimeSpan.FromSeconds(30);
+
     private readonly AnthropicClient client;
     private readonly RateLimitHeaderHandler rateLimits = new();
     private readonly List<MessageParam> history = [];
     private readonly RepoFiles files;
     private readonly string systemPrompt;
+    private readonly PermissionRules permissions;
     private bool editsPreApproved;
+
+    // Fixed once the first message is sent (built-in tools plus MCP servers' tools), so the prompt cache stays valid.
+    private List<ToolUnion>? tools;
+    private readonly List<McpClient> mcpClients = [];
+    private readonly Dictionary<string, (McpClient Client, McpTool Tool)> mcpTools = new(StringComparer.Ordinal);
 
     // Tokens in the conversation as of the latest response; 0 until the first one (or after compacting).
     private long contextTokens;
@@ -96,12 +110,20 @@ internal sealed class ClaudeAgent : IChatEngine
             - `delete_file` deletes a file and `move_file` moves or renames one, with the same approval as edits.
             - `run_command` runs a Windows PowerShell command in the repository, e.g. to build or run the tests after
               making changes. The user approves commands before they run.
+            - `get_diagnostics` lists Visual Studio's Error List: build errors and the live (IntelliSense) errors in
+              open files. Check it after changing code. `build_solution` builds the open solution in Visual Studio, which
+              also works for projects `dotnet build` can't handle (C++, older .NET Framework, solutions that need
+              Visual Studio's MSBuild); the user approves builds.
+            - `todo_write` keeps a task list that the user sees next to the chat. Use it for work with several steps:
+              write the whole list each time, with one task in progress at a time, and mark tasks completed as you go.
             - `ask_user` shows the user 1-4 multiple-choice questions. Use it when you need a decision that's genuinely
               theirs (for example choosing between approaches); the user can also type their own answer.
             - `web_search` and `web_fetch` search the web and read pages, e.g. for library documentation or an error
               message. Look at the repository first; use the web for what it can't tell you.
+            - Tools named `mcp__<server>__<tool>` come from MCP servers the user has configured.
             All file paths are relative to the repository root, and files outside the repository can't be accessed.
-            If the user declines an action, accept that and don't retry the same thing.
+            If the user declines an action, accept that and don't retry the same thing. The user may also approve only
+            some of the changes in an edit; the result then says what was left out.
 
             Look at the repository before answering questions about it rather than guessing. Keep answers concise and
             use Markdown, with fenced code blocks for code. Reference files by their repository-relative paths.
@@ -113,10 +135,18 @@ internal sealed class ClaudeAgent : IChatEngine
         {
             this.systemPrompt += "\n\n" + instructions;
         }
+
+        this.permissions = PermissionRules.Load(repoRoot);
     }
 
     /// <summary>The CLAUDE.md files this chat follows.</summary>
     public IReadOnlyList<string> InstructionFiles { get; }
+
+    /// <summary>The Claude Code settings files whose permission rules this chat follows.</summary>
+    public IReadOnlyList<string> PermissionFiles => this.permissions.Files;
+
+    /// <summary>The MCP servers this chat connected to, with how many tools each offers.</summary>
+    public IReadOnlyList<(string Name, int Tools)> McpServers => this.mcpClients.Select(c => (c.Config.Name, c.Tools.Count)).ToList();
 
     public ChatEngineKind Kind => ChatEngineKind.Api;
 
@@ -213,6 +243,8 @@ internal sealed class ClaudeAgent : IChatEngine
 
     public async Task SendAsync(ChatPrompt prompt, IChatSink sink, CancellationToken cancellationToken)
     {
+        await this.EnsureToolsAsync(sink, cancellationToken);
+
         // Finished responses so far; the one streaming is added on top, live.
         long promptTokens = await this.CompactIfNeededAsync(sink, midTask: false, cancellationToken);
         string? modeNote = this.ModeNote();
@@ -339,7 +371,137 @@ internal sealed class ClaudeAgent : IChatEngine
         sink.AppendText($"\n\n_Stopped after {MaxToolRounds} tool rounds._");
     }
 
-    public void Dispose() => this.client.Dispose();
+    public void Dispose()
+    {
+        this.client.Dispose();
+
+        // Stopping a server can take a moment (it's given time to exit), so it's done off the UI thread.
+        List<McpClient> servers = [.. this.mcpClients];
+        this.mcpClients.Clear();
+        if (servers.Count > 0)
+        {
+            _ = Task.Run(() => servers.ForEach(s => s.Dispose()));
+        }
+    }
+
+    /// <summary>
+    /// Works out the tools for this chat before its first message: the built-in ones (less any the user's permission
+    /// settings deny) plus the tools of the MCP servers configured for the repository. Servers from the repository's
+    /// .mcp.json run only after the user approves them.
+    /// </summary>
+    private async Task EnsureToolsAsync(IChatSink sink, CancellationToken cancellationToken)
+    {
+        if (this.tools != null)
+        {
+            return;
+        }
+
+        var list = BuiltInTools(this.permissions);
+        McpConfiguration config = McpConfig.Load(this.RepoRoot);
+        List<McpServerConfig> needApproval = config.Servers.Where(s => !config.IsPreApproved(s) && !McpApprovals.IsApproved(this.RepoRoot, s)).ToList();
+        List<McpServerConfig> toStart = config.Servers.Except(needApproval).ToList();
+        if (needApproval.Count > 0)
+        {
+            sink.SetStatus("Waiting for your approval…");
+            string title = needApproval.Count == 1
+                ? $"Start the MCP server \"{needApproval[0].Name}\" from .mcp.json"
+                : $"Start {needApproval.Count} MCP servers from .mcp.json";
+            string detail = string.Join("\n", needApproval.Select(s => $"{s.Name}: {s.Describe()}"))
+                + "\n\nThey come from the repository's .mcp.json and run on this machine with your permissions.";
+            ApprovalResult approval = await sink.RequestApprovalAsync(ActivityKind.Shell, title, detail, "Always allow here", cancellationToken);
+            if (approval.Decision == Approval.Deny)
+            {
+                sink.ToolActivity(ActivityKind.Declined, title, "Not started. You'll be asked again in your next chat.");
+            }
+            else
+            {
+                if (approval.Decision == Approval.AllowAll)
+                {
+                    McpApprovals.Approve(this.RepoRoot, needApproval);
+                }
+
+                toStart.AddRange(needApproval);
+            }
+        }
+
+        if (toStart.Count > 0)
+        {
+            sink.SetStatus(toStart.Count == 1 ? $"Starting the MCP server {toStart[0].Name}…" : $"Starting {toStart.Count} MCP servers…");
+            var started = await Task.WhenAll(toStart.Select(async server =>
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(McpStartTimeout);
+                try
+                {
+                    return (Server: server, Client: await Task.Run(() => McpClient.StartAsync(server, this.RepoRoot, timeout.Token)), Error: (string?)null);
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Whatever went wrong with one server (it isn't installed, crashed, isn't MCP...), the chat carries on without it.
+                    string error = ex is OperationCanceledException ? $"It didn't answer within {McpStartTimeout.TotalSeconds:0} seconds." : ex.Message;
+                    return (Server: server, Client: (McpClient?)null, Error: error);
+                }
+            }));
+
+            var connected = new List<string>();
+            foreach ((McpServerConfig server, McpClient? mcp, string? error) in started)
+            {
+                if (mcp is null)
+                {
+                    sink.ToolActivity(ActivityKind.Failed, $"MCP server {server.Name} didn't start", $"{error}\n{server.Describe()}".Trim());
+                    continue;
+                }
+
+                this.mcpClients.Add(mcp);
+                int count = 0;
+                foreach (McpTool tool in mcp.Tools)
+                {
+                    string name = this.UniqueToolName(server.Name, tool.Name);
+                    if (this.permissions.ForTool(name) == PermissionVerdict.Deny)
+                    {
+                        continue;
+                    }
+
+                    this.mcpTools[name] = (mcp, tool);
+                    list.Add(new Tool
+                    {
+                        Name = name,
+                        Description = tool.Description.Length > 4000 ? tool.Description.Substring(0, 4000) : tool.Description,
+                        InputSchema = InputSchema.FromRawUnchecked(tool.InputSchema),
+                    });
+                    count++;
+                }
+
+                connected.Add($"{server.Name} · {(count == 1 ? "1 tool" : $"{count} tools")}");
+            }
+
+            if (connected.Count > 0)
+            {
+                sink.ToolActivity(ActivityKind.Other, connected.Count == 1 ? "Connected to an MCP server" : $"Connected to {connected.Count} MCP servers", string.Join("\n", connected));
+            }
+        }
+
+        this.tools = list;
+    }
+
+    /// <summary>"mcp__server__tool", with characters tool names can't contain replaced, and kept unique.</summary>
+    private string UniqueToolName(string server, string tool)
+    {
+        static string Clean(string s) => Regex.Replace(s, "[^A-Za-z0-9_-]", "_");
+        string name = $"mcp__{Clean(server)}__{Clean(tool)}";
+        if (name.Length > 64)
+        {
+            name = name.Substring(0, 64);
+        }
+
+        string unique = name;
+        for (int i = 2; this.mcpTools.ContainsKey(unique); i++)
+        {
+            unique = name.Substring(0, Math.Min(name.Length, 60)) + "_" + i;
+        }
+
+        return unique;
+    }
 
     /// <summary>
     /// Once the context passes <see cref="CompactAt"/> (or a full-length reply would no longer fit), has Claude summarize the conversation and restarts it from that
@@ -446,7 +608,7 @@ internal sealed class ClaudeAgent : IChatEngine
             // (the mode goes in the conversation instead; see ModeNote), so switching mode keeps the cache.
             CacheControl = new CacheControlEphemeral(),
             System = this.systemPrompt,
-            Tools = ToolDefinitions,
+            Tools = this.tools ?? BuiltInTools(this.permissions),
             Messages = extra is null ? [.. this.history] : [.. this.history, extra],
         };
     }
@@ -754,34 +916,203 @@ internal sealed class ClaudeAgent : IChatEngine
     }
 
     /// <summary>Tools that only read and never ask the user anything, so they can run alongside each other.</summary>
-    private static bool CanRunInParallel(ToolUseBlockParam toolUse) => toolUse.Name switch
+    private bool CanRunInParallel(ToolUseBlockParam toolUse) => toolUse.Name switch
     {
-        "read_file" or "glob" or "grep" => true,
+        "glob" or "grep" => true,
+
+        // Unless a permission rule says to ask first.
+        "read_file" => !(toolUse.Input.TryGetValue("path", out JsonElement path) && path.ValueKind == JsonValueKind.String
+            && this.ReadVerdict(path.GetString()!) == PermissionVerdict.Ask),
         "git" => toolUse.Input.TryGetValue("args", out JsonElement args)
             && args.ValueKind == JsonValueKind.Array
             && args.EnumerateArray().All(a => a.ValueKind == JsonValueKind.String)
             && args.GetArrayLength() > 0
-            && GitRunner.IsReadOnly(args.EnumerateArray().Select(a => a.GetString()!).ToList()),
+            && GitRunner.IsReadOnly(args.EnumerateArray().Select(a => a.GetString()!).ToList())
+            && this.permissions.ForCommand("git " + string.Join(" ", args.EnumerateArray().Select(a => a.GetString()!))) is PermissionVerdict.None or PermissionVerdict.Allow,
         _ => false,
     };
+
+    /// <summary>What the permission rules say about reading a repository path; None if the path isn't valid.</summary>
+    private PermissionVerdict ReadVerdict(string path)
+    {
+        try
+        {
+            return this.permissions.ForRead(this.files.Resolve(path));
+        }
+        catch (ToolInputException)
+        {
+            return PermissionVerdict.None;
+        }
+    }
 
     private Task<string> ExecuteToolAsync(ToolUseBlockParam toolUse, IChatSink sink, CancellationToken cancellationToken)
     {
         IReadOnlyDictionary<string, JsonElement> input = toolUse.Input;
+        if (this.mcpTools.TryGetValue(toolUse.Name, out var mcp))
+        {
+            return this.CallMcpToolAsync(toolUse.Name, mcp.Client, mcp.Tool, input, sink, cancellationToken);
+        }
+
         return toolUse.Name switch
         {
             "git" => this.RunGitAsync(input, sink, cancellationToken),
             "glob" => this.GlobAsync(input, sink, cancellationToken),
             "grep" => this.GrepAsync(input, sink, cancellationToken),
-            "read_file" => Task.FromResult(this.ReadFile(input, sink)),
+            "read_file" => this.ReadFileAsync(input, sink, cancellationToken),
             "edit_file" => this.EditFileAsync(input, sink, cancellationToken),
             "write_file" => this.WriteFileAsync(input, sink, cancellationToken),
             "delete_file" => this.DeleteFileAsync(input, sink, cancellationToken),
             "move_file" => this.MoveFileAsync(input, sink, cancellationToken),
             "run_command" => this.RunCommandAsync(input, sink, cancellationToken),
+            "get_diagnostics" => this.GetDiagnosticsAsync(input, sink, cancellationToken),
+            "build_solution" => this.BuildSolutionAsync(sink, cancellationToken),
+            "todo_write" => Task.FromResult(WriteTodos(input, sink)),
             "ask_user" => AskUserAsync(toolUse.Input, sink, cancellationToken),
             _ => throw new ToolInputException($"Unknown tool: {toolUse.Name}"),
         };
+    }
+
+    private static string WriteTodos(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink)
+    {
+        IReadOnlyList<TaskItem> tasks = TaskList.Parse(JsonSerializer.SerializeToElement(input));
+        if (tasks.Count == 0 && !(input.TryGetValue("todos", out JsonElement todos) && todos.ValueKind == JsonValueKind.Array))
+        {
+            throw new ToolInputException("`todos` must be an array of {content, status, activeForm}.");
+        }
+
+        sink.ReportTasks(tasks);
+        sink.ToolActivity(ActivityKind.Other, "Updated the task list", TaskList.Format(tasks));
+        int done = tasks.Count(t => t.Status == "completed");
+        return $"Task list updated ({done} of {tasks.Count} completed).";
+    }
+
+    private async Task<string> GetDiagnosticsAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        IVisualStudioHost vs = VisualStudioHost.Current ?? throw new ToolInputException("Visual Studio's Error List isn't available.");
+        string scope = this.OptionalRepoPath(input, "path", folderOnly: false);
+        bool includeWarnings = !(input.TryGetValue("severity", out JsonElement s) && s.ValueKind == JsonValueKind.String && s.GetString() == "error");
+
+        sink.SetStatus("Reading Visual Studio's Error List…");
+        IReadOnlyList<ErrorListItem> items = await vs.GetDiagnosticsAsync(cancellationToken);
+        string result = Diagnostics.Format(items, this.RepoRoot, scope, includeWarnings);
+        string note = await this.SolutionNoteAsync(vs, cancellationToken);
+        sink.ToolActivity(ActivityKind.Search, "Checked the Error List" + (scope.Length > 0 ? $" for {scope}" : string.Empty), result);
+        return result + note;
+    }
+
+    private async Task<string> BuildSolutionAsync(IChatSink sink, CancellationToken cancellationToken)
+    {
+        const string Title = "Build the solution in Visual Studio";
+        IVisualStudioHost vs = VisualStudioHost.Current ?? throw new ToolInputException("Visual Studio isn't available to build with.");
+        if (this.Mode == AgentMode.Plan)
+        {
+            sink.ToolActivity(ActivityKind.Declined, Title, "Blocked in Plan mode.");
+            return PlanModeRefusal;
+        }
+
+        string solution = await vs.GetSolutionDirectoryAsync(cancellationToken) ?? throw new ToolInputException("No solution is open in Visual Studio.");
+        string root = this.RepoRoot.TrimEnd('\\', '/');
+        string dir = solution.TrimEnd('\\', '/');
+        if (!dir.Equals(root, StringComparison.OrdinalIgnoreCase) && !dir.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ToolInputException($"The solution open in Visual Studio ({solution}) isn't in this repository, so it wasn't built. Use run_command to build instead.");
+        }
+
+        if (this.Mode == AgentMode.Coding && !CommandRules.IsToolAllowed(this.RepoRoot, "build_solution"))
+        {
+            sink.SetStatus("Waiting for your approval…");
+            ApprovalResult approval = await sink.RequestApprovalAsync(ActivityKind.Shell, Title, string.Empty, "Always allow builds here", cancellationToken);
+            if (approval.Decision == Approval.Deny)
+            {
+                sink.ToolActivity(ActivityKind.Declined, Title, "Declined by you.");
+                return "The user declined to build the solution.";
+            }
+
+            if (approval.Decision == Approval.AllowAll)
+            {
+                CommandRules.Allow(this.RepoRoot, "build_solution");
+            }
+        }
+
+        sink.SetStatus("Building the solution in Visual Studio…");
+        BuildOutcome outcome;
+        try
+        {
+            outcome = await vs.BuildSolutionAsync(cancellationToken);
+        }
+        catch (System.Runtime.InteropServices.COMException ex)
+        {
+            throw new ToolInputException("Visual Studio couldn't start the build: " + ex.Message);
+        }
+
+        IReadOnlyList<ErrorListItem> items = await vs.GetDiagnosticsAsync(cancellationToken);
+        string diagnostics = Diagnostics.Format(items, this.RepoRoot, string.Empty, includeWarnings: true);
+        string result = $"{outcome.Summary}\n{diagnostics}";
+        sink.ToolActivity(outcome.Succeeded ? ActivityKind.Shell : ActivityKind.Failed, outcome.Succeeded ? "Built the solution" : "Build failed", result);
+        return result;
+    }
+
+    /// <summary>A warning to add when the Error List belongs to a solution outside this repository.</summary>
+    private async Task<string> SolutionNoteAsync(IVisualStudioHost vs, CancellationToken cancellationToken)
+    {
+        string? solution = await vs.GetSolutionDirectoryAsync(cancellationToken);
+        string root = this.RepoRoot.TrimEnd('\\', '/');
+        string? dir = solution?.TrimEnd('\\', '/');
+        bool inside = dir != null && (dir.Equals(root, StringComparison.OrdinalIgnoreCase) || dir.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+        return inside ? string.Empty
+            : dir is null ? "\n(No solution is open in Visual Studio, so only files open in the editor are checked.)"
+            : $"\n(Note: the solution open in Visual Studio, {solution}, isn't in this repository.)";
+    }
+
+    private async Task<string> CallMcpToolAsync(string name, McpClient mcp, McpTool tool, IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string title = $"{mcp.Config.Name} · {tool.Name}";
+        string arguments = input.Count == 0 ? string.Empty : JsonSerializer.Serialize(input, new JsonSerializerOptions { WriteIndented = true });
+        PermissionVerdict verdict = this.permissions.ForTool(name);
+        if (verdict == PermissionVerdict.Deny)
+        {
+            sink.ToolActivity(ActivityKind.Declined, title, "Denied by your permission settings.");
+            return SettingsRefusal;
+        }
+
+        if (this.Mode == AgentMode.Plan && !tool.ReadOnly)
+        {
+            sink.ToolActivity(ActivityKind.Declined, title, "Blocked in Plan mode.");
+            return PlanModeRefusal + " (This MCP tool doesn't say it's read-only.)";
+        }
+
+        bool ask = verdict == PermissionVerdict.Ask
+            || (this.Mode == AgentMode.Coding && verdict != PermissionVerdict.Allow && !CommandRules.IsToolAllowed(this.RepoRoot, name));
+        if (ask)
+        {
+            sink.SetStatus("Waiting for your approval…");
+            ApprovalResult approval = await sink.RequestApprovalAsync(
+                ActivityKind.Other, $"Use {title}", arguments, verdict == PermissionVerdict.Ask ? null : $"Always allow {tool.Name} here", cancellationToken);
+            if (approval.Decision == Approval.Deny)
+            {
+                sink.ToolActivity(ActivityKind.Declined, title, "Declined by you.");
+                return "The user declined this tool call.";
+            }
+
+            if (approval.Decision == Approval.AllowAll)
+            {
+                CommandRules.Allow(this.RepoRoot, name);
+            }
+        }
+
+        sink.SetStatus($"Running {title}…");
+        McpCallResult result;
+        try
+        {
+            result = await Task.Run(() => mcp.CallToolAsync(tool.Name, input, cancellationToken), cancellationToken);
+        }
+        catch (Exception ex) when (ex is McpClient.McpException or System.Net.Http.HttpRequestException or JsonException)
+        {
+            throw new InvalidOperationException($"{title} failed: {ex.Message}");
+        }
+
+        sink.ToolActivity(result.IsError ? ActivityKind.Failed : ActivityKind.Other, title, result.Text);
+        return result.IsError ? "The tool reported an error:\n" + result.Text : result.Text;
     }
 
     private async Task<string> RunGitAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
@@ -800,17 +1131,26 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         string commandLine = "git " + string.Join(" ", args.Select(GitRunner.QuoteArgument));
-        if (!GitRunner.IsReadOnly(args) && this.Mode == AgentMode.Plan)
+        PermissionVerdict verdict = this.permissions.ForCommand(commandLine);
+        if (verdict == PermissionVerdict.Deny)
+        {
+            sink.ToolActivity(ActivityKind.Declined, commandLine, "Denied by your permission settings.");
+            return SettingsRefusal;
+        }
+
+        bool readOnly = GitRunner.IsReadOnly(args);
+        if (!readOnly && this.Mode == AgentMode.Plan)
         {
             sink.ToolActivity(ActivityKind.Declined, commandLine, "Blocked in Plan mode.");
             return PlanModeRefusal;
         }
 
-        if (!GitRunner.IsReadOnly(args) && this.Mode == AgentMode.Coding && !CommandRules.IsAllowed(this.RepoRoot, commandLine, viaShell: false))
+        if (verdict == PermissionVerdict.Ask
+            || (!readOnly && this.Mode == AgentMode.Coding && verdict != PermissionVerdict.Allow && !CommandRules.IsAllowed(this.RepoRoot, commandLine, viaShell: false)))
         {
             sink.SetStatus("Waiting for your approval…");
-            string? rule = CommandRules.RuleFor(commandLine, viaShell: false);
-            Approval approval = await sink.RequestApprovalAsync(ActivityKind.Git, commandLine, string.Empty, rule is null ? null : $"Always allow \"{rule}\" here", cancellationToken);
+            string? rule = verdict == PermissionVerdict.Ask ? null : CommandRules.RuleFor(commandLine, viaShell: false);
+            Approval approval = (await sink.RequestApprovalAsync(ActivityKind.Git, commandLine, string.Empty, rule is null ? null : $"Always allow \"{rule}\" here", cancellationToken)).Decision;
             if (approval == Approval.Deny)
             {
                 sink.ToolActivity(ActivityKind.Declined, commandLine, "Declined by you.");
@@ -838,7 +1178,7 @@ internal sealed class ClaudeAgent : IChatEngine
         string where = folder.Length > 0 ? $" in {folder}" : string.Empty;
 
         sink.SetStatus($"Finding {pattern}{where}");
-        IReadOnlyList<string> all = await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken);
+        IReadOnlyList<string> all = this.Readable(await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken));
         IReadOnlyList<string> matches = RepoSearch.Glob(all, pattern, folder);
         string list = string.Join("\n", matches.Take(RepoSearch.MaxGlobResults));
         string more = matches.Count > RepoSearch.MaxGlobResults
@@ -871,7 +1211,7 @@ internal sealed class ClaudeAgent : IChatEngine
 
         string where = (scope.Length > 0 ? $" in {scope}" : string.Empty) + (glob is null ? string.Empty : $" ({glob})");
         sink.SetStatus($"Searching for {pattern}{where}");
-        IReadOnlyList<string> all = await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken);
+        IReadOnlyList<string> all = this.Readable(await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken));
         bool scopeIsFile = scope.Length > 0 && File.Exists(Path.Combine(this.RepoRoot, scope));
         IEnumerable<string> files = glob is null || scopeIsFile ? RepoSearch.Under(all, scope) : RepoSearch.Glob(all, glob, scope);
         string result = await Task.Run(
@@ -879,6 +1219,11 @@ internal sealed class ClaudeAgent : IChatEngine
         sink.ToolActivity(ActivityKind.Search, $"Grep {pattern}{where}", result);
         return result;
     }
+
+    /// <summary>The files glob and grep may show: all of them, less any the permission rules deny reading.</summary>
+    private IReadOnlyList<string> Readable(IReadOnlyList<string> files) => !this.permissions.HasReadDenials
+        ? files
+        : files.Where(f => this.permissions.ForRead(Path.Combine(this.RepoRoot, f.Replace('/', Path.DirectorySeparatorChar))) != PermissionVerdict.Deny).ToList();
 
     /// <summary>An optional repository-relative path argument, checked and normalized to forward slashes; empty for the root.</summary>
     private string OptionalRepoPath(IReadOnlyDictionary<string, JsonElement> input, string name, bool folderOnly)
@@ -898,9 +1243,31 @@ internal sealed class ClaudeAgent : IChatEngine
         return this.files.Relative(full).Replace('\\', '/');
     }
 
-    private string ReadFile(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink)
+    private async Task<string> ReadFileAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
     {
         string path = RequireString(input, "path");
+        string full = this.files.Resolve(path);
+        switch (this.permissions.ForRead(full))
+        {
+            case PermissionVerdict.Deny:
+                sink.ToolActivity(ActivityKind.Declined, $"Read {this.files.Relative(full)}", "Denied by your permission settings.");
+                return SettingsRefusal;
+            case PermissionVerdict.Ask:
+                sink.SetStatus("Waiting for your approval…");
+                if ((await sink.RequestApprovalAsync(ActivityKind.Read, $"Read {this.files.Relative(full)}", string.Empty, null, cancellationToken)).Decision == Approval.Deny)
+                {
+                    sink.ToolActivity(ActivityKind.Declined, $"Read {this.files.Relative(full)}", "Declined by you.");
+                    return "The user declined to let you read this file.";
+                }
+
+                break;
+        }
+
+        return this.ReadFile(path, input, sink);
+    }
+
+    private string ReadFile(string path, IReadOnlyDictionary<string, JsonElement> input, IChatSink sink)
+    {
         RepoFiles.TextFile file = this.files.Read(path);
         string[] lines = file.Text.Replace("\r\n", "\n").Split('\n');
         int startLine = OptionalInt(input, "start_line") is int s ? Math.Max(1, s) : 1;
@@ -967,17 +1334,31 @@ internal sealed class ClaudeAgent : IChatEngine
         string diff = UnifiedDiff.Create(file.Text, updated);
         var change = new FileChange(file.FullPath, file.Text, updated);
         ThrowIfUnsaved(file.FullPath, relative);
-        if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Edit {relative}", diff, change, sink, cancellationToken))
+        ApprovalResult approval = await this.ApproveEditAsync(ActivityKind.Edit, $"Edit {relative}", diff, change, sink, cancellationToken, [file.FullPath], canKeepSome: true);
+        if (approval.Decision == Approval.Deny)
         {
             sink.ToolActivity(ActivityKind.Declined, $"Edit {relative}", "Declined by you.");
             return "The user declined this edit.";
         }
 
         this.ThrowIfChanged(path, file.Text);
+        if (approval.PartialAfter is string partial)
+        {
+            this.files.Write(file.FullPath, partial, file.Encoding);
+            sink.ToolActivity(ActivityKind.Edit, $"Edited {relative} (some changes left out)", UnifiedDiff.Create(file.Text, partial), change with { After = partial });
+            return PartlyApplied(relative, partial, updated);
+        }
+
         this.files.Write(file.FullPath, updated, file.Encoding);
         sink.ToolActivity(ActivityKind.Edit, $"Edited {relative}", diff, change);
         return $"Edited {relative} ({count} replacement{(count == 1 ? "" : "s")}).";
     }
+
+    /// <summary>Tells Claude which parts of a change the user left out when they approved only some of it.</summary>
+    private static string PartlyApplied(string relative, string written, string proposed) =>
+        $"The user applied only some of this change to {relative}. They left out the changes below (a diff from what the file now " +
+        $"contains to what you proposed):\n{UnifiedDiff.Create(written, proposed)}\n" +
+        "Don't make the left-out changes again unless the user asks for them. Read the file again before editing it further.";
 
     private async Task<string> WriteFileAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
     {
@@ -1010,13 +1391,21 @@ internal sealed class ClaudeAgent : IChatEngine
         string preview = action == "Create" ? Preview(content) : UnifiedDiff.Create(before, after);
         var change = new FileChange(full, before, after);
         ThrowIfUnsaved(full, relative);
-        if (!await this.ApproveEditAsync(kind, $"{action} {relative}", preview, change, sink, cancellationToken))
+        ApprovalResult approval = await this.ApproveEditAsync(kind, $"{action} {relative}", preview, change, sink, cancellationToken, [full], canKeepSome: action != "Create");
+        if (approval.Decision == Approval.Deny)
         {
             sink.ToolActivity(ActivityKind.Declined, $"{action} {relative}", "Declined by you.");
             return "The user declined this change.";
         }
 
         this.ThrowIfChanged(path, action == "Create" ? null : before);
+        if (approval.PartialAfter is string partial)
+        {
+            this.files.Write(full, partial, encoding);
+            sink.ToolActivity(ActivityKind.Edit, $"Overwrote {relative} (some changes left out)", UnifiedDiff.Create(before, partial), change with { After = partial });
+            return PartlyApplied(relative, partial, after);
+        }
+
         this.files.Write(full, after, encoding);
         sink.ToolActivity(kind, action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview, change);
         return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}.";
@@ -1050,7 +1439,7 @@ internal sealed class ClaudeAgent : IChatEngine
         string preview = before is null ? "(binary file)" : Removed(before);
         FileChange? change = before is null ? null : new FileChange(full, before, string.Empty);
         ThrowIfUnsaved(full, relative);
-        if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Delete {relative}", preview, change, sink, cancellationToken))
+        if ((await this.ApproveEditAsync(ActivityKind.Edit, $"Delete {relative}", preview, change, sink, cancellationToken, [full])).Decision == Approval.Deny)
         {
             sink.ToolActivity(ActivityKind.Declined, $"Delete {relative}", "Declined by you.");
             return "The user declined to delete this file.";
@@ -1100,7 +1489,7 @@ internal sealed class ClaudeAgent : IChatEngine
 
         string title = $"{this.files.Relative(source)} → {this.files.Relative(destination)}";
         ThrowIfUnsaved(source, this.files.Relative(source));
-        if (!await this.ApproveEditAsync(ActivityKind.Edit, "Move " + title, string.Empty, null, sink, cancellationToken))
+        if ((await this.ApproveEditAsync(ActivityKind.Edit, "Move " + title, string.Empty, null, sink, cancellationToken, [source, destination])).Decision == Approval.Deny)
         {
             sink.ToolActivity(ActivityKind.Declined, "Move " + title, "Declined by you.");
             return "The user declined to move this file.";
@@ -1137,17 +1526,25 @@ internal sealed class ClaudeAgent : IChatEngine
             where = $" (in {this.files.Relative(directory)})";
         }
 
+        PermissionVerdict verdict = this.permissions.ForCommand(command);
+        if (verdict == PermissionVerdict.Deny)
+        {
+            sink.ToolActivity(ActivityKind.Declined, command + where, "Denied by your permission settings.");
+            return SettingsRefusal;
+        }
+
         if (this.Mode == AgentMode.Plan)
         {
             sink.ToolActivity(ActivityKind.Declined, command + where, "Blocked in Plan mode.");
             return PlanModeRefusal;
         }
 
-        if (this.Mode == AgentMode.Coding && !CommandRules.IsAllowed(this.RepoRoot, command, viaShell: true))
+        if (verdict == PermissionVerdict.Ask
+            || (this.Mode == AgentMode.Coding && verdict != PermissionVerdict.Allow && !CommandRules.IsAllowed(this.RepoRoot, command, viaShell: true)))
         {
             sink.SetStatus("Waiting for your approval…");
-            string? rule = CommandRules.RuleFor(command, viaShell: true);
-            Approval approval = await sink.RequestApprovalAsync(ActivityKind.Shell, $"Run: {command}{where}", string.Empty, rule is null ? null : $"Always allow \"{rule}\" here", cancellationToken);
+            string? rule = verdict == PermissionVerdict.Ask ? null : CommandRules.RuleFor(command, viaShell: true);
+            Approval approval = (await sink.RequestApprovalAsync(ActivityKind.Shell, $"Run: {command}{where}", string.Empty, rule is null ? null : $"Always allow \"{rule}\" here", cancellationToken)).Decision;
             if (approval == Approval.Deny)
             {
                 sink.ToolActivity(ActivityKind.Declined, command + where, "Declined by you.");
@@ -1218,26 +1615,36 @@ internal sealed class ClaudeAgent : IChatEngine
         }
     }
 
-    private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, FileChange? change, IChatSink sink, CancellationToken cancellationToken)
+    /// <param name="paths">The files the change touches, checked against the permission rules.</param>
+    /// <param name="canKeepSome">True if the caller can write just the changes the user keeps (see <see cref="ApprovalResult.PartialAfter"/>).</param>
+    private async Task<ApprovalResult> ApproveEditAsync(
+        ActivityKind kind, string title, string detail, FileChange? change, IChatSink sink, CancellationToken cancellationToken, IReadOnlyList<string> paths, bool canKeepSome = false)
     {
         if (this.Mode == AgentMode.Plan)
         {
             throw new ToolInputException(PlanModeRefusal);
         }
 
-        if (this.editsPreApproved || this.Mode == AgentMode.Auto)
+        // The strictest rule for any of the files wins: deny, then ask, then allow.
+        PermissionVerdict verdict = paths.Select(this.permissions.ForEdit).DefaultIfEmpty(PermissionVerdict.None).Max();
+        if (verdict == PermissionVerdict.Deny)
         {
-            return true;
+            throw new ToolInputException(SettingsRefusal);
+        }
+
+        if (verdict != PermissionVerdict.Ask && (this.editsPreApproved || this.Mode == AgentMode.Auto || verdict == PermissionVerdict.Allow))
+        {
+            return Approval.Allow;
         }
 
         sink.SetStatus("Waiting for your approval…");
-        Approval approval = await sink.RequestApprovalAsync(kind, title, detail, "Allow all edits", cancellationToken, change);
-        if (approval == Approval.AllowAll)
+        ApprovalResult approval = await sink.RequestApprovalAsync(kind, title, detail, verdict == PermissionVerdict.Ask ? null : "Allow all edits", cancellationToken, change, canKeepSome);
+        if (approval.Decision == Approval.AllowAll)
         {
             this.editsPreApproved = true;
         }
 
-        return approval != Approval.Deny;
+        return approval;
     }
 
     private static string RequireString(IReadOnlyDictionary<string, JsonElement> input, string name, bool allowEmpty = false)
@@ -1315,8 +1722,87 @@ internal sealed class ClaudeAgent : IChatEngine
         return "The user answered:\n" + summary;
     }
 
-    private static readonly List<ToolUnion> ToolDefinitions =
+    /// <summary>The built-in tools, less the web tools any permission rule denies.</summary>
+    private static List<ToolUnion> BuiltInTools(PermissionRules permissions)
+    {
+        var list = new List<ToolUnion>(CoreTools);
+        if (permissions.ForTool("WebSearch") != PermissionVerdict.Deny)
+        {
+            list.Add(new WebSearchTool20250305 { MaxUses = MaxWebUses });
+        }
+
+        if (permissions.ForTool("WebFetch") != PermissionVerdict.Deny)
+        {
+            IReadOnlyList<string> blocked = permissions.DeniedWebDomains();
+            list.Add(blocked.Count == 0
+                ? new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = 50_000 }
+                : new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = 50_000, BlockedDomains = blocked.ToList() });
+        }
+
+        return list;
+    }
+
+    private static readonly List<ToolUnion> CoreTools =
     [
+        new Tool
+        {
+            Name = "todo_write",
+            Description =
+                "Replace the task list shown to the user next to the chat. Use it to plan and track work with several steps: " +
+                "send the whole list every time, keep exactly one task in_progress while you work, and mark each task " +
+                "completed as soon as it's done. Skip it for quick, single-step requests.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["todos"] = JsonSerializer.SerializeToElement(new
+                    {
+                        type = "array",
+                        items = new
+                        {
+                            type = "object",
+                            properties = new
+                            {
+                                content = new { type = "string", description = "The task, in the imperative, e.g. \"Run the tests\"." },
+                                status = new { type = "string", @enum = new[] { "pending", "in_progress", "completed" } },
+                                activeForm = new { type = "string", description = "The task while it's being done, e.g. \"Running the tests\"." },
+                            },
+                            required = new[] { "content", "status", "activeForm" },
+                        },
+                    }),
+                },
+                Required = ["todos"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "get_diagnostics",
+            Description =
+                "List the errors and warnings in Visual Studio's Error List: errors from the last build, and the live " +
+                "(IntelliSense) errors in files open in the editor, which update a moment after a file changes. Each line " +
+                "is \"path:line: severity code: message [project] (source)\". Use it after editing code to check for " +
+                "mistakes, before or instead of a full build.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Only list problems in this file or folder (relative to the repository root). Default: everything." }),
+                    ["severity"] = JsonSerializer.SerializeToElement(new { type = "string", @enum = new[] { "error", "warning" }, description = "\"error\" lists errors only; \"warning\" (default) lists errors and warnings." }),
+                },
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "build_solution",
+            Description =
+                "Build the solution open in Visual Studio (Build > Build Solution) and wait for it to finish, then return " +
+                "the result and the Error List's errors and warnings. Works for any project Visual Studio can build, " +
+                "including C++ and older .NET Framework projects that `dotnet build` can't. The user approves each build " +
+                "unless they've allowed builds already.",
+            InputSchema = new() { Properties = new Dictionary<string, JsonElement>() },
+        },
         new Tool
         {
             Name = "ask_user",
@@ -1435,8 +1921,6 @@ internal sealed class ClaudeAgent : IChatEngine
             },
             EagerInputStreaming = true,
         },
-        new WebSearchTool20250305 { MaxUses = MaxWebUses },
-        new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = 50_000 },
         new Tool
         {
             Name = "read_file",
@@ -1612,8 +2096,10 @@ internal sealed class ClaudeAgent : IChatEngine
         public Task<IReadOnlyDictionary<string, string>?> AskQuestionsAsync(IReadOnlyList<UserQuestion> questions, CancellationToken cancellationToken)
             => throw new InvalidOperationException("Tools running alongside others can't ask the user anything.");
 
-        public Task<Approval> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null)
+        public Task<ApprovalResult> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null, bool canKeepSome = false)
             => throw new InvalidOperationException("Tools running alongside others can't ask for approval.");
+
+        public void ReportTasks(IReadOnlyList<TaskItem> tasks) => this.Add(s => s.ReportTasks(tasks));
 
         private void Add(Action<IChatSink> call)
         {

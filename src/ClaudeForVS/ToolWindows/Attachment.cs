@@ -21,6 +21,34 @@ internal enum AttachmentKind
     Errors,
 
     Image,
+
+    /// <summary>Tests from Test Explorer, with their outcomes, messages and stack traces.</summary>
+    Tests,
+
+    /// <summary>A file from Solution Explorer, with its contents.</summary>
+    File,
+
+    /// <summary>A folder or project from Solution Explorer, with the files in it.</summary>
+    Folder,
+}
+
+/// <summary>Reading what Test Explorer's Copy puts on the clipboard.</summary>
+internal static class TestExplorerText
+{
+    /// <summary>How many tests the text describes ("Test Name:" lines); at least 1 for any non-empty text.</summary>
+    public static int CountTests(string text)
+    {
+        int count = text.Replace("\r\n", "\n").Split('\n').Count(l => l.TrimStart().StartsWith("Test Name:", StringComparison.OrdinalIgnoreCase));
+        return Math.Max(text.Trim().Length > 0 ? 1 : 0, count);
+    }
+
+    /// <summary>The tests' names, from "Test Name:" lines.</summary>
+    public static IReadOnlyList<string> Names(string text) => text.Replace("\r\n", "\n").Split('\n')
+        .Select(l => l.Trim())
+        .Where(l => l.StartsWith("Test Name:", StringComparison.OrdinalIgnoreCase))
+        .Select(l => l.Substring("Test Name:".Length).Trim())
+        .Where(n => n.Length > 0)
+        .ToList();
 }
 
 /// <summary>Something attached to the next prompt, shown as a chip above the prompt box.</summary>
@@ -58,8 +86,124 @@ internal sealed class Attachment
         AttachmentKind.Selection => "", // code
         AttachmentKind.Errors => "", // error
         AttachmentKind.Image => "", // picture
+        AttachmentKind.Tests => "", // bug
+        AttachmentKind.Folder => "", // folder
         _ => "", // document
     };
+
+    // A file attached from Solution Explorer is sent whole up to this size; beyond it Claude is told to read it itself.
+    private const int MaxAttachedFileChars = 60_000;
+
+    // Most files listed for an attached folder.
+    private const int MaxFolderFiles = 300;
+
+    /// <summary>Tests copied from Test Explorer.</summary>
+    public static Attachment ForTests(string details)
+    {
+        int count = TestExplorerText.CountTests(details);
+        IReadOnlyList<string> names = TestExplorerText.Names(details);
+        string text = details.Length > MaxSelectionChars ? details.Substring(0, MaxSelectionChars) + "\n… (truncated)" : details;
+        string context = "Tests selected in Visual Studio's Test Explorer, as it copies them (names, outcomes, messages and stack traces):\n"
+            + Fence(text.TrimEnd(), "tests.txt");
+        string label = count == 1 && names.Count == 1 ? ShortTestName(names[0]) : $"{count} tests";
+        string tip = names.Count > 0
+            ? string.Join("\n", names.Take(8)) + (names.Count > 8 ? $"\n… and {names.Count - 8} more" : string.Empty)
+            : "Tests from Test Explorer";
+        return new Attachment(AttachmentKind.Tests, label, tip, context);
+    }
+
+    /// <summary>"Namespace.Class.Method(args)" → "Method(args)".</summary>
+    internal static string ShortTestName(string name)
+    {
+        int paren = name.IndexOf('(');
+        string withoutArgs = paren > 0 ? name.Substring(0, paren) : name;
+        int dot = withoutArgs.LastIndexOf('.');
+        return dot >= 0 && dot < withoutArgs.Length - 1 ? name.Substring(dot + 1) : name;
+    }
+
+    /// <summary>A file from Solution Explorer: its contents, or just its path if it's large or binary.</summary>
+    public static Attachment ForFile(string fullPath, string repoRoot)
+    {
+        string path = DisplayPath(fullPath, repoRoot);
+        string? text = null;
+        try
+        {
+            if (new FileInfo(fullPath).Length <= MaxAttachedFileChars * 4)
+            {
+                text = RepoFiles.Decode(File.ReadAllBytes(fullPath), path).Text;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ToolInputException)
+        {
+            // Unreadable or binary: refer to it by path only.
+        }
+
+        string context = text is null || text.Length > MaxAttachedFileChars
+            ? $"The user attached `{path}` (too large or not text to include here; read it if you need its contents)."
+            : $"The user attached `{path}`:\n" + Fence(text, fullPath);
+        return new Attachment(AttachmentKind.File, Path.GetFileName(fullPath), path, context);
+    }
+
+    /// <summary>A folder (or a project, given its project file) from Solution Explorer, listing the files in it.</summary>
+    /// <param name="repoFiles">The repository's files (repository-relative, forward slashes), for folders inside it.</param>
+    public static Attachment ForFolder(string fullPath, string? projectFile, string repoRoot, IReadOnlyList<string> repoFiles)
+    {
+        string root = repoRoot.TrimEnd('\\', '/');
+        string dir = fullPath.TrimEnd('\\', '/');
+        bool isRoot = string.Equals(dir, root, StringComparison.OrdinalIgnoreCase);
+        bool inRepo = isRoot || dir.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        string folder = isRoot ? string.Empty : inRepo ? DisplayPath(dir, repoRoot) : dir;
+
+        List<string> files;
+        if (inRepo)
+        {
+            files = (isRoot ? repoFiles : repoFiles.Where(f => f.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+        else
+        {
+            try
+            {
+                files = Directory.EnumerateFiles(dir, "*", SearchOption.TopDirectoryOnly).Select(Path.GetFileName).Take(MaxFolderFiles + 1).ToList();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                files = [];
+            }
+        }
+
+        string shown = isRoot ? "the repository root" : inRepo ? $"`{folder}/`" : $"`{dir}`";
+        var context = new StringBuilder();
+        if (projectFile != null)
+        {
+            context.Append($"The user attached the project `{DisplayPath(projectFile, repoRoot)}` (folder {shown}).");
+            try
+            {
+                string projectText = File.ReadAllText(projectFile);
+                if (projectText.Length <= MaxAttachedFileChars / 2)
+                {
+                    context.Append('\n').Append(Fence(projectText, projectFile));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+        else
+        {
+            context.Append($"The user attached the folder {shown}.");
+        }
+
+        if (files.Count > 0)
+        {
+            context.Append($"\nFiles in it{(files.Count > MaxFolderFiles ? $" (first {MaxFolderFiles} of {files.Count:N0})" : string.Empty)}:\n");
+            context.Append(string.Join("\n", files.Take(MaxFolderFiles)));
+        }
+
+        string label = projectFile != null ? Path.GetFileName(projectFile) : Path.GetFileName(dir) + "/";
+        string tip = (projectFile != null ? DisplayPath(projectFile, repoRoot) : isRoot ? root : folder)
+            + $"\n{(files.Count == 1 ? "1 file" : $"{files.Count:N0} files")} listed for Claude";
+        return new Attachment(AttachmentKind.Folder, label, tip, context.ToString());
+    }
 
     /// <summary>The editor's document and caret or selection, attached automatically. The selection is included if there is one.</summary>
     public static Attachment ForActiveFile(EditorContext editor, string repoRoot)

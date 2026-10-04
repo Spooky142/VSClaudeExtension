@@ -32,9 +32,10 @@ public partial class ClaudeChatControl : UserControl
 
     private readonly DispatcherTimer usageTimer;
 
-    public ClaudeChatControl(ClaudePackage package)
+    internal ClaudeChatControl(ClaudePackage package, ClaudeToolWindow pane)
     {
         this.package = package;
+        this.Pane = pane;
         this.InitializeComponent();
         this.DataContext = this.viewModel;
         this.viewModel.PromptSent += (_, _) =>
@@ -64,8 +65,9 @@ public partial class ClaudeChatControl : UserControl
             }
         };
 
-        // Replies link file paths to the editor, and colour code to suit the theme.
-        FileLinks.Resolve = this.ResolveFile;
+        // Replies link file paths to the editor, and colour code to suit the theme. With several chat windows open, paths
+        // resolve against the repository of the one in use.
+        FileLinks.Resolve = path => (package.LastActiveChat ?? this).ResolveFile(path);
         FileLinks.Open = target =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -95,11 +97,13 @@ public partial class ClaudeChatControl : UserControl
         // Keep the usage strip's "resets in" countdowns current.
         this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(30), DispatcherPriority.Background, (_, _) => this.viewModel.RefreshUsage(), this.Dispatcher);
 
-        // Coming back to the chat picks up whatever is now open in the editor.
+        // Coming back to the chat picks up whatever is now open in the editor, and makes this the window that
+        // commands from the editor, Error List, Test Explorer and Solution Explorer go to.
         this.IsKeyboardFocusWithinChanged += (_, e) =>
         {
             if (e.NewValue is true)
             {
+                this.package.LastActiveChat = this;
                 this.RefreshEditorContext();
             }
         };
@@ -107,6 +111,7 @@ public partial class ClaudeChatControl : UserControl
         this.Loaded += (_, _) =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            this.package.LastActiveChat ??= this;
             if (!this.loadedOnce)
             {
                 // Loaded fires each time the window is shown; only pick up the open solution the first time,
@@ -122,7 +127,11 @@ public partial class ClaudeChatControl : UserControl
                     this.viewModel.SetRepoFromDirectory(solutionDir);
                 }
 
-                this.viewModel.RestoreLastSession();
+                // Only the first window carries the last chat over from before Visual Studio restarted; others start empty.
+                if (this.Pane.InstanceNumber == 0)
+                {
+                    this.viewModel.RestoreLastSession();
+                }
             }
 
             this.RefreshEditorContext();
@@ -142,12 +151,57 @@ public partial class ClaudeChatControl : UserControl
 
     // ===== Called by the package's commands =====
 
+    /// <summary>The tool window this chat is in.</summary>
+    internal ClaudeToolWindow Pane { get; }
+
+    internal bool IsIdle => this.viewModel.IsIdle;
+
+    internal string RepoPath => this.viewModel.RepoPath;
+
+    /// <summary>Starts a new, empty chat in this window (used when a closed window is reopened for another chat).</summary>
+    internal void StartFresh() => this.viewModel.NewChat();
+
     /// <summary>Tools > Claude Chat: show the chat with the prompt box focused.</summary>
     internal void FocusPrompt()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
+        this.package.LastActiveChat = this;
         this.viewModel.ShowHistory = false;
         this.RefreshEditorContext();
+        this.PromptBox.Focus();
+    }
+
+    /// <summary>Test Explorer's "Fix with Claude": attaches the selected tests' details and asks Claude to fix them.</summary>
+    internal void FixTests(string? details)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        this.viewModel.ShowHistory = false;
+        if (details is null)
+        {
+            this.viewModel.ShowStatus("Couldn't read the selected tests. Select one or more tests in Test Explorer, then try again.");
+            return;
+        }
+
+        Attachment attachment = Attachment.ForTests(details);
+        this.viewModel.AddAttachment(attachment);
+        int count = TestExplorerText.CountTests(details);
+        this.SendOrFill(count == 1 ? "Fix this failing test." : "Fix these failing tests.");
+        this.PromptBox.Focus();
+    }
+
+    /// <summary>Solution Explorer's "Add to Claude": attaches the selected files, folders and projects to the next message.</summary>
+    internal void AddSolutionItems(IReadOnlyList<SolutionItem> items)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        this.viewModel.ShowHistory = false;
+        if (items.Count == 0)
+        {
+            this.viewModel.ShowStatus("Nothing that can be attached is selected in Solution Explorer.");
+            return;
+        }
+
+        int added = this.viewModel.AddSolutionItems(items);
+        this.viewModel.ShowStatus(added == 1 ? "Attached 1 item from Solution Explorer." : $"Attached {added} items from Solution Explorer.");
         this.PromptBox.Focus();
     }
 
@@ -404,6 +458,11 @@ public partial class ClaudeChatControl : UserControl
     private void OnToggleHistory(object sender, RoutedEventArgs e) => this.viewModel.ShowHistory = !this.viewModel.ShowHistory;
 
     private void OnNewChat(object sender, RoutedEventArgs e) => this.viewModel.NewChat();
+
+    private void OnNewChatWindow(object sender, RoutedEventArgs e) =>
+        this.package.JoinableTaskFactory.RunAsync(this.package.OpenNewChatWindowAsync).Task.FileAndForget("ClaudeForVS/NewChatWindow");
+
+    private void OnHideTasks(object sender, RoutedEventArgs e) => this.viewModel.SetTasks([]);
 
     /// <summary>The model chip's menu: switch model, effort or mode without opening Settings.</summary>
     private void OnModelMenu(object sender, RoutedEventArgs e)

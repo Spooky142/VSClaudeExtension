@@ -96,7 +96,7 @@ internal static class UnifiedDiff
     }
 
     /// <summary>The lines of both files as unchanged (' '), removed ('-') or added ('+'), in order.</summary>
-    private static List<(char Op, string Text)> Diff(string[] a, string[] b)
+    internal static List<(char Op, string Text)> Diff(string[] a, string[] b)
     {
         // Edits are local, so match the common start and end directly and only line up what's between.
         int prefix = 0;

@@ -250,6 +250,12 @@ internal sealed partial class ClaudeChatViewModel
         }
 
         SessionInfo info = item.Info;
+        if (Instances.Any(other => other != this && other.chatId == info.Id))
+        {
+            this.Status = "This chat is open in another Claude window.";
+            return;
+        }
+
         if (!Directory.Exists(info.RepoPath))
         {
             this.Status = $"The repository for this chat no longer exists: {info.RepoPath}";
@@ -264,6 +270,7 @@ internal sealed partial class ClaudeChatViewModel
 
         this.DisposeEngine();
         this.Messages.Clear();
+        this.SetTasks([]);
         foreach (SavedEntry e in entries)
         {
             // Chats saved by 0.3.9-0.3.10 kept the token count in the header.

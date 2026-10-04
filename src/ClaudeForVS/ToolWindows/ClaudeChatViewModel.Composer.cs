@@ -72,6 +72,19 @@ internal sealed partial class ClaudeChatViewModel
         this.ShowHistory = false;
     }
 
+    /// <summary>Attaches files, folders and projects selected in Solution Explorer. Returns how many were attached.</summary>
+    public int AddSolutionItems(IReadOnlyList<SolutionItem> items)
+    {
+        string root = this.RepoRoot ?? this.RepoPath;
+        IReadOnlyList<string> files = this.RepoRoot is string repo ? this.repoFiles.Get(repo) : [];
+        foreach (SolutionItem item in items)
+        {
+            this.AddAttachment(item.IsFolder ? Attachment.ForFolder(item.FullPath, item.ProjectFile, root, files) : Attachment.ForFile(item.FullPath, root));
+        }
+
+        return items.Count;
+    }
+
     /// <summary>Attaches a selection from the editor, leaving that file out of the automatic active-file context.</summary>
     public void AddSelection(EditorContext editor)
     {
@@ -401,6 +414,18 @@ internal sealed partial class ClaudeChatViewModel
             sb.Append(files.Count == 0
                 ? "- No CLAUDE.md files (`/init` creates one)\n"
                 : "- Following " + string.Join(", ", files.Select(f => $"`{f}`")) + "\n");
+
+            IReadOnlyList<string> settingsFiles = this.engine is ClaudeAgent withRules ? withRules.PermissionFiles
+                : this.RepoRoot is string repo ? PermissionRules.Load(repo).Files : [];
+            if (settingsFiles.Count > 0)
+            {
+                sb.Append("- Permission rules from " + string.Join(", ", settingsFiles.Select(f => $"`{f}`")) + "\n");
+            }
+
+            if (this.engine is ClaudeAgent { McpServers.Count: > 0 } withMcp)
+            {
+                sb.Append("- MCP servers: " + string.Join(", ", withMcp.McpServers.Select(s => $"{s.Name} ({(s.Tools == 1 ? "1 tool" : $"{s.Tools} tools")})")) + "\n");
+            }
         }
         else
         {

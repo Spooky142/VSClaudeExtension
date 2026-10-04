@@ -17,7 +17,7 @@ namespace ClaudeForVS;
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
 [Guid(PackageGuidString)]
 [ProvideMenuResource("Menus.ctmenu", 1)]
-[ProvideToolWindow(typeof(ClaudeToolWindow), Style = VsDockStyle.Float, Width = 560, Height = 760)] // its own floating window; can still be docked by dragging
+[ProvideToolWindow(typeof(ClaudeToolWindow), Style = VsDockStyle.Float, Width = 560, Height = 760, MultiInstances = true)] // floating windows; can still be docked by dragging
 [ProvideBindingPath]
 [ProvideOptionPage(typeof(OptionsPage), "Claude", "General", 0, 0, true)]
 public sealed class ClaudePackage : AsyncPackage
@@ -30,9 +30,19 @@ public sealed class ClaudePackage : AsyncPackage
     private const int FixCommandId = 0x0103;
     private const int WriteTestsCommandId = 0x0104;
     private const int FixErrorsCommandId = 0x0105;
+    private const int NewChatWindowCommandId = 0x0106;
+    private const int FixTestsCommandId = 0x0107;
+    private const int AddToClaudeCommandId = 0x0108;
+    private const int WriteCommitMessageCommandId = 0x0109;
+
+    // Chat windows beyond this many are refused; each one can run its own Claude.
+    private const int MaxChatWindows = 20;
 
     private IVsSolution? solution;
     private uint solutionEventsCookie;
+
+    /// <summary>The chat window used most recently. Commands from the editor, Error List and so on go to it.</summary>
+    internal ClaudeChatControl? LastActiveChat { get; set; }
 
     /// <summary>
     /// Raised on the UI thread after a solution or folder is opened, with its directory.
@@ -48,10 +58,21 @@ public sealed class ClaudePackage : AsyncPackage
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         this.Vs = new VsIntegration(this);
         Agent.OpenDocuments.HasUnsavedChanges = this.Vs.HasUnsavedChanges;
+        Agent.VisualStudioHost.Current = this.Vs;
 
         if (await this.GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService commands)
         {
             this.AddCommand(commands, ShowClaudeWindowCommandId, null, chat => chat.FocusPrompt());
+            commands.AddCommand(new MenuCommand(
+                (_, _) => this.JoinableTaskFactory.RunAsync(this.OpenNewChatWindowAsync).Task.FileAndForget("ClaudeForVS/NewChatWindow"),
+                new CommandID(CommandSet, NewChatWindowCommandId)));
+            commands.AddCommand(new MenuCommand(
+                (_, _) => this.JoinableTaskFactory.RunAsync(this.WriteCommitMessageAsync).Task.FileAndForget("ClaudeForVS/CommitMessage"),
+                new CommandID(CommandSet, WriteCommitMessageCommandId)));
+
+            // Test Explorer's selection is copied while it's still the active window.
+            this.AddCommand(commands, FixTestsCommandId, () => this.Vs.CopyTestExplorerSelection(), (chat, tests) => chat.FixTests(tests));
+            this.AddCommand(commands, AddToClaudeCommandId, () => this.Vs.GetSolutionExplorerSelection(), (chat, items) => chat.AddSolutionItems(items));
 
             // Editor commands read the selection before the chat window takes focus.
             this.AddCommand(commands, AskAboutSelectionCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, null));
@@ -79,15 +100,102 @@ public sealed class ClaudePackage : AsyncPackage
                 T captured = capture();
                 this.JoinableTaskFactory.RunAsync(async () =>
                 {
-                    ToolWindowPane pane = await this.ShowToolWindowAsync(typeof(ClaudeToolWindow), 0, create: true, this.DisposalToken);
-                    await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
-                    if (pane.Content is ClaudeChatControl chat)
+                    if (await this.ShowChatAsync() is ClaudeChatControl chat)
                     {
                         run(chat, captured);
                     }
                 }).Task.FileAndForget("ClaudeForVS/Command");
             },
             new CommandID(CommandSet, id)));
+    }
+
+    /// <summary>Shows the chat window used most recently (the first one if none has been used yet) and returns its chat.</summary>
+    private async System.Threading.Tasks.Task<ClaudeChatControl?> ShowChatAsync()
+    {
+        await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+        if (this.LastActiveChat?.Pane.Frame is IVsWindowFrame frame && ErrorHandler.Succeeded(frame.Show()))
+        {
+            return this.LastActiveChat;
+        }
+
+        ToolWindowPane pane = await this.ShowToolWindowAsync(typeof(ClaudeToolWindow), 0, create: true, this.DisposalToken);
+        await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+        return pane.Content as ClaudeChatControl;
+    }
+
+    /// <summary>
+    /// Opens another chat window alongside the others, reusing one that was closed while idle. Each window has its own
+    /// chat, repository and Claude, so they can work at the same time.
+    /// </summary>
+    internal async System.Threading.Tasks.Task OpenNewChatWindowAsync()
+    {
+        await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+        for (int id = 1; id < MaxChatWindows; id++)
+        {
+            if (this.FindToolWindow(typeof(ClaudeToolWindow), id, create: false) is ClaudeToolWindow existing)
+            {
+                bool hidden = existing.Frame is IVsWindowFrame f && f.IsVisible() != VSConstants.S_OK;
+                if (!hidden || existing.Chat is not { IsIdle: true } closedChat)
+                {
+                    continue;
+                }
+
+                closedChat.StartFresh();
+                ((IVsWindowFrame)existing.Frame).Show();
+                closedChat.FocusPrompt();
+                return;
+            }
+
+            ToolWindowPane pane = await this.ShowToolWindowAsync(typeof(ClaudeToolWindow), id, create: true, this.DisposalToken);
+            await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+            (pane.Content as ClaudeChatControl)?.FocusPrompt();
+            return;
+        }
+
+        this.Vs.RequestAttention($"There are already {MaxChatWindows} chat windows open. Close one first.");
+    }
+
+    /// <summary>Git > Write Commit Message with Claude: describes the changes and puts the message in the Git Changes window.</summary>
+    private async System.Threading.Tasks.Task WriteCommitMessageAsync()
+    {
+        await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+        string? repo = Git.GitRunner.FindRepoRoot(this.GetSolutionDirectory()) ?? Git.GitRunner.FindRepoRoot(this.LastActiveChat?.RepoPath);
+        if (repo is null)
+        {
+            this.Vs.RequestAttention("Open a solution or folder in a git repository to write a commit message.");
+            return;
+        }
+
+        IVsStatusbar? statusBar = await this.GetServiceAsync(typeof(SVsStatusbar)) as IVsStatusbar;
+        object icon = (short)Constants.SBAI_General;
+        statusBar?.Animation(1, ref icon);
+        statusBar?.SetText("Claude is writing a commit message…");
+        try
+        {
+            string message = await System.Threading.Tasks.Task.Run(() => Agent.CommitMessageWriter.GenerateAsync(Agent.AgentSettings.Load(), repo, this.DisposalToken));
+            await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+            if (await this.Vs.SetCommitMessageAsync(message))
+            {
+                statusBar?.SetText("Claude wrote a commit message in Git Changes. Check it before you commit.");
+            }
+            else
+            {
+                System.Windows.Clipboard.SetText(message);
+                statusBar?.SetText("Claude's commit message is on the clipboard. Paste it into Git Changes.");
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.IO.IOException or System.ComponentModel.Win32Exception
+            or Anthropic.Exceptions.AnthropicException or System.Net.Http.HttpRequestException or COMException or OperationCanceledException)
+        {
+            await this.JoinableTaskFactory.SwitchToMainThreadAsync();
+            statusBar?.SetText("Claude couldn't write a commit message: " + ex.Message);
+            System.Windows.MessageBox.Show("Claude couldn't write a commit message.\n\n" + ex.Message, "Claude", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+        }
+        finally
+        {
+            await this.JoinableTaskFactory.SwitchToMainThreadAsync();
+            statusBar?.Animation(0, ref icon);
+        }
     }
 
     protected override void Dispose(bool disposing)

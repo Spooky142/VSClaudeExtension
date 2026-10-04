@@ -23,7 +23,8 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     private IChatEngine? engine;
     private CancellationTokenSource? runCts;
-    private TaskCompletionSource<Approval>? pendingApproval;
+    private TaskCompletionSource<ApprovalResult>? pendingApproval;
+    private ChangeReview? approvalReview;
     private TaskCompletionSource<IReadOnlyDictionary<string, string>?>? pendingQuestions;
     private ChatEntry? currentAssistant;
     private ChatEntry? currentThinking;
@@ -61,8 +62,12 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     private double chatCost;
     private bool chatHasCost;
 
+    // Every chat window's view model (they live as long as Visual Studio), so one chat isn't opened in two windows.
+    private static readonly List<ClaudeChatViewModel> Instances = [];
+
     public ClaudeChatViewModel()
     {
+        Instances.Add(this);
         this.settings = AgentSettings.Load();
         this.needsApiKey = ApiKeyStore.Load() is null;
         this.status = GitRunner.GitPath is null ? "git.exe not found - git tools will fail." : string.Empty;
@@ -267,7 +272,33 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         }
     }
 
-    public bool HasApprovalDetail => this.approvalLines.Count > 0;
+    public bool HasApprovalDetail => this.approvalLines.Count > 0 && this.approvalReview is null;
+
+    /// <summary>The pending edit split into blocks with checkboxes, when it has several; null otherwise.</summary>
+    public ChangeReview? ApprovalReview
+    {
+        get => this.approvalReview;
+        private set
+        {
+            this.Set(ref this.approvalReview, value);
+            this.OnPropertyChanged(nameof(this.IsReviewingBlocks));
+            this.OnPropertyChanged(nameof(this.HasApprovalDetail));
+            this.OnReviewChanged();
+        }
+    }
+
+    public bool IsReviewingBlocks => this.approvalReview != null;
+
+    /// <summary>False while every block of the change is unticked, which would apply nothing.</summary>
+    public bool CanApprove => this.approvalReview is null || this.approvalReview.KeptCount > 0;
+
+    public string ReviewSummary => this.approvalReview?.Summary ?? string.Empty;
+
+    private void OnReviewChanged()
+    {
+        this.OnPropertyChanged(nameof(this.CanApprove));
+        this.OnPropertyChanged(nameof(this.ReviewSummary));
+    }
 
     /// <summary>The whole-file change behind the pending approval, for the diff viewer; null for commands.</summary>
     public FileChange? ApprovalChange
@@ -549,6 +580,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.Stop();
         this.DisposeEngine();
         this.Messages.Clear();
+        this.SetTasks([]);
         this.ResetChatUsage();
         this.chatId = null;
         this.chatPinned = false;
@@ -584,7 +616,17 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.runCts?.Cancel();
     }
 
-    public void Resolve(Approval approval) => this.pendingApproval?.TrySetResult(approval);
+    /// <summary>Answers the approval card. When some blocks of an edit were unticked, only the ticked ones are approved.</summary>
+    public void Resolve(Approval approval)
+    {
+        if (approval != Approval.Deny && !this.CanApprove)
+        {
+            return;
+        }
+
+        string? partial = approval == Approval.Deny ? null : this.approvalReview?.PartialAfter();
+        this.pendingApproval?.TrySetResult(new ApprovalResult(approval, partial));
+    }
 
     /// <summary>The engine for the current repository, creating it (and handing it any reopened chat) if needed.</summary>
     private bool TryGetEngine(out IChatEngine result)
@@ -904,15 +946,17 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.RefreshUsage();
     }
 
-    async Task<Approval> IChatSink.RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change)
+    async Task<ApprovalResult> IChatSink.RequestApprovalAsync(
+        ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change, bool canKeepSome)
     {
         this.currentAssistant = null;
         this.currentThinking = null;
-        var tcs = new TaskCompletionSource<Approval>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<ApprovalResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         this.pendingApproval = tcs;
         this.ApprovalTitle = title;
         this.ApprovalLines = DiffLine.Parse(Truncate(detail), kind);
         this.ApprovalChange = change;
+        this.ApprovalReview = canKeepSome && change != null ? ChangeReview.For(change, this.OnReviewChanged) : null;
         this.AllowAllLabel = allowAllLabel;
         this.HasPendingApproval = true;
         this.AttentionNeeded?.Invoke(this, "Claude needs your approval");
@@ -926,9 +970,47 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             {
                 this.HasPendingApproval = false;
                 this.ApprovalChange = null;
+                this.ApprovalReview = null;
                 this.pendingApproval = null;
             }
         }
+    }
+
+    // ===== Task list =====
+
+    private bool tasksExpanded = true;
+
+    /// <summary>Claude's latest task list (TodoWrite / todo_write), shown above the prompt box.</summary>
+    public ObservableCollection<TaskItem> Tasks { get; } = [];
+
+    public bool HasTasks => this.Tasks.Count > 0;
+
+    /// <summary>"Tasks · 2 of 5 done".</summary>
+    public string TasksSummary => $"Tasks · {this.Tasks.Count(t => t.Status == "completed")} of {this.Tasks.Count} done";
+
+    /// <summary>The task in progress, shown in the header while the list is collapsed.</summary>
+    public string CurrentTask => this.Tasks.FirstOrDefault(t => t.Status == "in_progress")?.Display ?? string.Empty;
+
+    public bool TasksExpanded
+    {
+        get => this.tasksExpanded;
+        set => this.Set(ref this.tasksExpanded, value);
+    }
+
+    void IChatSink.ReportTasks(IReadOnlyList<TaskItem> tasks) => this.SetTasks(tasks);
+
+    /// <summary>Replaces the task list; an empty list hides it.</summary>
+    public void SetTasks(IReadOnlyList<TaskItem> tasks)
+    {
+        this.Tasks.Clear();
+        foreach (TaskItem task in tasks)
+        {
+            this.Tasks.Add(task);
+        }
+
+        this.OnPropertyChanged(nameof(this.HasTasks));
+        this.OnPropertyChanged(nameof(this.TasksSummary));
+        this.OnPropertyChanged(nameof(this.CurrentTask));
     }
 
     private static string Truncate(string detail)

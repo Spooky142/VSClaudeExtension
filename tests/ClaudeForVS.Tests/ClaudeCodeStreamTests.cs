@@ -163,6 +163,34 @@ public sealed class ClaudeCodeStreamTests : IDisposable
     }
 
     [Fact]
+    public void TodoWriteUpdatesTheTaskList()
+    {
+        this.Feed("""{"type":"assistant","uuid":"m1","message":{"content":[{"type":"tool_use","id":"toolu_t","name":"TodoWrite","input":{"todos":[{"content":"Fix the bug","status":"completed","activeForm":"Fixing the bug"},{"content":"Run the tests","status":"in_progress","activeForm":"Running the tests"},{"content":"Update docs","status":"pending","activeForm":"Updating docs"}]}}]}}""");
+
+        IReadOnlyList<TaskItem> tasks = Assert.Single(this.sink.TaskLists);
+        Assert.Equal(["completed", "in_progress", "pending"], tasks.Select(t => t.Status));
+        Assert.Equal("Running the tests", tasks[1].Display);
+        Assert.Equal("Update docs", tasks[2].Display);
+
+        this.Feed("""{"type":"user","uuid":"m2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_t","content":"ok"}]}}""");
+        (ActivityKind kind, string title, string detail) = Assert.Single(this.sink.Activities);
+        Assert.Equal(ActivityKind.Other, kind);
+        Assert.Equal("Updated the task list", title);
+        Assert.Equal("[x] Fix the bug\n[~] Run the tests\n[ ] Update docs", detail);
+    }
+
+    [Fact]
+    public void VisualStudioToolResultsAreShown()
+    {
+        this.Feed("""{"type":"assistant","uuid":"m1","message":{"content":[{"type":"tool_use","id":"toolu_d","name":"mcp__visualstudio__get_diagnostics","input":{}}]}}""");
+        this.Feed("""{"type":"user","uuid":"m2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_d","content":[{"type":"text","text":"No errors or warnings."}]}]}}""");
+        (ActivityKind kind, string title, string detail) = Assert.Single(this.sink.Activities);
+        Assert.Equal(ActivityKind.Search, kind);
+        Assert.Equal("Checked the Error List", title);
+        Assert.Equal("No errors or warnings.", detail);
+    }
+
+    [Fact]
     public void UnknownEventsAreIgnored()
     {
         Assert.Null(this.Feed("""{"type":"something_new","data":1}"""));
@@ -227,7 +255,11 @@ public sealed class ClaudeCodeStreamTests : IDisposable
         public Task<IReadOnlyDictionary<string, string>?> AskQuestionsAsync(IReadOnlyList<UserQuestion> questions, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyDictionary<string, string>?>(null);
 
-        public Task<Approval> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null) =>
-            Task.FromResult(Approval.Deny);
+        public Task<ApprovalResult> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null, bool canKeepSome = false) =>
+            Task.FromResult<ApprovalResult>(Approval.Deny);
+
+        public List<IReadOnlyList<TaskItem>> TaskLists { get; } = [];
+
+        public void ReportTasks(IReadOnlyList<TaskItem> tasks) => this.TaskLists.Add(tasks);
     }
 }
