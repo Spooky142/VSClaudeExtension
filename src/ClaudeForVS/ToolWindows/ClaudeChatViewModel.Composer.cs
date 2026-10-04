@@ -107,7 +107,7 @@ internal sealed partial class ClaudeChatViewModel
 
         if (before.StartsWith("/") && !before.Contains('\n') && before.Count(c => c == ' ') <= 1)
         {
-            return SlashCommands.Suggest(before);
+            return SlashCommands.Suggest(before, this.LoadCustomCommands());
         }
 
         int at = caret - 1;
@@ -171,6 +171,12 @@ internal sealed partial class ClaudeChatViewModel
 
         if (SlashCommands.Parse(text) is SlashCommand command)
         {
+            // Commands that are really prompts go to Claude in full; the transcript shows what was typed.
+            if (command.Name is "/review" or "/init")
+            {
+                return this.SendWithAttachments(text, command.Name == "/init" ? SlashCommands.InitPrompt : SlashCommands.ReviewPrompt(command.Argument), out run);
+            }
+
             bool handled = this.RunCommand(command, out run);
             if (handled)
             {
@@ -180,6 +186,23 @@ internal sealed partial class ClaudeChatViewModel
             return handled;
         }
 
+        // Claude Code expands its own custom commands (with everything they support); the API engine needs them expanded here.
+        if (this.settings.Engine == ChatEngineKind.Api
+            && SlashCommands.ParseCustom(text, this.LoadCustomCommands()) is (CustomCommand custom, string arguments))
+        {
+            return this.SendWithAttachments(text, custom.Expand(arguments), out run);
+        }
+
+        return this.SendWithAttachments(text, text, out run);
+    }
+
+    /// <summary>Custom commands for the current repository and user, read fresh so edits to them apply straight away.</summary>
+    private IReadOnlyList<CustomCommand> LoadCustomCommands() => CustomCommands.Load(this.RepoRoot);
+
+    /// <summary>Sends <paramref name="sendText"/> with the attachments, showing <paramref name="displayText"/> in the transcript.</summary>
+    private bool SendWithAttachments(string displayText, string sendText, out Task run)
+    {
+        string text = displayText;
         var attachments = new List<Attachment>();
         if (this.activeFile != null)
         {
@@ -187,7 +210,7 @@ internal sealed partial class ClaudeChatViewModel
         }
 
         attachments.AddRange(this.Attachments);
-        (ChatPrompt prompt, string note) = Attachment.Compose(text, attachments);
+        (ChatPrompt prompt, string note) = Attachment.Compose(sendText, attachments);
         if (!this.TrySendPrompt(text, prompt, note, out run))
         {
             return false;
@@ -232,8 +255,25 @@ internal sealed partial class ClaudeChatViewModel
         switch (command.Name)
         {
             case "/help":
-                this.Messages.Add(new ChatEntry(ChatEntryKind.Assistant, "Claude", SlashCommands.HelpText()));
-                this.PromptSent?.Invoke(this, EventArgs.Empty);
+                this.ShowLocalReply(SlashCommands.HelpText(this.LoadCustomCommands()));
+                return true;
+
+            case "/copy":
+                if (this.Messages.LastOrDefault(m => m.Kind == ChatEntryKind.Assistant && !m.IsLocalReply) is not ChatEntry reply)
+                {
+                    this.Status = "There's no reply from Claude to copy yet.";
+                    return false;
+                }
+
+                this.Status = this.CopyText(reply.Text) ? "Copied Claude's last reply." : "The clipboard is busy; try again.";
+                return true;
+
+            case "/cost":
+                this.ShowLocalReply(this.UsageReport());
+                return true;
+
+            case "/context":
+                this.ShowLocalReply(this.ContextReport());
                 return true;
 
             case "/clear":
@@ -313,10 +353,70 @@ internal sealed partial class ClaudeChatViewModel
         }
     }
 
+    /// <summary>Shows the extension's own answer to a command, styled like a reply but kept out of the conversation.</summary>
+    private void ShowLocalReply(string markdown)
+    {
+        this.Messages.Add(new ChatEntry(ChatEntryKind.Assistant, ChatEntry.LocalReplyHeader, markdown));
+        this.PromptSent?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>/cost: this chat's tokens, then everything the usage strip shows except the context.</summary>
+    private string UsageReport()
+    {
+        var sb = new System.Text.StringBuilder("**Usage**\n\n");
+        TokenUsage t = this.chatTokens;
+        string chat = t == default ? "nothing yet"
+            : $"{FormatTokens(t.Input + t.CacheWrite)} in · {FormatTokens(t.Output)} out"
+                + (t.CacheRead > 0 ? $" · {FormatTokens(t.CacheRead)} read from cache" : string.Empty)
+                + (this.chatHasCost ? $" · ≈ ${this.chatCost:0.00}" : string.Empty);
+        sb.Append($"- **This chat** (since it was opened): {chat}\n");
+
+        foreach (UsageMeter meter in this.UsageMeters.Where(m => m.Label != "Context"))
+        {
+            sb.Append($"- **{meter.Label}**: {meter.Value}{(meter.Detail.Length > 0 ? " · " + meter.Detail : string.Empty)}\n");
+        }
+
+        sb.Append(this.settings.Engine == ChatEngineKind.Api
+            ? "\nCosts are estimates at list prices. Your Console account has the exact figures."
+            : "\nClaude Code usage counts against your plan's limits rather than costing per token.");
+        return sb.ToString();
+    }
+
+    /// <summary>/context: how full the context window is, and where the instructions come from.</summary>
+    private string ContextReport()
+    {
+        ClaudeModel model = this.engine?.Model ?? this.settings.Model;
+        long window = AgentSettings.ContextWindow(model);
+        var sb = new System.Text.StringBuilder("**Context**\n\n");
+        sb.Append(this.contextTokens > 0
+            ? $"- {FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens ({100.0 * this.contextTokens / window:0}%) · {AgentSettings.ModelName(model)}\n"
+            : $"- {FormatTokens(window)} token window ({AgentSettings.ModelName(model)}). How much is used is known after Claude's next reply.\n");
+        sb.Append($"- {this.Messages.Count(m => m.Kind == ChatEntryKind.User)} of your messages and {this.Messages.Count(m => m.Kind == ChatEntryKind.Assistant && !m.IsLocalReply)} replies in this chat\n");
+
+        bool api = (this.engine?.Kind ?? this.settings.Engine) == ChatEngineKind.Api;
+        if (api)
+        {
+            IReadOnlyList<string> files = this.engine is ClaudeAgent agent ? agent.InstructionFiles
+                : this.RepoRoot is string root ? ProjectInstructions.Load(root).Files : [];
+            sb.Append(files.Count == 0
+                ? "- No CLAUDE.md files (`/init` creates one)\n"
+                : "- Following " + string.Join(", ", files.Select(f => $"`{f}`")) + "\n");
+        }
+        else
+        {
+            sb.Append("- Claude Code reads the CLAUDE.md files itself\n");
+        }
+
+        sb.Append(api
+            ? "\nWhen the context is nearly full, the conversation is summarized automatically. `/compact` does it now."
+            : "\nClaude Code compacts the conversation automatically when it's nearly full. `/compact` does it now.");
+        return sb.ToString();
+    }
+
     private bool SetFromCommand<T>(SlashCommand command, Func<string, T?> parse, Action<T> apply)
         where T : struct
     {
-        if (parse(command.Argument) is not T value)
+        if (parse(command.Argument.ToLowerInvariant()) is not T value)
         {
             this.Status = "Usage: " + SlashCommands.All.First(c => c.Name == command.Name).Usage;
             return false;

@@ -91,11 +91,38 @@ public class SlashCommandTests
     public void CommandAndArgumentAreParsed()
     {
         SlashCommand? command = SlashCommands.Parse("  /Model Sonnet ");
-        Assert.Equal(new SlashCommand("/model", "sonnet"), command);
+        Assert.Equal(new SlashCommand("/model", "Sonnet"), command); // the argument keeps its case for /review's focus
     }
 
     [Fact]
-    public void NewIsAnAliasForClear() => Assert.Equal("/clear", SlashCommands.Parse("/new")?.Name);
+    public void AliasesMapToTheirCommands()
+    {
+        Assert.Equal("/clear", SlashCommands.Parse("/new")?.Name);
+        Assert.Equal("/cost", SlashCommands.Parse("/usage")?.Name);
+    }
+
+    [Fact]
+    public void ReviewKeepsItsFocus()
+    {
+        Assert.Equal(new SlashCommand("/review", "the Parser changes"), SlashCommands.Parse("/review the Parser changes"));
+        Assert.EndsWith("Focus on: the Parser changes", SlashCommands.ReviewPrompt("the Parser changes"));
+        Assert.DoesNotContain("Focus on", SlashCommands.ReviewPrompt(string.Empty));
+    }
+
+    [Fact]
+    public void CustomCommandsAreCompletedAfterBuiltIns()
+    {
+        CustomCommand[] custom =
+        [
+            new("/deploy", "Deploy (project)", "[env]", "Deploy to $ARGUMENTS"),
+            new("/help", "Shadowed (user)", string.Empty, "never offered"),
+        ];
+
+        Suggestion deploy = Assert.Single(SlashCommands.Suggest("/dep", custom));
+        Assert.Equal("/deploy [env]", deploy.Display);
+        Assert.Equal("/deploy ", deploy.Insert);
+        Assert.Single(SlashCommands.Suggest("/hel", custom)); // the built-in /help wins
+    }
 
     [Theory]
     [InlineData("hello")]

@@ -27,6 +27,9 @@ internal sealed record SessionInfo
 
     public int MessageCount { get; init; }
 
+    /// <summary>Pinned chats are listed first and kept by "Delete all".</summary>
+    public bool Pinned { get; init; }
+
     /// <summary>The Claude Code session to <c>--resume</c>; null for chats that ran on the Claude API.</summary>
     public string? ClaudeCodeSessionId { get; init; }
 
@@ -185,6 +188,13 @@ internal sealed class SessionItem : System.ComponentModel.INotifyPropertyChanged
     public bool IsCurrent { get; }
 
     public string Title => this.Info.Title;
+
+    public bool IsPinned => this.Info.Pinned;
+
+    /// <summary>The pin button's glyph: unpin when pinned, pin otherwise.</summary>
+    public string PinGlyph => this.Info.Pinned ? "" : "";
+
+    public string PinToolTip => this.Info.Pinned ? "Unpin" : "Pin to the top";
 
     /// <summary>True while the title is being edited in place.</summary>
     public bool IsRenaming

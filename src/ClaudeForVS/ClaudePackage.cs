@@ -19,6 +19,7 @@ namespace ClaudeForVS;
 [ProvideMenuResource("Menus.ctmenu", 1)]
 [ProvideToolWindow(typeof(ClaudeToolWindow), Style = VsDockStyle.Float, Width = 560, Height = 760)] // its own floating window; can still be docked by dragging
 [ProvideBindingPath]
+[ProvideOptionPage(typeof(OptionsPage), "Claude", "General", 0, 0, true)]
 public sealed class ClaudePackage : AsyncPackage
 {
     public const string PackageGuidString = "4b0f1f5e-7a3c-4d52-9f1e-2c6a8b9d0e41";

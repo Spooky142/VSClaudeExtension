@@ -1,5 +1,7 @@
 using System;
+using System.ComponentModel.Design;
 using System.Runtime.InteropServices;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeForVS.ToolWindows;
@@ -17,6 +19,16 @@ public sealed class ClaudeToolWindow : ToolWindowPane
     protected override void Initialize()
     {
         base.Initialize();
-        this.Content = new ClaudeChatControl((ClaudePackage)this.Package);
+        var chat = new ClaudeChatControl((ClaudePackage)this.Package);
+        this.Content = chat;
+
+        // Edit.Find (Ctrl+F) goes to the active window's own commands first, so it searches the chat rather than
+        // opening Visual Studio's Find dialog while the chat has focus.
+        if (this.GetService(typeof(IMenuCommandService)) is OleMenuCommandService commands)
+        {
+            commands.AddCommand(new MenuCommand(
+                (_, _) => chat.OpenFind(),
+                new CommandID(VSConstants.GUID_VSStandardCommandSet97, (int)VSConstants.VSStd97CmdID.Find)));
+        }
     }
 }

@@ -78,9 +78,15 @@ internal sealed class ChatEntry : INotifyPropertyChanged
         this.Change = change;
     }
 
+    /// <summary>Header of replies written by the extension itself (/help, /cost, /context) rather than by Claude.</summary>
+    public const string LocalReplyHeader = "Claude for VS";
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ChatEntryKind Kind { get; }
+
+    /// <summary>True for the extension's own replies, which aren't part of the conversation with Claude.</summary>
+    public bool IsLocalReply => this.Kind == ChatEntryKind.Assistant && this.Header == LocalReplyHeader;
 
     public ActivityKind Activity { get; }
 

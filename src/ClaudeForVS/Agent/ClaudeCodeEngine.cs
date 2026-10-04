@@ -305,8 +305,8 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         }
     }
 
-    /// <summary>Handles one stream-json event. Returns a value only for the final <c>result</c> event.</summary>
-    private RunOutcome? HandleEvent(JsonElement ev, IChatSink chatSink)
+    /// <summary>Handles one stream-json event. Returns a value only for the final <c>result</c> event. Internal for tests.</summary>
+    internal RunOutcome? HandleEvent(JsonElement ev, IChatSink chatSink)
     {
         string type = Str(ev, "type") ?? string.Empty;
 
@@ -767,5 +767,5 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         }
     }
 
-    private readonly record struct RunOutcome(string? Error);
+    internal readonly record struct RunOutcome(string? Error);
 }

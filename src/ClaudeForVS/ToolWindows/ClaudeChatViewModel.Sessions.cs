@@ -13,6 +13,7 @@ internal sealed partial class ClaudeChatViewModel
     private string? chatId;
     private DateTimeOffset chatCreated;
     private string chatTitle = string.Empty;
+    private bool chatPinned;
 
     /// <summary>A saved chat that was opened but hasn't sent a message yet; its context is given to the next engine.</summary>
     private SessionInfo? resumeFrom;
@@ -80,7 +81,7 @@ internal sealed partial class ClaudeChatViewModel
         List<SessionInfo> all = SessionStore.List();
         string query = this.sessionSearch.Trim();
         string repo = (this.RepoRoot ?? this.RepoPath).Trim().TrimEnd('\\', '/');
-        foreach (SessionInfo info in all)
+        foreach (SessionInfo info in all.OrderByDescending(s => s.Pinned)) // stable: newest first within each group
         {
             if (this.thisRepoOnly && !string.Equals(info.RepoPath.TrimEnd('\\', '/'), repo, StringComparison.OrdinalIgnoreCase))
             {
@@ -123,7 +124,8 @@ internal sealed partial class ClaudeChatViewModel
             Model = this.engine?.Model ?? this.resumeFrom?.Model ?? this.settings.Model,
             Created = this.chatCreated,
             Updated = DateTimeOffset.Now,
-            MessageCount = this.Messages.Count(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant),
+            MessageCount = this.Messages.Count(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant && !m.IsLocalReply),
+            Pinned = this.chatPinned,
 
             // A reopened chat that hasn't sent anything yet keeps what it was opened with.
             ClaudeCodeSessionId = code != null ? code.SessionId : this.resumeFrom?.ClaudeCodeSessionId,
@@ -218,9 +220,11 @@ internal sealed partial class ClaudeChatViewModel
                 });
         }
 
+        this.ResetChatUsage();
         this.chatId = info.Id;
         this.chatCreated = info.Created;
         this.chatTitle = info.Title;
+        this.chatPinned = info.Pinned;
         this.resumeFrom = info;
         this.RepoPath = info.RepoPath;
 
@@ -272,11 +276,11 @@ internal sealed partial class ClaudeChatViewModel
     /// <summary>True while a search or the repository filter is hiding some chats.</summary>
     public bool IsSessionListFiltered => this.sessionSearch.Trim().Length > 0 || this.thisRepoOnly;
 
-    /// <summary>Deletes every chat the History tab is showing (all of them, unless it's filtered).</summary>
+    /// <summary>Deletes every unpinned chat the History tab is showing (all of them, unless it's filtered).</summary>
     public void DeleteShownSessions()
     {
         bool deletedCurrent = false;
-        foreach (SessionItem item in this.Sessions.ToList())
+        foreach (SessionItem item in this.Sessions.Where(s => !s.IsPinned).ToList())
         {
             SessionStore.Delete(item.Info.Id);
             deletedCurrent |= item.Info.Id == this.chatId;
@@ -286,6 +290,27 @@ internal sealed partial class ClaudeChatViewModel
         {
             this.NewChat();
             this.ShowHistory = true;
+        }
+
+        this.RefreshSessions();
+    }
+
+    public void TogglePin(SessionItem item)
+    {
+        bool pinned = !item.IsPinned;
+        try
+        {
+            SessionStore.SaveInfo(item.Info with { Pinned = pinned });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            this.Status = "Couldn't pin this chat: " + ex.Message;
+            return;
+        }
+
+        if (item.Info.Id == this.chatId)
+        {
+            this.chatPinned = pinned;
         }
 
         this.RefreshSessions();
@@ -394,7 +419,7 @@ internal sealed partial class ClaudeChatViewModel
         else if (created is ClaudeAgent agent)
         {
             agent.RestoreHistory(this.Messages
-                .Where(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant)
+                .Where(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant && !m.IsLocalReply)
                 .Select(m => (m.Kind == ChatEntryKind.User, m.Text)));
         }
     }

@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace ClaudeForVS.Agent;
 
 /// <summary>Which backend talks to Claude.</summary>
-internal enum ChatEngineKind
+public enum ChatEngineKind
 {
     /// <summary>Calls the Claude API directly with an API key, using this extension's own tools.</summary>
     Api,
@@ -15,14 +15,14 @@ internal enum ChatEngineKind
     ClaudeCode,
 }
 
-internal enum ClaudeModel
+public enum ClaudeModel
 {
     Opus,
     Sonnet,
     Haiku,
 }
 
-internal enum EffortLevel
+public enum EffortLevel
 {
     Low,
     Medium,
@@ -32,7 +32,7 @@ internal enum EffortLevel
 }
 
 /// <summary>How much Claude may do on its own.</summary>
-internal enum AgentMode
+public enum AgentMode
 {
     /// <summary>Edits files and runs commands without asking.</summary>
     Auto,

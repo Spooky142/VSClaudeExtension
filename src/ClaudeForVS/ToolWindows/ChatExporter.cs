@@ -30,6 +30,10 @@ internal static class ChatExporter
 
                     break;
 
+                // The extension's own replies to /help, /cost and /context aren't part of the conversation.
+                case ChatEntryKind.Assistant when entry.Header == ChatEntry.LocalReplyHeader:
+                    break;
+
                 case ChatEntryKind.Assistant:
                     md.Append("## Claude\n\n").Append(entry.Text.Trim()).Append("\n\n");
                     break;

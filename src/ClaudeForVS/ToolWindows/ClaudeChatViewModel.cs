@@ -56,6 +56,11 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     private bool promptHasCost;
     private string usageEmptyText = string.Empty;
 
+    // Tokens and cost of the current chat since it was started or opened, for /cost.
+    private TokenUsage chatTokens;
+    private double chatCost;
+    private bool chatHasCost;
+
     public ClaudeChatViewModel()
     {
         this.settings = AgentSettings.Load();
@@ -212,6 +217,9 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     /// <summary>Asks where to save an export, given a suggested file name; null if cancelled. Set by the view.</summary>
     public Func<string, string?> ChooseExportPath { get; set; } = _ => null;
+
+    /// <summary>Puts text on the clipboard; false if the clipboard is busy. Set by the view.</summary>
+    public Func<string, bool> CopyText { get; set; } = _ => false;
 
     public ObservableCollection<ChatEntry> Messages { get; } = [];
 
@@ -541,10 +549,19 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.Stop();
         this.DisposeEngine();
         this.Messages.Clear();
+        this.ResetChatUsage();
         this.chatId = null;
+        this.chatPinned = false;
         this.resumeFrom = null;
         this.Status = string.Empty;
         this.ShowHistory = false;
+    }
+
+    private void ResetChatUsage()
+    {
+        this.chatTokens = default;
+        this.chatCost = 0;
+        this.chatHasCost = false;
     }
 
     private void DisposeEngine()
@@ -681,6 +698,13 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             if (this.liveUsageEntry != null || this.promptTokens != default)
             {
                 this.ShowPromptUsage(this.FormatPromptUsage());
+            }
+
+            if (ReferenceEquals(this.engine, runEngine))
+            {
+                this.chatTokens += this.promptTokens;
+                this.chatCost += this.promptCost;
+                this.chatHasCost |= this.promptHasCost;
             }
 
             this.liveUsageEntry = null;

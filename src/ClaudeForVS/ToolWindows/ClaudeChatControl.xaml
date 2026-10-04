@@ -305,6 +305,7 @@
     <StackPanel Grid.Row="0">
     <DockPanel Margin="10,8,10,6">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button Style="{StaticResource IconButton}" Content="&#xE721;" ToolTip="Find in this chat (Ctrl+F)" Click="OnOpenFind" />
         <Button Style="{StaticResource IconButton}" Content="&#xE81C;" ToolTip="History" Click="OnToggleHistory" />
         <Button Style="{StaticResource IconButton}" Content="&#xE710;" ToolTip="New chat" Click="OnNewChat" />
         <Button Style="{StaticResource IconButton}" Content="&#xE713;" ToolTip="Settings" Click="OnOpenSettings" />
@@ -390,7 +391,7 @@
       </Grid.RowDefinitions>
       <DockPanel Margin="14,0,12,6">
         <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Padding="10,3" Content="Delete all" Click="OnDeleteAllSessions"
-                ToolTip="Delete every chat shown below" Visibility="{Binding HasSessions, Converter={StaticResource BoolToVis}}" />
+                ToolTip="Delete every chat shown below, except pinned ones" Visibility="{Binding HasSessions, Converter={StaticResource BoolToVis}}" />
         <TextBlock Text="Previous chats" FontWeight="SemiBold" VerticalAlignment="Center" />
       </DockPanel>
       <DockPanel Grid.Row="1" Margin="12,0,12,8">
@@ -410,6 +411,7 @@
                       Background="{StaticResource SubtleFill}">
                 <DockPanel>
                   <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
+                    <Button Style="{StaticResource IconButton}" Content="{Binding PinGlyph}" ToolTip="{Binding PinToolTip}" Click="OnPinSession" />
                     <Button Style="{StaticResource IconButton}" Content="&#xE8AC;" ToolTip="Rename" Click="OnRenameSession" />
                     <Button Style="{StaticResource IconButton}" Content="&#xEDE1;" ToolTip="Export as Markdown" Click="OnExportSession" />
                     <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="Delete this chat" Click="OnDeleteSession" />
@@ -421,7 +423,12 @@
                         <TextBlock DockPanel.Dock="Right" Text="{Binding TimeText}" Style="{StaticResource Muted}" FontSize="11"
                                    VerticalAlignment="Top" Margin="8,2,0,0" />
                         <StackPanel>
-                          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                          <DockPanel>
+                            <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE840;" FontSize="11" Margin="0,0,6,0"
+                                       Foreground="{StaticResource Accent}" VerticalAlignment="Center" ToolTip="Pinned"
+                                       Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}" />
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                          </DockPanel>
                           <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis"
                                      Margin="0,2,0,0" />
                         </StackPanel>
@@ -464,6 +471,25 @@
       <RowDefinition Height="Auto" />
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
+
+    <!-- Find bar (Ctrl+F): Enter / Shift+Enter or F3 / Shift+F3 move between matches, Esc closes it -->
+    <Border x:Name="FindBar" Grid.Row="0" Margin="10,0,10,8" Padding="8,4" CornerRadius="8" BorderThickness="1"
+            BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}" Visibility="Collapsed">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock x:Name="FindCount" Style="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="8,0,6,0" />
+          <Button Style="{StaticResource IconButton}" Content="&#xE70E;" ToolTip="Previous match (Shift+Enter)" Click="OnFindPrevious" />
+          <Button Style="{StaticResource IconButton}" Content="&#xE70D;" ToolTip="Next match (Enter)" Click="OnFindNext" />
+          <Button Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Close (Esc)" Click="OnCloseFind" />
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE721;" FontSize="12" VerticalAlignment="Center" Margin="2,0,8,0" />
+        <Grid>
+          <TextBox x:Name="FindBox" Style="{StaticResource Field}" TextChanged="OnFindTextChanged" PreviewKeyDown="OnFindKeyDown" />
+          <TextBlock Text="Find in this chat…" IsHitTestVisible="False" Style="{StaticResource Muted}" Margin="8,5,0,0"
+                     Visibility="{Binding Text, ElementName=FindBox, Converter={StaticResource EmptyToVis}}" />
+        </Grid>
+      </DockPanel>
+    </Border>
 
     <!-- Shown until the selected engine is ready (API key saved, or Claude Code installed and signed in) -->
     <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"
@@ -689,7 +715,7 @@
     <!-- Footer: status and keyboard hint -->
     <DockPanel Grid.Row="6" Margin="14,0,14,8">
       <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="11" Text="Enter to send · Shift+Enter for new line · ↑ for history"
-                 ToolTip="Type / for commands and @ to mention a file. Paste or drop images to attach them." />
+                 ToolTip="Type / for commands and @ to mention a file. Paste or drop images to attach them. Ctrl+F searches the chat." />
       <TextBlock Style="{StaticResource Muted}" FontSize="11" Text="{Binding Status}" TextTrimming="CharacterEllipsis"
                  ToolTip="{Binding Status}" Margin="0,0,12,0" />
     </DockPanel>

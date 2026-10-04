@@ -23,6 +23,8 @@ internal sealed class ClaudeAgent : IChatEngine
     private const int MaxToolRounds = 40;
     private const int MaxFileChars = 100_000;
     private const int PreviewLines = 60;
+    private const int DefaultCommandSeconds = 300;
+    private const int MaxCommandSeconds = 1800;
 
     private const long MaxOutputTokens = 64000;
 
@@ -79,6 +81,9 @@ internal sealed class ClaudeAgent : IChatEngine
             - `read_file` reads a file with line numbers.
             - `edit_file` replaces an exact string in a file; `write_file` creates or overwrites a whole file.
               The user approves edits before they're applied. Prefer `edit_file` for changes to existing files.
+            - `delete_file` deletes a file and `move_file` moves or renames one, with the same approval as edits.
+            - `run_command` runs a Windows PowerShell command in the repository, e.g. to build or run the tests after
+              making changes. The user approves commands before they run.
             - `ask_user` shows the user 1-4 multiple-choice questions. Use it when you need a decision that's genuinely
               theirs (for example choosing between approaches); the user can also type their own answer.
             All file paths are relative to the repository root, and files outside the repository can't be accessed.
@@ -87,7 +92,17 @@ internal sealed class ClaudeAgent : IChatEngine
             Look at the repository before answering questions about it rather than guessing. Keep answers concise and
             use Markdown, with fenced code blocks for code. Reference files by their repository-relative paths.
             """;
+
+        // Read once per chat: the system prompt has to stay the same for the prompt cache to work.
+        (string instructions, this.InstructionFiles) = ProjectInstructions.Load(repoRoot);
+        if (instructions.Length > 0)
+        {
+            this.systemPrompt += "\n\n" + instructions;
+        }
     }
+
+    /// <summary>The CLAUDE.md files this chat follows.</summary>
+    public IReadOnlyList<string> InstructionFiles { get; }
 
     public ChatEngineKind Kind => ChatEngineKind.Api;
 
@@ -536,6 +551,9 @@ internal sealed class ClaudeAgent : IChatEngine
             "read_file" => Task.FromResult(this.ReadFile(input, sink)),
             "edit_file" => this.EditFileAsync(input, sink, cancellationToken),
             "write_file" => this.WriteFileAsync(input, sink, cancellationToken),
+            "delete_file" => this.DeleteFileAsync(input, sink, cancellationToken),
+            "move_file" => this.MoveFileAsync(input, sink, cancellationToken),
+            "run_command" => this.RunCommandAsync(input, sink, cancellationToken),
             "ask_user" => AskUserAsync(toolUse.Input, sink, cancellationToken),
             _ => throw new ToolInputException($"Unknown tool: {toolUse.Name}"),
         };
@@ -690,7 +708,140 @@ internal sealed class ClaudeAgent : IChatEngine
         return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}.";
     }
 
-    private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, FileChange change, IChatSink sink, CancellationToken cancellationToken)
+    private async Task<string> DeleteFileAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string path = RequireString(input, "path");
+        string full = this.files.Resolve(path);
+        if (Directory.Exists(full))
+        {
+            throw new ToolInputException($"{path} is a directory; only files can be deleted.");
+        }
+
+        if (!File.Exists(full))
+        {
+            throw new ToolInputException($"File not found: {path}");
+        }
+
+        // Binary files can be deleted too, just without a preview.
+        string? before = null;
+        try
+        {
+            before = this.files.Read(path).Text;
+        }
+        catch (ToolInputException)
+        {
+        }
+
+        string relative = this.files.Relative(full);
+        string preview = before is null ? "(binary file)" : Removed(before);
+        FileChange? change = before is null ? null : new FileChange(full, before, string.Empty);
+        if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Delete {relative}", preview, change, sink, cancellationToken))
+        {
+            sink.ToolActivity(ActivityKind.Declined, $"Delete {relative}", "Declined by you.");
+            return "The user declined to delete this file.";
+        }
+
+        File.Delete(full);
+        sink.ToolActivity(ActivityKind.Edit, $"Deleted {relative}", preview, change);
+        return $"Deleted {relative}.";
+    }
+
+    private async Task<string> MoveFileAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string from = RequireString(input, "from");
+        string to = RequireString(input, "to");
+        string source = this.files.Resolve(from);
+        string destination = this.files.Resolve(to);
+        if (Directory.Exists(source))
+        {
+            throw new ToolInputException($"{from} is a directory; only files can be moved.");
+        }
+
+        if (!File.Exists(source))
+        {
+            throw new ToolInputException($"File not found: {from}");
+        }
+
+        if (string.Equals(source, destination, StringComparison.Ordinal))
+        {
+            throw new ToolInputException("`from` and `to` are the same path.");
+        }
+
+        // A change of case only is a rename of the same file, so the destination "exists" already.
+        bool caseOnly = string.Equals(source, destination, StringComparison.OrdinalIgnoreCase);
+        if (!caseOnly && (File.Exists(destination) || Directory.Exists(destination)))
+        {
+            throw new ToolInputException($"{to} already exists. Delete it first if it should be replaced.");
+        }
+
+        string title = $"{this.files.Relative(source)} → {this.files.Relative(destination)}";
+        if (!await this.ApproveEditAsync(ActivityKind.Edit, "Move " + title, string.Empty, null, sink, cancellationToken))
+        {
+            sink.ToolActivity(ActivityKind.Declined, "Move " + title, "Declined by you.");
+            return "The user declined to move this file.";
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.Move(source, destination);
+        sink.ToolActivity(ActivityKind.Edit, "Moved " + title, string.Empty);
+        return $"Moved {title}.";
+    }
+
+    private async Task<string> RunCommandAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string command = RequireString(input, "command").Trim();
+        int timeout = Math.Max(1, Math.Min(MaxCommandSeconds, OptionalInt(input, "timeout_seconds") ?? DefaultCommandSeconds));
+        string directory = this.RepoRoot;
+        string where = string.Empty;
+        if (input.TryGetValue("cwd", out JsonElement cwdEl) && cwdEl.ValueKind == JsonValueKind.String
+            && cwdEl.GetString() is string cwd && cwd.Trim().Length > 0 && cwd.Trim() != ".")
+        {
+            directory = this.files.Resolve(cwd);
+            if (!Directory.Exists(directory))
+            {
+                throw new ToolInputException($"Directory not found: {cwd}");
+            }
+
+            where = $" (in {this.files.Relative(directory)})";
+        }
+
+        if (this.Mode == AgentMode.Plan)
+        {
+            sink.ToolActivity(ActivityKind.Declined, command + where, "Blocked in Plan mode.");
+            return PlanModeRefusal;
+        }
+
+        if (this.Mode == AgentMode.Coding && !CommandRules.IsAllowed(this.RepoRoot, command, viaShell: true))
+        {
+            sink.SetStatus("Waiting for your approval…");
+            string? rule = CommandRules.RuleFor(command, viaShell: true);
+            Approval approval = await sink.RequestApprovalAsync(ActivityKind.Shell, $"Run: {command}{where}", string.Empty, rule is null ? null : $"Always allow \"{rule}\" here", cancellationToken);
+            if (approval == Approval.Deny)
+            {
+                sink.ToolActivity(ActivityKind.Declined, command + where, "Declined by you.");
+                return "The user declined to run this command.";
+            }
+
+            if (approval == Approval.AllowAll && rule != null)
+            {
+                CommandRules.Allow(this.RepoRoot, rule);
+            }
+        }
+
+        sink.SetStatus($"Running {command}");
+        (int? exitCode, string output) = await ShellRunner.RunAsync(directory, command, TimeSpan.FromSeconds(timeout), cancellationToken);
+        string shown = output.Length == 0 ? "(no output)" : output;
+        if (exitCode is not int code)
+        {
+            sink.ToolActivity(ActivityKind.Failed, command + where, $"Stopped after {timeout}s.\n{output}".TrimEnd());
+            return $"The command was stopped after {timeout} seconds. Pass a larger timeout_seconds (up to {MaxCommandSeconds}) if it needs longer.\n{output}".TrimEnd();
+        }
+
+        sink.ToolActivity(code == 0 ? ActivityKind.Shell : ActivityKind.Failed, command + where, code == 0 ? shown : $"Exit code {code}\n{shown}");
+        return code == 0 ? shown : $"Exit code {code}.\n{shown}";
+    }
+
+    private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, FileChange? change, IChatSink sink, CancellationToken cancellationToken)
     {
         if (this.Mode == AgentMode.Plan)
         {
@@ -768,6 +919,13 @@ internal sealed class ClaudeAgent : IChatEngine
     {
         string[] lines = Lines(content);
         string head = string.Join("\n", lines.Take(PreviewLines));
+        return lines.Length > PreviewLines ? head + $"\n… ({lines.Length - PreviewLines} more lines)" : head;
+    }
+
+    private static string Removed(string content)
+    {
+        string[] lines = Lines(content);
+        string head = string.Join("\n", lines.Take(PreviewLines).Select(l => "- " + l));
         return lines.Length > PreviewLines ? head + $"\n… ({lines.Length - PreviewLines} more lines)" : head;
     }
 
@@ -926,6 +1084,60 @@ internal sealed class ClaudeAgent : IChatEngine
                     ["content"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The complete file contents." }),
                 },
                 Required = ["path", "content"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "delete_file",
+            Description =
+                "Delete a file inside the repository (not a directory). The user approves each deletion before it happens.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Path relative to the repository root." }),
+                },
+                Required = ["path"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "move_file",
+            Description =
+                "Move or rename a file inside the repository. Parent directories of the destination are created as needed; " +
+                "the destination must not exist. Nothing is staged in git. The user approves each move before it happens.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["from"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Current path, relative to the repository root." }),
+                    ["to"] = JsonSerializer.SerializeToElement(new { type = "string", description = "New path, relative to the repository root." }),
+                },
+                Required = ["from", "to"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "run_command",
+            Description =
+                "Run a command line in Windows PowerShell 5.1 (not bash) in the repository, e.g. `dotnet build`, " +
+                "`dotnet test`, `npm test`. Use it to build and test your changes; use the git tool for git and read_file " +
+                "to read files. There is no terminal: the command can't prompt for input, and stdin is closed. Returns the " +
+                "exit code and combined stdout/stderr (long output keeps the start and the end). The user approves each " +
+                "command before it runs unless they've allowed it already; plain commands without pipes, redirects or " +
+                "chaining can be allowed permanently, so prefer those.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["command"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The PowerShell command line." }),
+                    ["cwd"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Directory to run in, relative to the repository root. Default: the root." }),
+                    ["timeout_seconds"] = JsonSerializer.SerializeToElement(new { type = "integer", description = $"Stop the command after this long. Default {DefaultCommandSeconds}, max {MaxCommandSeconds}." }),
+                },
+                Required = ["command"],
             },
             EagerInputStreaming = true,
         },

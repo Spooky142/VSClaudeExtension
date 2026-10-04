@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -49,6 +50,18 @@ public partial class ClaudeChatControl : UserControl
         this.viewModel.Confirm = message =>
             MessageBox.Show(message, "Claude", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
         this.viewModel.ChooseExportPath = ChooseExportPath;
+        this.viewModel.CopyText = text =>
+        {
+            try
+            {
+                Clipboard.SetText(text);
+                return true;
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                return false;
+            }
+        };
 
         // Replies link file paths to the editor, and colour code to suit the theme.
         FileLinks.Resolve = this.ResolveFile;
@@ -63,9 +76,11 @@ public partial class ClaudeChatControl : UserControl
         MarkdownRenderer.IsDarkTheme = this.IsDarkTheme;
 
         this.InitializeComposer();
+        this.InitializeFind();
 
         // The pane lives as long as Visual Studio, so this subscription never needs removing.
         package.SolutionOpened += (_, directory) => this.viewModel.OnSolutionOpened(directory);
+        OptionsPage.Applied += (_, settings) => this.viewModel.ApplySettings(settings, this.viewModel.RepoPath, null);
 
         // Keep the usage strip's "resets in" countdowns current.
         this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(30), DispatcherPriority.Background, (_, _) => this.viewModel.RefreshUsage(), this.Dispatcher);
@@ -500,14 +515,29 @@ public partial class ClaudeChatControl : UserControl
         }
     }
 
+    private void OnPinSession(object sender, RoutedEventArgs e)
+    {
+        if (ContextOf<SessionItem>(sender) is SessionItem item)
+        {
+            this.viewModel.TogglePin(item);
+        }
+    }
+
     private void OnDeleteAllSessions(object sender, RoutedEventArgs e)
     {
-        int count = this.viewModel.Sessions.Count;
+        int count = this.viewModel.Sessions.Count(s => !s.IsPinned);
+        if (count == 0)
+        {
+            this.viewModel.ShowStatus("Every chat shown is pinned. Unpin a chat to delete it.");
+            return;
+        }
+
         string chats = count == 1 ? "chat" : "chats";
+        string kept = this.viewModel.Sessions.Any(s => s.IsPinned) ? " Pinned chats are kept." : string.Empty;
         string question = this.viewModel.IsSessionListFiltered
-            ? $"Delete the {count} {chats} shown? Chats hidden by the search or filter are kept. This can't be undone."
-            : $"Delete all {count} saved {chats}? This can't be undone.";
-        if (count > 0 && MessageBox.Show(question, "Claude", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes)
+            ? $"Delete the {count} {chats} shown? Chats hidden by the search or filter are kept.{kept} This can't be undone."
+            : $"Delete all {count} saved {chats}?{kept} This can't be undone.";
+        if (MessageBox.Show(question, "Claude", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes)
         {
             this.viewModel.DeleteShownSessions();
         }
