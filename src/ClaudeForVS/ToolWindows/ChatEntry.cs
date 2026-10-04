@@ -64,8 +64,10 @@ internal sealed class ChatEntry : INotifyPropertyChanged
 {
     private readonly StringBuilder buffer = new();
     private string text;
+    private string? snapshotBefore;
+    private string? snapshotAfter;
 
-    public ChatEntry(ChatEntryKind kind, string header, string text = "", string detail = "", ActivityKind activity = ActivityKind.Git)
+    public ChatEntry(ChatEntryKind kind, string header, string text = "", string detail = "", ActivityKind activity = ActivityKind.Git, FileChange? change = null)
     {
         this.Kind = kind;
         this.Header = header;
@@ -73,6 +75,7 @@ internal sealed class ChatEntry : INotifyPropertyChanged
         this.buffer.Append(text);
         this.text = text;
         this.DetailLines = DiffLine.Parse(detail, activity);
+        this.Change = change;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -82,6 +85,49 @@ internal sealed class ChatEntry : INotifyPropertyChanged
     public ActivityKind Activity { get; }
 
     public string Header { get; }
+
+    /// <summary>For file edits: the whole file before and after, for Visual Studio's diff viewer. Not saved with the chat.</summary>
+    public FileChange? Change { get; }
+
+    public bool HasChange => this.Change != null;
+
+    // ===== User prompts only =====
+
+    /// <summary>What was attached to a prompt, e.g. "Foo.cs:12-30 · 1 image"; shown under the bubble.</summary>
+    public string Note { get; init; } = string.Empty;
+
+    public bool HasNote => this.Note.Length > 0;
+
+    /// <summary>The engine's checkpoint from just before this prompt, for editing or retrying it.</summary>
+    public string? Checkpoint { get; set; }
+
+    /// <summary>Exactly what was sent (attached context and images included), for retrying it. Not saved with the chat.</summary>
+    public ChatPrompt? SentPrompt { get; set; }
+
+    /// <summary>Working tree snapshot taken just before this prompt ran.</summary>
+    public string? SnapshotBefore
+    {
+        get => this.snapshotBefore;
+        set
+        {
+            this.snapshotBefore = value;
+            this.OnPropertyChanged(nameof(this.CanUndo));
+        }
+    }
+
+    /// <summary>Working tree snapshot taken when this prompt finished.</summary>
+    public string? SnapshotAfter
+    {
+        get => this.snapshotAfter;
+        set
+        {
+            this.snapshotAfter = value;
+            this.OnPropertyChanged(nameof(this.CanUndo));
+        }
+    }
+
+    /// <summary>True when files changed while this prompt ran, so its changes can be undone.</summary>
+    public bool CanUndo => this.snapshotBefore != null && this.snapshotAfter != null && this.snapshotBefore != this.snapshotAfter;
 
     /// <summary>Markdown body (rendered for user/assistant entries, plain for thinking and errors).</summary>
     public string Text

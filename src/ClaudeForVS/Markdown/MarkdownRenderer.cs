@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using Markdig;
 using Markdig.Extensions.Tables;
@@ -36,6 +39,27 @@ internal static class MarkdownRenderer
     // Translucent gray reads as a subtle tint on both light and dark themes.
     private static readonly Brush CodeBackground = Frozen(new SolidColorBrush(Color.FromArgb(0x26, 0x80, 0x80, 0x80)));
     private static readonly Brush RuleBrush = Frozen(new SolidColorBrush(Color.FromArgb(0x60, 0x80, 0x80, 0x80)));
+    private static readonly Brush MutedBrush = Frozen(new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x8A)));
+    private static readonly Brush HoverBrush = Frozen(new SolidColorBrush(Color.FromArgb(0x30, 0x80, 0x80, 0x80)));
+
+    private static readonly Brush DarkKeyword = Rgb(0x56, 0x9C, 0xD6);
+    private static readonly Brush DarkType = Rgb(0x4E, 0xC9, 0xB0);
+    private static readonly Brush DarkString = Rgb(0xD6, 0x9D, 0x85);
+    private static readonly Brush DarkComment = Rgb(0x57, 0xA6, 0x4A);
+    private static readonly Brush DarkNumber = Rgb(0xB5, 0xCE, 0xA8);
+    private static readonly Brush DarkAttribute = Rgb(0x9C, 0xDC, 0xFE);
+    private static readonly Brush LightKeyword = Rgb(0x00, 0x00, 0xFF);
+    private static readonly Brush LightType = Rgb(0x2B, 0x91, 0xAF);
+    private static readonly Brush LightString = Rgb(0xA3, 0x15, 0x15);
+    private static readonly Brush LightComment = Rgb(0x00, 0x80, 0x00);
+    private static readonly Brush LightNumber = Rgb(0x09, 0x86, 0x58);
+    private static readonly Brush LightTag = Rgb(0x80, 0x00, 0x00);
+    private static readonly Brush LightAttribute = Rgb(0xE5, 0x00, 0x00);
+
+    private static readonly ControlTemplate FlatButtonTemplate = CreateFlatButtonTemplate();
+
+    /// <summary>Whether Visual Studio is using a dark theme, for picking code colours. Set by the chat window.</summary>
+    public static Func<bool> IsDarkTheme { get; set; } = () => true;
 
     public static FlowDocument Render(string markdown, double baseFontSize)
     {
@@ -84,19 +108,7 @@ internal static class MarkdownRenderer
             }
 
             case FencedCodeBlock or CodeBlock:
-            {
-                var code = (LeafBlock)block;
-                string text = string.Join("\n", code.Lines.Lines.Take(code.Lines.Count).Select(l => l.Slice.ToString()));
-                var p = new Paragraph
-                {
-                    FontFamily = CodeFont,
-                    Background = CodeBackground,
-                    Padding = new Thickness(8, 6, 8, 6),
-                    Margin = new Thickness(0, 0, 0, 8),
-                };
-                AddPlainLines(p.Inlines, text);
-                return p;
-            }
+                return RenderCodeBlock((LeafBlock)block, baseFontSize);
 
             case ListBlock list:
             {
@@ -175,6 +187,142 @@ internal static class MarkdownRenderer
         }
     }
 
+    /// <summary>A code block: a header with the language and a Copy button, then the code, coloured by language.</summary>
+    private static Section RenderCodeBlock(LeafBlock code, double baseFontSize)
+    {
+        string text = string.Join("\n", code.Lines.Lines.Take(code.Lines.Count).Select(l => l.Slice.ToString())).TrimEnd('\n');
+        string info = (code as FencedCodeBlock)?.Info ?? string.Empty;
+        string? language = SyntaxHighlighter.NormalizeLanguage(info);
+
+        var header = new Paragraph
+        {
+            Background = CodeBackground,
+            Padding = new Thickness(8, 2, 2, 0),
+            Margin = new Thickness(0),
+            FontSize = baseFontSize * 0.85,
+            TextAlignment = TextAlignment.Right,
+        };
+        string label = info.Trim().Split(' ').FirstOrDefault() ?? string.Empty;
+        if (label.Length > 0)
+        {
+            header.Inlines.Add(new Run(label + "  ") { Foreground = MutedBrush });
+        }
+
+        header.Inlines.Add(new InlineUIContainer(CopyButton(text)) { BaselineAlignment = BaselineAlignment.Center });
+
+        var body = new Paragraph
+        {
+            FontFamily = CodeFont,
+            Background = CodeBackground,
+            Padding = new Thickness(8, 0, 8, 6),
+            Margin = new Thickness(0),
+        };
+        AddCodeTokens(body.Inlines, SyntaxHighlighter.Tokenize(text, language), IsDarkTheme());
+
+        var section = new Section { Margin = new Thickness(0, 0, 0, 8) };
+        section.Blocks.Add(header);
+        section.Blocks.Add(body);
+        return section;
+    }
+
+    /// <summary>A small flat "Copy" button that puts <paramref name="text"/> on the clipboard.</summary>
+    internal static Button CopyButton(string text, string label = "Copy")
+    {
+        var button = new Button
+        {
+            Content = label,
+            Cursor = Cursors.Hand,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Foreground = MutedBrush,
+            Padding = new Thickness(6, 1, 6, 1),
+            FontSize = 11,
+            Focusable = false,
+            ToolTip = "Copy to the clipboard",
+        };
+        button.Template = FlatButtonTemplate;
+        button.Click += (_, _) =>
+        {
+            try
+            {
+                Clipboard.SetText(text);
+                button.Content = "Copied";
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                button.Content = "Clipboard busy";
+            }
+
+            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                button.Content = label;
+            };
+            timer.Start();
+        };
+        return button;
+    }
+
+    private static ControlTemplate CreateFlatButtonTemplate()
+    {
+        var border = new FrameworkElementFactory(typeof(Border), "Bd");
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+        border.AppendChild(content);
+
+        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+        var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(Border.BackgroundProperty, HoverBrush, "Bd"));
+        template.Triggers.Add(hover);
+        template.Seal();
+        return template;
+    }
+
+    private static void AddCodeTokens(InlineCollection target, IReadOnlyList<CodeToken> tokens, bool dark)
+    {
+        foreach (CodeToken token in tokens)
+        {
+            Brush? brush = TokenBrush(token.Kind, dark);
+            string[] lines = token.Text.Replace("\r\n", "\n").Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (i > 0)
+                {
+                    target.Add(new LineBreak());
+                }
+
+                if (lines[i].Length > 0)
+                {
+                    var run = new Run(lines[i]);
+                    if (brush != null)
+                    {
+                        run.Foreground = brush;
+                    }
+
+                    target.Add(run);
+                }
+            }
+        }
+    }
+
+    /// <summary>Token colours in the style of Visual Studio's own Dark and Light themes.</summary>
+    private static Brush? TokenBrush(TokenKind kind, bool dark) => kind switch
+    {
+        TokenKind.Keyword => dark ? DarkKeyword : LightKeyword,
+        TokenKind.Type => dark ? DarkType : LightType,
+        TokenKind.String => dark ? DarkString : LightString,
+        TokenKind.Comment => dark ? DarkComment : LightComment,
+        TokenKind.Number => dark ? DarkNumber : LightNumber,
+        TokenKind.Preprocessor => MutedBrush,
+        TokenKind.Tag => dark ? DarkKeyword : LightTag,
+        TokenKind.Attribute => dark ? DarkAttribute : LightAttribute,
+        _ => null,
+    };
+
     private static WpfTable RenderTable(MdTable table, double baseFontSize)
     {
         var result = new WpfTable { CellSpacing = 0, Margin = new Thickness(0, 0, 0, 8), BorderBrush = RuleBrush, BorderThickness = new Thickness(1, 1, 0, 0) };
@@ -237,10 +385,15 @@ internal static class MarkdownRenderer
         switch (inline)
         {
             case LiteralInline literal:
-                return new Run(literal.Content.ToString());
+                return RenderText(literal.Content.ToString());
 
             case CodeInline code:
-                return new Run(code.Content) { FontFamily = CodeFont, Background = CodeBackground };
+            {
+                var run = new Run(code.Content) { FontFamily = CodeFont, Background = CodeBackground };
+                return FileLinks.ParseWhole(code.Content) is PathMention mention && FileLinks.Target(mention) is FileTarget target
+                    ? FileHyperlink(run, target)
+                    : run;
+            }
 
             case LineBreakInline lineBreak:
                 return lineBreak.IsHard ? new LineBreak() : new Run(" ");
@@ -261,6 +414,18 @@ internal static class MarkdownRenderer
                 if (hyperlink.Inlines.Count == 0)
                 {
                     hyperlink.Inlines.Add(new Run(link.Url));
+                }
+
+                // A relative link such as [Foo.cs](src/Foo.cs#L12) points into the repository.
+                if (!Uri.TryCreate(link.Url, UriKind.Absolute, out Uri? absolute) || absolute.IsFile)
+                {
+                    string url = Uri.UnescapeDataString(link.Url ?? string.Empty);
+                    if (FileLinks.ParseWhole(url.StartsWith("file:///") ? url.Substring(8) : url) is PathMention mention
+                        && FileLinks.Target(mention) is FileTarget target)
+                    {
+                        AttachFileNavigation(hyperlink, target);
+                        return hyperlink;
+                    }
                 }
 
                 AttachNavigation(hyperlink, link.Url);
@@ -295,6 +460,67 @@ internal static class MarkdownRenderer
         }
     }
 
+    /// <summary>Plain text, with any paths to files in the repository turned into links.</summary>
+    private static WpfInline RenderText(string text)
+    {
+        if (FileLinks.Resolve is null)
+        {
+            return new Run(text);
+        }
+
+        Span? span = null;
+        int done = 0;
+        foreach (PathMention mention in FileLinks.Find(text))
+        {
+            if (FileLinks.Target(mention) is not FileTarget target)
+            {
+                continue;
+            }
+
+            span ??= new Span();
+            if (mention.Start > done)
+            {
+                span.Inlines.Add(new Run(text.Substring(done, mention.Start - done)));
+            }
+
+            span.Inlines.Add(FileHyperlink(new Run(text.Substring(mention.Start, mention.Length)), target));
+            done = mention.Start + mention.Length;
+        }
+
+        if (span is null)
+        {
+            return new Run(text);
+        }
+
+        if (done < text.Length)
+        {
+            span.Inlines.Add(new Run(text.Substring(done)));
+        }
+
+        return span;
+    }
+
+    private static Hyperlink FileHyperlink(WpfInline content, FileTarget target)
+    {
+        var hyperlink = new Hyperlink(content);
+        AttachFileNavigation(hyperlink, target);
+        return hyperlink;
+    }
+
+    private static void AttachFileNavigation(Hyperlink hyperlink, FileTarget target)
+    {
+        string lines = target.Line <= 0 ? string.Empty
+            : target.EndLine > target.Line ? $" at lines {target.Line}-{target.EndLine}"
+            : $" at line {target.Line}";
+        hyperlink.ToolTip = $"Open {target.FullPath}{lines}";
+        hyperlink.Cursor = Cursors.Hand;
+        hyperlink.Click += (_, e) =>
+        {
+            FileLinks.Open?.Invoke(target);
+            e.Handled = true;
+        };
+    }
+
     private static void AttachNavigation(Hyperlink hyperlink, string? url)
     {
         // Only open web links; never launch arbitrary file or protocol handlers from model output.
@@ -323,6 +549,8 @@ internal static class MarkdownRenderer
             target.Add(new Run(lines[i]));
         }
     }
+
+    private static Brush Rgb(byte r, byte g, byte b) => Frozen(new SolidColorBrush(Color.FromRgb(r, g, b)));
 
     private static Brush Frozen(Brush brush)
     {

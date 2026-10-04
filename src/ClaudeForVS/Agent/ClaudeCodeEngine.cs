@@ -29,9 +29,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     private readonly ApprovalServer approvalServer;
     private readonly string mcpConfigPath;
     private readonly SemaphoreSlim approvalGate = new(1, 1);
-    private readonly Dictionary<string, (string Name, JsonElement Input)> pendingTools = new();
+    private readonly Dictionary<string, (string Name, JsonElement Input, string? Before)> pendingTools = new();
 
     private bool editsPreApproved;
+
+    // Set by Rewind: the next message resumes the session as it was at this message, in a forked copy.
+    private string? resumeAt;
     private IChatSink? sink;
     private CancellationToken runToken;
     private Process? running;
@@ -70,7 +73,50 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     /// <summary>The Claude Code session this conversation runs in; set before the first message to continue an earlier one.</summary>
     public string? SessionId { get; set; }
 
-    public async Task SendAsync(string prompt, IChatSink chatSink, CancellationToken cancellationToken)
+    /// <summary>ID of the latest message in the session's main conversation; saved with the chat so it can be rewound after reopening.</summary>
+    public string? LastMessageId { get; set; }
+
+    /// <summary>"" before the session exists; otherwise "session|message", or null if the latest message isn't known.</summary>
+    public string? Checkpoint =>
+        this.SessionId is null ? string.Empty
+        : this.LastMessageId is null ? null
+        : $"{this.SessionId}|{this.LastMessageId}";
+
+    /// <summary>A rewind that the next message will carry out, as a checkpoint; saved with the chat in case Visual Studio closes first.</summary>
+    public string? PendingRewind => this.resumeAt is null ? null : $"{this.SessionId}|{this.resumeAt}";
+
+    public bool Rewind(string checkpoint)
+    {
+        if (checkpoint.Length == 0)
+        {
+            this.SessionId = this.LastMessageId = this.resumeAt = null; // back to before the first message
+            return true;
+        }
+
+        string[] parts = checkpoint.Split('|');
+        if (parts.Length != 2)
+        {
+            return false;
+        }
+
+        // The original session is left untouched; the next message forks a copy that ends at this message.
+        this.SessionId = parts[0];
+        this.LastMessageId = this.resumeAt = parts[1];
+        return true;
+    }
+
+    public Task CompactAsync(IChatSink chatSink, CancellationToken cancellationToken)
+    {
+        if (this.SessionId is null)
+        {
+            chatSink.SetStatus("Nothing to compact yet.");
+            return Task.CompletedTask;
+        }
+
+        return this.SendAsync(new ChatPrompt("/compact"), chatSink, cancellationToken);
+    }
+
+    public async Task SendAsync(ChatPrompt prompt, IChatSink chatSink, CancellationToken cancellationToken)
     {
         this.sink = chatSink;
         this.runToken = cancellationToken;
@@ -79,6 +125,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         var args = new List<string>
         {
             "-p",
+            "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
@@ -105,6 +152,13 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         {
             args.Add("--resume");
             args.Add(this.SessionId);
+            if (this.resumeAt != null)
+            {
+                args.Add("--resume-session-at");
+                args.Add(this.resumeAt);
+                args.Add("--fork-session");
+                this.resumeAt = null;
+            }
         }
 
         var psi = new ProcessStartInfo(this.executable, string.Join(" ", args.Select(GitRunner.QuoteArgument)))
@@ -120,14 +174,28 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         };
         ClaudeCodeCli.RemoveApiKeyVariables(psi); // use the subscription login, not a stray API key
 
+        // The approval tool's reply echoes the tool's whole input back (e.g. a file being written), JSON-escaped inside a
+        // text block. Past Claude Code's default MCP output limit (25k tokens) the reply gets truncated, which Claude Code
+        // then rejects as an invalid permission result, so large writes would always fail.
+        psi.EnvironmentVariables["MAX_MCP_OUTPUT_TOKENS"] = "2000000";
+
         this.liveDone = this.liveInput = this.liveOutput = this.liveChars = 0;
         chatSink.SetStatus("Starting Claude Code…");
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Couldn't start Claude Code.");
         this.running = process;
         Task<string> stderr = process.StandardError.ReadToEndAsync();
 
-        // The prompt goes in on stdin as UTF-8 (net48 can't set the stdin encoding, so write the bytes directly).
-        byte[] promptBytes = new UTF8Encoding(false).GetBytes(prompt);
+        // The prompt goes in on stdin as one stream-json user message, which can carry images as well as text.
+        // It's written as UTF-8 bytes because net48 can't set the stdin encoding.
+        var content = new List<object>();
+        foreach (PromptImage image in prompt.Images)
+        {
+            content.Add(new { type = "image", source = new { type = "base64", media_type = image.MediaType, data = image.Base64 } });
+        }
+
+        content.Add(new { type = "text", text = prompt.Text });
+        string message = JsonSerializer.Serialize(new { type = "user", message = new { role = "user", content } }) + "\n";
+        byte[] promptBytes = new UTF8Encoding(false).GetBytes(message);
         await process.StandardInput.BaseStream.WriteAsync(promptBytes, 0, promptBytes.Length, cancellationToken);
         process.StandardInput.Close();
 
@@ -259,18 +327,25 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 break;
 
             case "assistant" when isTopLevel:
-                // Text already streamed via deltas; remember tool calls so their results can be shown.
+                this.LastMessageId = Str(ev, "uuid") ?? this.LastMessageId;
+
+                // Text already streamed via deltas; remember tool calls so their results can be shown. The tool
+                // hasn't run yet, so this is the moment to keep a copy of any file it's about to edit.
                 foreach (JsonElement block in Content(ev))
                 {
                     if (Str(block, "type") == "tool_use" && Str(block, "id") is string id)
                     {
-                        this.pendingTools[id] = (Str(block, "name") ?? "tool", block.TryGetProperty("input", out JsonElement input) ? input.Clone() : default);
+                        string name = Str(block, "name") ?? "tool";
+                        JsonElement input = block.TryGetProperty("input", out JsonElement i) ? i.Clone() : default;
+                        string? before = EditTools.Contains(name) && this.FullPath(input) is string path ? FileChange.ReadOrEmpty(path) : null;
+                        this.pendingTools[id] = (name, input, before);
                     }
                 }
 
                 break;
 
             case "user" when isTopLevel:
+                this.LastMessageId = Str(ev, "uuid") ?? this.LastMessageId;
                 foreach (JsonElement block in Content(ev))
                 {
                     if (Str(block, "type") == "tool_result"
@@ -280,7 +355,10 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                         this.pendingTools.Remove(id);
                         bool isError = block.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True;
                         (ActivityKind kind, string title, string detail) = this.Describe(call.Name, call.Input, ResultText(block), isError);
-                        chatSink.ToolActivity(kind, title, detail);
+                        FileChange? change = !isError && call.Before != null && this.FullPath(call.Input) is string path
+                            ? new FileChange(path, call.Before, FileChange.ReadOrEmpty(path))
+                            : null;
+                        chatSink.ToolActivity(kind, title, detail, change);
                     }
                 }
 
@@ -374,6 +452,13 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             return new PermissionDecision(true);
         }
 
+        bool isShell = toolName is "Bash" or "PowerShell";
+        string? command = isShell ? Str(input, "command") : null;
+        if (command != null && CommandRules.IsAllowed(this.RepoRoot, command, viaShell: true))
+        {
+            return new PermissionDecision(true);
+        }
+
         IChatSink? chatSink = this.sink;
         if (chatSink is null)
         {
@@ -385,15 +470,24 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         {
             (ActivityKind kind, string title, string detail) = this.DescribeRequest(toolName, input);
             bool isEdit = EditTools.Contains(toolName);
+            FileChange? change = isEdit && this.FullPath(input) is string path
+                ? FileChange.ForClaudeCodeTool(toolName, input, path, FileChange.ReadOrEmpty(path))
+                : null;
+            string? rule = command is null ? null : CommandRules.RuleFor(command, viaShell: true);
+            string? allowAllLabel = isEdit ? "Allow all edits" : rule != null ? $"Always allow \"{rule}\" here" : null;
 
             // The chat UI must be touched on Visual Studio's main thread.
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(this.runToken);
             chatSink.SetStatus("Waiting for your approval…");
-            Approval approval = await chatSink.RequestApprovalAsync(kind, title, detail, isEdit ? "Allow all edits" : null, this.runToken);
+            Approval approval = await chatSink.RequestApprovalAsync(kind, title, detail, allowAllLabel, this.runToken, change);
 
-            if (approval == Approval.AllowAll)
+            if (approval == Approval.AllowAll && isEdit)
             {
                 this.editsPreApproved = true;
+            }
+            else if (approval == Approval.AllowAll && rule != null)
+            {
+                CommandRules.Allow(this.RepoRoot, rule);
             }
 
             return approval == Approval.Deny
@@ -493,6 +587,25 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         }
 
         return (kind, title, detail);
+    }
+
+    /// <summary>The absolute path an edit tool's input refers to, or null if it has none.</summary>
+    private string? FullPath(JsonElement input)
+    {
+        string? path = Str(input, "file_path") ?? Str(input, "notebook_path");
+        if (string.IsNullOrEmpty(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(Path.Combine(this.RepoRoot, path));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 
     private string Relative(string? path)

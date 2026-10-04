@@ -17,7 +17,7 @@ namespace ClaudeForVS.ToolWindows;
 /// State behind the chat window. Everything here runs on the UI thread: the agent is started from
 /// the UI thread and its awaits resume there, so sink callbacks can touch bound properties directly.
 /// </summary>
-internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
+internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 {
     private const int MaxDetailChars = 8000;
 
@@ -32,6 +32,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     private string status = string.Empty;
     private string approvalTitle = string.Empty;
     private IReadOnlyList<DiffLine> approvalLines = [];
+    private FileChange? approvalChange;
     private string? allowAllLabel;
     private bool isBusy;
     private bool needsApiKey;
@@ -67,6 +68,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             this.repoPath = pinned;
         }
 
+        this.Attachments.CollectionChanged += (_, _) => this.OnPropertyChanged(nameof(this.HasAttachments));
         this.RefreshUsage();
     }
 
@@ -192,7 +194,22 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     /// <summary>Raised when the user sends a prompt, so the view can jump back to the bottom.</summary>
     public event EventHandler? PromptSent;
 
+    /// <summary>Raised with a prompt's text when it's taken back for editing; the view puts it in the prompt box.</summary>
+    public event EventHandler<string>? EditRequested;
+
+    /// <summary>Raised when Claude needs the user (an approval, a question, or a finished run), with a short message.</summary>
+    public event EventHandler<string>? AttentionNeeded;
+
+    /// <summary>Asks the user to confirm something; returns true to go ahead. Set by the view.</summary>
+    public Func<string, bool> Confirm { get; set; } = _ => true;
+
+    /// <summary>Asks where to save an export, given a suggested file name; null if cancelled. Set by the view.</summary>
+    public Func<string, string?> ChooseExportPath { get; set; } = _ => null;
+
     public ObservableCollection<ChatEntry> Messages { get; } = [];
+
+    /// <summary>Prompts sent before, for Up/Down recall.</summary>
+    public PromptHistory History { get; } = new();
 
     public string RepoPath
     {
@@ -205,6 +222,9 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
     }
 
+    /// <summary>The repository root for <see cref="RepoPath"/>, or null if it isn't inside one.</summary>
+    public string? RepoRoot => this.engine?.RepoRoot ?? GitRunner.FindRepoRoot(this.repoPath.Trim());
+
     /// <summary>Short name shown in the header chip.</summary>
     public string RepoName
     {
@@ -216,6 +236,9 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     }
 
     public string Status { get => this.status; private set => this.Set(ref this.status, value); }
+
+    /// <summary>Shows a message in the footer.</summary>
+    public void ShowStatus(string message) => this.Status = message;
 
     public string ApprovalTitle { get => this.approvalTitle; private set => this.Set(ref this.approvalTitle, value); }
 
@@ -230,6 +253,19 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
     }
 
     public bool HasApprovalDetail => this.approvalLines.Count > 0;
+
+    /// <summary>The whole-file change behind the pending approval, for the diff viewer; null for commands.</summary>
+    public FileChange? ApprovalChange
+    {
+        get => this.approvalChange;
+        private set
+        {
+            this.Set(ref this.approvalChange, value);
+            this.OnPropertyChanged(nameof(this.HasApprovalChange));
+        }
+    }
+
+    public bool HasApprovalChange => this.approvalChange != null;
 
     public string? AllowAllLabel
     {
@@ -467,6 +503,23 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.Status = "Settings saved.";
     }
 
+    /// <summary>Changes the model, effort or mode from the header menu or a slash command.</summary>
+    public void QuickSet(ClaudeModel? model = null, EffortLevel? effort = null, AgentMode? mode = null)
+    {
+        AgentSettings updated = this.settings with
+        {
+            Model = model ?? this.settings.Model,
+            Effort = effort ?? this.settings.Effort,
+            Mode = mode ?? this.settings.Mode,
+        };
+
+        if (updated != this.settings)
+        {
+            this.ApplySettings(updated, this.RepoPath, null);
+            this.Status = $"Now using {this.ModelSummary}.";
+        }
+    }
+
     public void NewChat()
     {
         this.Stop();
@@ -476,231 +529,6 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.resumeFrom = null;
         this.Status = string.Empty;
         this.ShowHistory = false;
-    }
-
-    // ===== Saved chats (History tab) =====
-
-    private string? chatId;
-    private DateTimeOffset chatCreated;
-    private string chatTitle = string.Empty;
-
-    /// <summary>A saved chat that was opened but hasn't sent a message yet; its context is given to the next engine.</summary>
-    private SessionInfo? resumeFrom;
-
-    private bool showHistory;
-
-    /// <summary>Saved chats, most recently used first. Refreshed whenever the History tab is shown.</summary>
-    public ObservableCollection<SessionItem> Sessions { get; } = [];
-
-    public bool HasSessions => this.Sessions.Count > 0;
-
-    public bool ShowHistory
-    {
-        get => this.showHistory;
-        set
-        {
-            this.Set(ref this.showHistory, value);
-            this.OnPropertyChanged(nameof(this.ShowChat));
-            if (value)
-            {
-                this.RefreshSessions();
-            }
-        }
-    }
-
-    public bool ShowChat
-    {
-        get => !this.showHistory;
-        set => this.ShowHistory = !value;
-    }
-
-    public void RefreshSessions()
-    {
-        this.Sessions.Clear();
-        foreach (SessionInfo info in SessionStore.List())
-        {
-            this.Sessions.Add(new SessionItem(info, info.Id == this.chatId));
-        }
-
-        this.OnPropertyChanged(nameof(this.HasSessions));
-    }
-
-    /// <summary>Writes the current chat to disk so it can be reopened later.</summary>
-    private void SaveChat()
-    {
-        if (!this.Messages.Any(m => m.Kind == ChatEntryKind.User))
-        {
-            return;
-        }
-
-        if (this.chatId is null)
-        {
-            this.chatId = Guid.NewGuid().ToString("N");
-            this.chatCreated = DateTimeOffset.Now;
-            string first = this.Messages.First(m => m.Kind == ChatEntryKind.User).Text;
-            string oneLine = string.Join(" ", first.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-            this.chatTitle = oneLine.Length > 80 ? oneLine.Substring(0, 80) + "…" : oneLine;
-        }
-
-        var info = new SessionInfo
-        {
-            Id = this.chatId,
-            Title = this.chatTitle,
-            RepoPath = this.engine?.RepoRoot ?? this.RepoPath,
-            Engine = this.engine?.Kind ?? this.settings.Engine,
-            Model = this.engine?.Model ?? this.settings.Model,
-            Created = this.chatCreated,
-            Updated = DateTimeOffset.Now,
-            MessageCount = this.Messages.Count(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant),
-            ClaudeCodeSessionId = (this.engine as ClaudeCodeEngine)?.SessionId,
-        };
-
-        List<SavedEntry> entries = this.Messages
-            .Select(m => new SavedEntry
-            {
-                Kind = m.Kind,
-                Header = m.Header,
-                Text = m.Text,
-                Detail = string.Join("\n", m.DetailLines.Select(l => l.Text)),
-                Activity = m.Activity,
-            })
-            .ToList();
-
-        try
-        {
-            SessionStore.Save(info, entries);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            this.Status = "Couldn't save this chat to history: " + ex.Message;
-            return;
-        }
-
-        if (this.ShowHistory)
-        {
-            this.RefreshSessions();
-        }
-    }
-
-    /// <summary>Replaces the current chat with a saved one. The next message continues it.</summary>
-    public void OpenSession(SessionItem item)
-    {
-        if (this.IsBusy)
-        {
-            this.Status = "Stop the running prompt before opening another chat.";
-            return;
-        }
-
-        SessionInfo info = item.Info;
-        if (!Directory.Exists(info.RepoPath))
-        {
-            this.Status = $"The repository for this chat no longer exists: {info.RepoPath}";
-            return;
-        }
-
-        if (SessionStore.LoadEntries(info.Id) is not { } entries)
-        {
-            this.Status = "This chat's saved transcript couldn't be read.";
-            return;
-        }
-
-        this.DisposeEngine();
-        this.Messages.Clear();
-        foreach (SavedEntry e in entries)
-        {
-            // Chats saved by 0.3.9-0.3.10 kept the token count in the header.
-            this.Messages.Add(e.Kind == ChatEntryKind.Usage && e.Text.Length == 0
-                ? new ChatEntry(e.Kind, string.Empty, e.Header)
-                : new ChatEntry(e.Kind, e.Header, e.Text, e.Detail, e.Activity));
-        }
-
-        this.chatId = info.Id;
-        this.chatCreated = info.Created;
-        this.chatTitle = info.Title;
-        this.resumeFrom = info;
-        this.RepoPath = info.RepoPath;
-
-        // A Claude Code session can only be continued by Claude Code, so follow the chat's engine.
-        string status = $"Opened \"{info.Title}\".";
-        if (info.Engine != this.settings.Engine)
-        {
-            AgentSettings switched = this.settings with { Engine = info.Engine };
-            switched.Save();
-            this.Settings = switched;
-            status += info.Engine == ChatEngineKind.ClaudeCode ? " Switched to Claude Code to continue it." : " Switched to the Claude API to continue it.";
-        }
-
-        this.Status = status;
-        this.ShowHistory = false;
-        this.PromptSent?.Invoke(this, EventArgs.Empty); // scroll to the end of the opened chat
-    }
-
-    /// <summary>Reopens the most recent chat for the current repository, so a chat carries over when Visual Studio restarts.</summary>
-    public void RestoreLastSession()
-    {
-        if (this.Messages.Count > 0 || this.engine != null)
-        {
-            return;
-        }
-
-        string repo = this.RepoPath.Trim().TrimEnd('\\', '/');
-        SessionInfo? last = SessionStore.List().FirstOrDefault(s =>
-            string.Equals(s.RepoPath.TrimEnd('\\', '/'), repo, StringComparison.OrdinalIgnoreCase)
-            && s.Engine == this.settings.Engine);
-        if (last != null)
-        {
-            this.OpenSession(new SessionItem(last, isCurrent: false));
-        }
-    }
-
-    public void DeleteSession(SessionItem item)
-    {
-        SessionStore.Delete(item.Info.Id);
-        if (item.Info.Id == this.chatId)
-        {
-            this.NewChat();
-            this.ShowHistory = true;
-        }
-
-        this.RefreshSessions();
-    }
-
-    public void DeleteAllSessions()
-    {
-        foreach (SessionInfo info in SessionStore.List())
-        {
-            SessionStore.Delete(info.Id);
-        }
-
-        if (this.chatId != null)
-        {
-            this.NewChat();
-            this.ShowHistory = true;
-        }
-
-        this.RefreshSessions();
-    }
-
-    /// <summary>Gives a freshly created engine the context of the chat that was opened from History.</summary>
-    private void ApplyResume(IChatEngine created)
-    {
-        SessionInfo? info = this.resumeFrom;
-        this.resumeFrom = null;
-        if (info is null || !string.Equals(info.RepoPath, created.RepoRoot, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        if (created is ClaudeCodeEngine code)
-        {
-            code.SessionId = info.ClaudeCodeSessionId;
-        }
-        else if (created is ClaudeAgent agent)
-        {
-            agent.RestoreHistory(this.Messages
-                .Where(m => m.Kind is ChatEntryKind.User or ChatEntryKind.Assistant)
-                .Select(m => (m.Kind == ChatEntryKind.User, m.Text)));
-        }
     }
 
     private void DisposeEngine()
@@ -725,16 +553,10 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
 
     public void Resolve(Approval approval) => this.pendingApproval?.TrySetResult(approval);
 
-    /// <summary>Sends a prompt. Returns false (and leaves the prompt box alone) if it couldn't be sent.</summary>
-    public bool TrySend(string text, out Task run)
+    /// <summary>The engine for the current repository, creating it (and handing it any reopened chat) if needed.</summary>
+    private bool TryGetEngine(out IChatEngine result)
     {
-        run = Task.CompletedTask;
-        text = text.Trim();
-        if (text.Length == 0 || this.IsBusy)
-        {
-            return false;
-        }
-
+        result = this.engine!;
         string? root = GitRunner.FindRepoRoot(this.RepoPath.Trim());
         if (root is null)
         {
@@ -761,10 +583,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             this.ApplyResume(created); // before the new prompt joins the transcript
         }
 
-        this.Messages.Add(new ChatEntry(ChatEntryKind.User, "You", text));
-        this.PromptSent?.Invoke(this, EventArgs.Empty);
-        this.SaveChat();
-        run = this.RunAsync(this.engine, text);
+        result = this.engine;
         return true;
     }
 
@@ -799,31 +618,42 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         return new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode);
     }
 
-    private async Task RunAsync(IChatEngine runEngine, string text)
+    /// <param name="prompt">The prompt being answered; a restore point is taken around it so its changes can be undone. Null for commands.</param>
+    private async Task RunAsync(IChatEngine runEngine, Func<CancellationToken, Task> work, ChatEntry? prompt)
     {
         this.IsBusy = true;
         this.promptTokens = default;
         this.SetLiveTokens(0);
         this.promptCost = 0;
         this.promptHasCost = false;
+        string outcome = "Claude has finished";
         using var cts = new CancellationTokenSource();
         this.runCts = cts;
         try
         {
-            await runEngine.SendAsync(text, this, cts.Token);
+            // Plan mode can't change files, so there's nothing to undo.
+            if (prompt != null && runEngine.Mode != AgentMode.Plan)
+            {
+                prompt.SnapshotBefore = await WorkingTreeSnapshot.CaptureAsync(runEngine.RepoRoot, cts.Token);
+            }
+
+            await work(cts.Token);
         }
         catch (OperationCanceledException)
         {
             this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, "Stopped"));
+            outcome = "Stopped";
         }
         catch (AnthropicUnauthorizedException)
         {
             this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "API key rejected", "Open settings and enter a valid Anthropic API key."));
             this.DisposeEngine();
+            outcome = "Claude stopped with an error";
         }
         catch (Exception ex)
         {
             this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Something went wrong", ex.Message));
+            outcome = "Claude stopped with an error";
             if (runEngine.Kind == ChatEngineKind.ClaudeCode)
             {
                 await this.RefreshClaudeCodeStatusAsync(); // e.g. the sign-in expired
@@ -838,21 +668,28 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             }
 
             this.liveUsageEntry = null;
+            this.currentAssistant = null;
+            this.currentThinking = null;
+            this.runCts = null;
+            this.HasPendingApproval = false;
+
+            if (prompt?.SnapshotBefore != null)
+            {
+                prompt.SnapshotAfter = await WorkingTreeSnapshot.CaptureAsync(runEngine.RepoRoot, CancellationToken.None);
+            }
 
             if (ReferenceEquals(this.engine, runEngine))
             {
                 this.SaveChat(); // skipped if the chat was replaced or reset while this prompt was stopping
             }
 
-            this.currentAssistant = null;
-            this.currentThinking = null;
-            this.runCts = null;
             this.IsBusy = false;
-            this.HasPendingApproval = false;
             if (this.Status.StartsWith("Waiting", StringComparison.Ordinal) || this.Status.StartsWith("Running", StringComparison.Ordinal))
             {
                 this.Status = string.Empty;
             }
+
+            this.AttentionNeeded?.Invoke(this, outcome);
         }
     }
 
@@ -880,11 +717,11 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.currentThinking.Append(text);
     }
 
-    void IChatSink.ToolActivity(ActivityKind kind, string title, string detail)
+    void IChatSink.ToolActivity(ActivityKind kind, string title, string detail, FileChange? change)
     {
         this.currentAssistant = null;
         this.currentThinking = null;
-        this.Messages.Add(new ChatEntry(ChatEntryKind.Tool, title, detail: Truncate(detail), activity: kind));
+        this.Messages.Add(new ChatEntry(ChatEntryKind.Tool, title, detail: Truncate(detail), activity: kind, change: change));
     }
 
     void IChatSink.SetStatus(string? status) => this.Status = status ?? string.Empty;
@@ -922,6 +759,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         }
 
         this.OnQuestionsChanged();
+        this.AttentionNeeded?.Invoke(this, this.QuestionCardTitle);
         using (cancellationToken.Register(() => tcs.TrySetCanceled()))
         {
             try
@@ -1007,7 +845,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.RefreshUsage();
     }
 
-    async Task<Approval> IChatSink.RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken)
+    async Task<Approval> IChatSink.RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change)
     {
         this.currentAssistant = null;
         this.currentThinking = null;
@@ -1015,8 +853,10 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
         this.pendingApproval = tcs;
         this.ApprovalTitle = title;
         this.ApprovalLines = DiffLine.Parse(Truncate(detail), kind);
+        this.ApprovalChange = change;
         this.AllowAllLabel = allowAllLabel;
         this.HasPendingApproval = true;
+        this.AttentionNeeded?.Invoke(this, "Claude needs your approval");
         using (cancellationToken.Register(() => tcs.TrySetCanceled()))
         {
             try
@@ -1026,6 +866,7 @@ internal sealed class ClaudeChatViewModel : INotifyPropertyChanged, IChatSink
             finally
             {
                 this.HasPendingApproval = false;
+                this.ApprovalChange = null;
                 this.pendingApproval = null;
             }
         }

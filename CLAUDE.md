@@ -10,6 +10,14 @@ dotnet build src\ClaudeForVS -c Release --no-incremental
 
 The package is written to `src/ClaudeForVS/bin/Release/net48/ClaudeForVS.vsix`. The build should finish with 0 warnings and 0 errors.
 
+## Tests
+
+```powershell
+dotnet test tests\ClaudeForVS.Tests -c Release
+```
+
+xUnit tests for the logic that doesn't need Visual Studio (parsing, highlighting, prompt composition, export, command rules) plus git-backed tests for the undo snapshots, which need git on PATH. All tests should pass.
+
 ## After finishing a set of changes
 
 Ask the user whether they would like the changes committed. Do not commit, stage or bump anything until they say yes.

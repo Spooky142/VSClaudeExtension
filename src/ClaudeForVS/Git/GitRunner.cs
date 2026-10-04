@@ -53,7 +53,14 @@ internal sealed class GitRunner
         };
     }
 
-    public static async Task<(int ExitCode, string Output)> RunAsync(string repoRoot, IReadOnlyList<string> args, CancellationToken cancellationToken)
+    /// <param name="environment">Extra environment variables for git, e.g. GIT_INDEX_FILE.</param>
+    /// <param name="includeStderr">False to return only standard output (for output that's parsed rather than shown).</param>
+    public static async Task<(int ExitCode, string Output)> RunAsync(
+        string repoRoot,
+        IReadOnlyList<string> args,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environment = null,
+        bool includeStderr = true)
     {
         string git = GitPath ?? throw new InvalidOperationException("git.exe was not found on PATH or in the Visual Studio installation.");
 
@@ -76,6 +83,10 @@ internal sealed class GitRunner
         psi.EnvironmentVariables["GIT_PAGER"] = "cat";
         psi.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
         psi.EnvironmentVariables["GIT_EDITOR"] = "true";
+        foreach (KeyValuePair<string, string> variable in environment ?? new Dictionary<string, string>())
+        {
+            psi.EnvironmentVariables[variable.Key] = variable.Value;
+        }
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -97,6 +108,11 @@ internal sealed class GitRunner
 
         string output = await stdout.ConfigureAwait(false);
         string err = await stderr.ConfigureAwait(false);
+        if (!includeStderr)
+        {
+            return (process.ExitCode, output);
+        }
+
         if (err.Length > 0)
         {
             output += "\n[stderr]\n" + err;

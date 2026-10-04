@@ -55,6 +55,11 @@ internal sealed class ClaudeAgent : IChatEngine
     // Tokens in the conversation as of the latest response; 0 until the first one (or after compacting).
     private long contextTokens;
 
+    // Bumped whenever the history is replaced wholesale, so checkpoints taken before then can't be rewound to.
+    private int generation;
+
+    private readonly string instanceId = Guid.NewGuid().ToString("N").Substring(0, 8);
+
     public ClaudeAgent(string apiKey, string repoRoot, ClaudeModel model, EffortLevel effort, AgentMode mode)
     {
         this.client = new AnthropicClient { ApiKey = apiKey, Handlers = [this.rateLimits] };
@@ -104,6 +109,7 @@ internal sealed class ClaudeAgent : IChatEngine
     public void RestoreHistory(IEnumerable<(bool FromUser, string Text)> turns)
     {
         this.history.Clear();
+        this.generation++;
         Role? last = null;
         var text = new StringBuilder();
 
@@ -146,11 +152,53 @@ internal sealed class ClaudeAgent : IChatEngine
         Flush();
     }
 
-    public async Task SendAsync(string prompt, IChatSink sink, CancellationToken cancellationToken)
+    /// <summary>"instance:generation:message count"; only meaningful to this engine instance.</summary>
+    public string? Checkpoint => $"{this.instanceId}:{this.generation}:{this.history.Count}";
+
+    public bool Rewind(string checkpoint)
+    {
+        string[] parts = checkpoint.Split(':');
+        if (parts.Length != 3 || parts[0] != this.instanceId || !int.TryParse(parts[1], out int gen) || !int.TryParse(parts[2], out int count)
+            || gen != this.generation || count > this.history.Count)
+        {
+            return false;
+        }
+
+        this.history.RemoveRange(count, this.history.Count - count);
+        return true;
+    }
+
+    public async Task CompactAsync(IChatSink sink, CancellationToken cancellationToken)
+    {
+        if (this.history.Count == 0)
+        {
+            sink.SetStatus("Nothing to compact yet.");
+            return;
+        }
+
+        await this.CompactIfNeededAsync(sink, midTask: false, cancellationToken, force: true);
+        sink.SetStatus(null);
+    }
+
+    public async Task SendAsync(ChatPrompt prompt, IChatSink sink, CancellationToken cancellationToken)
     {
         // Finished responses so far; the one streaming is added on top, live.
         long promptTokens = await this.CompactIfNeededAsync(sink, midTask: false, cancellationToken);
-        this.history.Add(new() { Role = Role.User, Content = prompt });
+        if (prompt.Images.Count == 0)
+        {
+            this.history.Add(new() { Role = Role.User, Content = prompt.Text });
+        }
+        else
+        {
+            var content = new List<ContentBlockParam>();
+            foreach (PromptImage image in prompt.Images)
+            {
+                content.Add(new ImageBlockParam { Source = new Base64ImageSource { Data = image.Base64, MediaType = ToMediaType(image.MediaType) } });
+            }
+
+            content.Add(new TextBlockParam { Text = prompt.Text });
+            this.history.Add(new() { Role = Role.User, Content = content });
+        }
 
         for (int round = 0; round < MaxToolRounds; round++)
         {
@@ -231,16 +279,16 @@ internal sealed class ClaudeAgent : IChatEngine
     /// summary. The request reuses the normal request with the instruction appended, so the history is read from the
     /// cache. Returns the new tokens it used (counted towards the prompt's total), or 0 if it didn't compact.
     /// </summary>
-    private async Task<long> CompactIfNeededAsync(IChatSink sink, bool midTask, CancellationToken cancellationToken)
+    private async Task<long> CompactIfNeededAsync(IChatSink sink, bool midTask, CancellationToken cancellationToken, bool force = false)
     {
         long window = AgentSettings.ContextWindow(this.Model);
         double threshold = Math.Min(window * CompactAt, window - MaxOutputTokens - CompactHeadroom);
-        if (this.contextTokens < threshold || this.history.Count == 0)
+        if ((!force && this.contextTokens < threshold) || this.history.Count == 0)
         {
             return 0;
         }
 
-        sink.SetStatus("Context is nearly full · summarizing the conversation…");
+        sink.SetStatus(force ? "Summarizing the conversation…" : "Context is nearly full · summarizing the conversation…");
 
         // The reply has to fit in what's left of the window.
         long maxTokens = Math.Max(4_000, Math.Min(16_000, window - this.contextTokens - 2_000));
@@ -277,6 +325,7 @@ internal sealed class ClaudeAgent : IChatEngine
 
         long before = this.contextTokens;
         this.history.Clear();
+        this.generation++;
         this.history.Add(new()
         {
             Role = Role.User,
@@ -327,6 +376,14 @@ internal sealed class ClaudeAgent : IChatEngine
 
         return new ThinkingConfigEnabled { BudgetTokens = tokens };
     }
+
+    private static MediaType ToMediaType(string mediaType) => mediaType switch
+    {
+        "image/jpeg" => MediaType.ImageJpeg,
+        "image/gif" => MediaType.ImageGif,
+        "image/webp" => MediaType.ImageWebP,
+        _ => MediaType.ImagePng,
+    };
 
     private static ApiEffort ToApiEffort(EffortLevel effort) => effort switch
     {
@@ -499,13 +556,20 @@ internal sealed class ClaudeAgent : IChatEngine
             return PlanModeRefusal;
         }
 
-        if (!GitRunner.IsReadOnly(args) && this.Mode == AgentMode.Coding)
+        if (!GitRunner.IsReadOnly(args) && this.Mode == AgentMode.Coding && !CommandRules.IsAllowed(this.RepoRoot, commandLine, viaShell: false))
         {
             sink.SetStatus("Waiting for your approval…");
-            if (await sink.RequestApprovalAsync(ActivityKind.Git, commandLine, string.Empty, null, cancellationToken) == Approval.Deny)
+            string? rule = CommandRules.RuleFor(commandLine, viaShell: false);
+            Approval approval = await sink.RequestApprovalAsync(ActivityKind.Git, commandLine, string.Empty, rule is null ? null : $"Always allow \"{rule}\" here", cancellationToken);
+            if (approval == Approval.Deny)
             {
                 sink.ToolActivity(ActivityKind.Declined, commandLine, "Declined by you.");
                 return "The user declined to run this command.";
+            }
+
+            if (approval == Approval.AllowAll && rule != null)
+            {
+                CommandRules.Allow(this.RepoRoot, rule);
             }
         }
 
@@ -568,15 +632,16 @@ internal sealed class ClaudeAgent : IChatEngine
 
         string relative = this.files.Relative(file.FullPath);
         string diff = Diff(oldString, newString) + (count > 1 ? $"\n({count} occurrences)" : string.Empty);
-        if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Edit {relative}", diff, sink, cancellationToken))
+        string updated = replaceAll ? file.Text.Replace(find, replace) : ReplaceFirst(file.Text, find, replace);
+        var change = new FileChange(file.FullPath, file.Text, updated);
+        if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Edit {relative}", diff, change, sink, cancellationToken))
         {
             sink.ToolActivity(ActivityKind.Declined, $"Edit {relative}", "Declined by you.");
             return "The user declined this edit.";
         }
 
-        string updated = replaceAll ? file.Text.Replace(find, replace) : ReplaceFirst(file.Text, find, replace);
         this.files.Write(file.FullPath, updated, file.Encoding);
-        sink.ToolActivity(ActivityKind.Edit, $"Edited {relative}", diff);
+        sink.ToolActivity(ActivityKind.Edit, $"Edited {relative}", diff, change);
         return $"Edited {relative} ({count} replacement{(count == 1 ? "" : "s")}).";
     }
 
@@ -590,11 +655,13 @@ internal sealed class ClaudeAgent : IChatEngine
         Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
         string newline = "\r\n";
         string action = "Create";
+        string before = string.Empty;
         if (File.Exists(full))
         {
             RepoFiles.TextFile existing = this.files.Read(path);
             encoding = existing.Encoding;
             newline = existing.Newline;
+            before = existing.Text;
             action = "Overwrite";
         }
         else if (Directory.Exists(full))
@@ -603,18 +670,20 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         string preview = Preview(content);
-        if (!await this.ApproveEditAsync(ActivityKind.Create, $"{action} {relative}", preview, sink, cancellationToken))
+        string after = RepoFiles.NormalizeNewlines(content, newline);
+        var change = new FileChange(full, before, after);
+        if (!await this.ApproveEditAsync(ActivityKind.Create, $"{action} {relative}", preview, change, sink, cancellationToken))
         {
             sink.ToolActivity(ActivityKind.Declined, $"{action} {relative}", "Declined by you.");
             return "The user declined this change.";
         }
 
-        this.files.Write(full, RepoFiles.NormalizeNewlines(content, newline), encoding);
-        sink.ToolActivity(ActivityKind.Create, action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview);
+        this.files.Write(full, after, encoding);
+        sink.ToolActivity(ActivityKind.Create, action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview, change);
         return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}.";
     }
 
-    private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, IChatSink sink, CancellationToken cancellationToken)
+    private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, FileChange change, IChatSink sink, CancellationToken cancellationToken)
     {
         if (this.Mode == AgentMode.Plan)
         {
@@ -627,7 +696,7 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         sink.SetStatus("Waiting for your approval…");
-        Approval approval = await sink.RequestApprovalAsync(kind, title, detail, "Allow all edits", cancellationToken);
+        Approval approval = await sink.RequestApprovalAsync(kind, title, detail, "Allow all edits", cancellationToken, change);
         if (approval == Approval.AllowAll)
         {
             this.editsPreApproved = true;

@@ -86,29 +86,64 @@
 
     <!-- ===== Transcript templates ===== -->
     <DataTemplate x:Key="UserTemplate">
-      <!-- Left-anchored 48px in from the edge; shrinks to fit short messages and grows rightward for long ones. -->
-      <Border Margin="48,10,0,6" HorizontalAlignment="Left" CornerRadius="12,12,4,12" Padding="12,8"
-              Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
-        <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
-                         Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
-      </Border>
+      <!-- Left-anchored 48px in from the edge; shrinks to fit short messages and grows rightward for long ones.
+           What was attached sits under the bubble, and Edit / Retry / Undo appear on hover. -->
+      <StackPanel x:Name="Root" Margin="48,10,0,0" HorizontalAlignment="Left" Background="Transparent">
+        <Border HorizontalAlignment="Left" CornerRadius="12,12,4,12" Padding="12,8"
+                Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
+          <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
+                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+        </Border>
+        <StackPanel Orientation="Horizontal" Margin="6,3,0,0" Visibility="{Binding HasNote, Converter={StaticResource BoolToVis}}">
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE723;" FontSize="10" Margin="0,0,4,0" />
+          <TextBlock Text="{Binding Note}" Style="{StaticResource Muted}" FontSize="10.5" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <StackPanel x:Name="Actions" Orientation="Horizontal" Margin="0,1,0,0" Visibility="Hidden">
+          <Button Style="{StaticResource MiniButton}" Content="Edit" Click="OnEditPrompt"
+                  ToolTip="Take this message and Claude's replies after it out of the chat, and edit it" />
+          <Button Style="{StaticResource MiniButton}" Content="Retry" Click="OnRetryPrompt"
+                  ToolTip="Take Claude's replies to this message out of the chat and send it again" />
+          <Button Style="{StaticResource MiniButton}" Content="Undo changes" Click="OnUndoPrompt"
+                  ToolTip="Put the files Claude changed since this message back the way they were"
+                  Visibility="{Binding CanUndo, Converter={StaticResource BoolToVis}}" />
+          <Button Style="{StaticResource MiniButton}" Content="Copy" Click="OnCopyEntry" ToolTip="Copy this message" />
+        </StackPanel>
+      </StackPanel>
+      <DataTemplate.Triggers>
+        <MultiDataTrigger>
+          <MultiDataTrigger.Conditions>
+            <Condition Binding="{Binding IsMouseOver, ElementName=Root}" Value="True" />
+            <Condition Binding="{Binding DataContext.IsIdle, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True" />
+          </MultiDataTrigger.Conditions>
+          <Setter TargetName="Actions" Property="Visibility" Value="Visible" />
+        </MultiDataTrigger>
+      </DataTemplate.Triggers>
     </DataTemplate>
 
     <DataTemplate x:Key="AssistantTemplate">
-      <Border Margin="0,10,24,6" HorizontalAlignment="Left" CornerRadius="12,12,12,4" Padding="12,10"
+      <Border x:Name="Bubble" Margin="0,10,24,6" HorizontalAlignment="Left" CornerRadius="12,12,12,4" Padding="12,10"
               Background="{StaticResource SubtleFill}" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}">
         <StackPanel>
-          <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-            <Border Width="20" Height="20" CornerRadius="10" Background="{StaticResource Accent}">
-              <TextBlock Text="✻" Foreground="White" FontSize="12" FontFamily="Segoe UI Symbol"
-                         HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0" />
-            </Border>
-            <TextBlock Text="Claude" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
-          </StackPanel>
+          <DockPanel Margin="0,0,0,6">
+            <Button x:Name="CopyReply" DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Copy" Margin="12,0,0,0"
+                    Click="OnCopyEntry" ToolTip="Copy this reply as Markdown" Visibility="Hidden" />
+            <StackPanel Orientation="Horizontal">
+              <Border Width="20" Height="20" CornerRadius="10" Background="{StaticResource Accent}">
+                <TextBlock Text="✻" Foreground="White" FontSize="12" FontFamily="Segoe UI Symbol"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0" />
+              </Border>
+              <TextBlock Text="Claude" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+          </DockPanel>
           <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
                            Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
         </StackPanel>
       </Border>
+      <DataTemplate.Triggers>
+        <Trigger SourceName="Bubble" Property="IsMouseOver" Value="True">
+          <Setter TargetName="CopyReply" Property="Visibility" Value="Visible" />
+        </Trigger>
+      </DataTemplate.Triggers>
     </DataTemplate>
 
     <DataTemplate x:Key="ThinkingTemplate">
@@ -134,15 +169,20 @@
     <DataTemplate x:Key="ToolTemplate">
       <Border Margin="0,2,24,2" HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
         <StackPanel>
-          <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}">
-            <DockPanel Margin="8,5">
-              <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;"
-                         Margin="8,0,0,0" Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}" />
-              <TextBlock x:Name="Glyph" Style="{StaticResource Icon}" FontSize="12" Text="&#xE756;" Margin="0,0,8,0" />
-              <TextBlock x:Name="Title" Text="{Binding Header}" ToolTip="{Binding Header}" FontFamily="{StaticResource MonoFont}"
-                         FontSize="11.5" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-            </DockPanel>
-          </ToggleButton>
+          <DockPanel>
+            <Button DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Diff" Margin="0,0,4,0" VerticalAlignment="Center"
+                    Click="OnOpenEntryDiff" ToolTip="Open this change in Visual Studio's diff viewer"
+                    Visibility="{Binding HasChange, Converter={StaticResource BoolToVis}}" />
+            <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}">
+              <DockPanel Margin="8,5">
+                <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;"
+                           Margin="8,0,0,0" Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}" />
+                <TextBlock x:Name="Glyph" Style="{StaticResource Icon}" FontSize="12" Text="&#xE756;" Margin="0,0,8,0" />
+                <TextBlock x:Name="Title" Text="{Binding Header}" ToolTip="{Binding Header}" FontFamily="{StaticResource MonoFont}"
+                           FontSize="11.5" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+              </DockPanel>
+            </ToggleButton>
+          </DockPanel>
           <Border x:Name="Details" Visibility="Collapsed" BorderThickness="0,1,0,0" BorderBrush="{StaticResource SubtleBorder}" Padding="0,4">
             <ItemsControl ItemsSource="{Binding DetailLines}" ItemTemplate="{StaticResource DiffLineTemplate}" />
           </Border>
@@ -220,6 +260,30 @@
       <TextBlock Text="{Binding Text}" Style="{StaticResource Muted}" FontSize="10.5" HorizontalAlignment="Left" Margin="12,0,0,10" />
     </DataTemplate>
 
+    <!-- An attachment above the prompt box: image thumbnail or icon, label, and × to remove it. -->
+    <DataTemplate x:Key="AttachmentChip">
+      <Border Margin="0,0,6,6" CornerRadius="10" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+              Background="{StaticResource SubtleFill}" Padding="7,2,2,2" ToolTip="{Binding ToolTip}">
+        <StackPanel Orientation="Horizontal">
+          <Image Source="{Binding Thumbnail}" Height="18" MaxWidth="36" Margin="0,0,5,0" Stretch="Uniform"
+                 Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVis}}" />
+          <TextBlock Text="{Binding Glyph}" FontSize="11" Margin="0,0,5,0">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock" BasedOn="{StaticResource Icon}">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding HasThumbnail}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+          <TextBlock Text="{Binding Label}" FontSize="11.5" VerticalAlignment="Center" MaxWidth="240" TextTrimming="CharacterEllipsis" />
+          <Button Style="{StaticResource ChipCloseButton}" Content="&#xE711;" Click="OnRemoveAttachment" ToolTip="Leave this out" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+
     <local:ChatEntryTemplateSelector x:Key="EntrySelector"
                                      User="{StaticResource UserTemplate}"
                                      Assistant="{StaticResource AssistantTemplate}"
@@ -252,7 +316,7 @@
             <TextBlock Text="{Binding RepoName}" FontWeight="SemiBold" Margin="7,0,0,0" VerticalAlignment="Center" />
           </StackPanel>
         </Button>
-        <Button Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4" ToolTip="Model and effort" Click="OnOpenSettings">
+        <Button x:Name="ModelChip" Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4" ToolTip="Change model, effort or mode" Click="OnModelMenu">
           <StackPanel Orientation="Horizontal">
             <TextBlock Style="{StaticResource Icon}" Text="&#xE945;" FontSize="12" Foreground="{StaticResource Accent}" />
             <TextBlock Text="{Binding ModelSummary}" Margin="7,0,0,0" VerticalAlignment="Center" />
@@ -317,37 +381,56 @@
 
     </StackPanel>
 
-    <!-- History tab: saved chats, newest first. Click one to continue it; the bin removes it. -->
+    <!-- History tab: saved chats, newest first. Click one to continue it; the row's buttons rename, export or delete it. -->
     <Grid Grid.Row="1" Visibility="{Binding ShowHistory, Converter={StaticResource BoolToVis}}">
       <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
         <RowDefinition Height="Auto" />
         <RowDefinition Height="*" />
       </Grid.RowDefinitions>
       <DockPanel Margin="14,0,12,6">
         <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Padding="10,3" Content="Delete all" Click="OnDeleteAllSessions"
-                ToolTip="Delete every saved chat" Visibility="{Binding HasSessions, Converter={StaticResource BoolToVis}}" />
+                ToolTip="Delete every chat shown below" Visibility="{Binding HasSessions, Converter={StaticResource BoolToVis}}" />
         <TextBlock Text="Previous chats" FontWeight="SemiBold" VerticalAlignment="Center" />
       </DockPanel>
-      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <DockPanel Grid.Row="1" Margin="12,0,12,8">
+        <CheckBox DockPanel.Dock="Right" Content="This repository only" IsChecked="{Binding ThisRepoOnly}" VerticalAlignment="Center" Margin="10,0,0,0"
+                  Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
+        <Grid>
+          <TextBox x:Name="SessionSearchBox" Style="{StaticResource Field}" Text="{Binding SessionSearch, UpdateSourceTrigger=PropertyChanged, Delay=250}" />
+          <TextBlock Text="Search titles, repositories and messages…" IsHitTestVisible="False" Style="{StaticResource Muted}" Margin="8,5,0,0"
+                     Visibility="{Binding Text, ElementName=SessionSearchBox, Converter={StaticResource EmptyToVis}}" />
+        </Grid>
+      </DockPanel>
+      <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <ItemsControl ItemsSource="{Binding Sessions}" Margin="10,0,10,8">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
               <Border x:Name="Card" Margin="0,0,0,6" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
                       Background="{StaticResource SubtleFill}">
                 <DockPanel>
-                  <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE74D;" Margin="0,0,4,0"
-                          VerticalAlignment="Center" ToolTip="Delete this chat" Click="OnDeleteSession" />
-                  <Button Style="{StaticResource SessionRow}" Click="OnOpenSession" ToolTip="{Binding Tooltip}">
-                    <DockPanel>
-                      <TextBlock DockPanel.Dock="Right" Text="{Binding TimeText}" Style="{StaticResource Muted}" FontSize="11"
-                                 VerticalAlignment="Top" Margin="8,2,0,0" />
-                      <StackPanel>
-                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis"
-                                   Margin="0,2,0,0" />
-                      </StackPanel>
-                    </DockPanel>
-                  </Button>
+                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
+                    <Button Style="{StaticResource IconButton}" Content="&#xE8AC;" ToolTip="Rename" Click="OnRenameSession" />
+                    <Button Style="{StaticResource IconButton}" Content="&#xEDE1;" ToolTip="Export as Markdown" Click="OnExportSession" />
+                    <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="Delete this chat" Click="OnDeleteSession" />
+                  </StackPanel>
+                  <Grid>
+                    <Button Style="{StaticResource SessionRow}" Click="OnOpenSession" ToolTip="{Binding Tooltip}"
+                            Visibility="{Binding IsNotRenaming, Converter={StaticResource BoolToVis}}">
+                      <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding TimeText}" Style="{StaticResource Muted}" FontSize="11"
+                                   VerticalAlignment="Top" Margin="8,2,0,0" />
+                        <StackPanel>
+                          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Muted}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                     Margin="0,2,0,0" />
+                        </StackPanel>
+                      </DockPanel>
+                    </Button>
+                    <TextBox Style="{StaticResource Field}" Margin="8,8,4,8" Text="{Binding EditTitle, UpdateSourceTrigger=PropertyChanged}"
+                             Visibility="{Binding IsRenaming, Converter={StaticResource BoolToVis}}"
+                             IsVisibleChanged="OnRenameBoxVisible" KeyDown="OnRenameKeyDown" LostKeyboardFocus="OnRenameLostFocus" />
+                  </Grid>
                 </DockPanel>
               </Border>
               <DataTemplate.Triggers>
@@ -359,19 +442,14 @@
           </ItemsControl.ItemTemplate>
         </ItemsControl>
       </ScrollViewer>
-      <DockPanel Grid.Row="1" Margin="16,8,16,0" VerticalAlignment="Top">
-        <DockPanel.Style>
-          <Style TargetType="DockPanel">
-            <Style.Triggers>
-              <DataTrigger Binding="{Binding HasSessions}" Value="True">
-                <Setter Property="Visibility" Value="Collapsed" />
-              </DataTrigger>
-            </Style.Triggers>
-          </Style>
-        </DockPanel.Style>
+      <DockPanel Grid.Row="2" Margin="16,8,16,0" VerticalAlignment="Top" Visibility="{Binding NoSavedSessions, Converter={StaticResource BoolToVis}}">
         <TextBlock Style="{StaticResource Icon}" Text="&#xE81C;" FontSize="12" Margin="0,0,8,0" />
         <TextBlock Text="No saved chats yet. Chats are saved automatically once you send a message." Style="{StaticResource Muted}"
                    TextWrapping="Wrap" />
+      </DockPanel>
+      <DockPanel Grid.Row="2" Margin="16,8,16,0" VerticalAlignment="Top" Visibility="{Binding NoSessionMatches, Converter={StaticResource BoolToVis}}">
+        <TextBlock Style="{StaticResource Icon}" Text="&#xE721;" FontSize="12" Margin="0,0,8,0" />
+        <TextBlock Text="No chats match." Style="{StaticResource Muted}" TextWrapping="Wrap" />
       </DockPanel>
     </Grid>
 
@@ -476,12 +554,22 @@
             <ItemsControl ItemsSource="{Binding ApprovalLines}" ItemTemplate="{StaticResource DiffLineTemplate}" />
           </ScrollViewer>
         </Border>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+        <DockPanel Margin="0,10,0,0">
+        <Button DockPanel.Dock="Left" Style="{StaticResource OutlineButton}" Margin="0" Click="OnOpenApprovalDiff"
+                ToolTip="Open the whole file, before and after, in Visual Studio's diff viewer"
+                Visibility="{Binding HasApprovalChange, Converter={StaticResource BoolToVis}}">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE8F1;" FontSize="11" Margin="0,0,6,0" />
+            <TextBlock Text="Open diff" />
+          </StackPanel>
+        </Button>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Button Style="{StaticResource OutlineButton}" Content="Deny" Click="OnDeny" />
           <Button Style="{StaticResource OutlineButton}" Content="{Binding AllowAllLabel}" Click="OnAllowAll"
                   Visibility="{Binding CanAllowAll, Converter={StaticResource BoolToVis}}" />
           <Button Style="{StaticResource PrimaryButton}" Content="Allow" Click="OnAllow" />
         </StackPanel>
+        </DockPanel>
       </StackPanel>
     </Border>
 
@@ -490,8 +578,51 @@
                  Background="Transparent" Foreground="{StaticResource Accent}"
                  Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
 
-    <!-- Composer: Enter sends, Shift+Enter inserts a new line -->
-    <Border Grid.Row="5" Margin="10,4,10,4" CornerRadius="12" BorderThickness="1"
+    <!-- Completions for "/" commands and "@" file mentions, shown just above the composer. -->
+    <Popup x:Name="SuggestionPopup" Grid.Row="5" PlacementTarget="{Binding ElementName=Composer}" Placement="Top"
+           AllowsTransparency="True" StaysOpen="True" Width="{Binding ActualWidth, ElementName=Composer}">
+      <Border Margin="0,0,0,4" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Padding="4"
+              Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}">
+        <ListBox x:Name="SuggestionList" MaxHeight="260" BorderThickness="0" Background="Transparent" Focusable="False"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" PreviewMouseLeftButtonUp="OnSuggestionClicked">
+          <ListBox.ItemContainerStyle>
+            <Style TargetType="ListBoxItem">
+              <Setter Property="Focusable" Value="False" />
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Bd" CornerRadius="5" Padding="8,4" Background="Transparent">
+                      <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+                      </Trigger>
+                      <Trigger Property="IsSelected" Value="True">
+                        <Setter TargetName="Bd" Property="Background" Value="{StaticResource UserBubble}" />
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+            </Style>
+          </ListBox.ItemContainerStyle>
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Right" Text="{Binding Detail}" Style="{StaticResource Muted}" FontSize="11" Margin="12,0,0,0"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="260" />
+                <TextBlock Text="{Binding Display}" FontFamily="{StaticResource MonoFont}" FontSize="12" TextTrimming="CharacterEllipsis" />
+              </DockPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Border>
+    </Popup>
+
+    <!-- Composer: attachment chips, then the prompt. Enter sends, Shift+Enter inserts a new line. Images and files can be pasted or dropped. -->
+    <Border x:Name="Composer" Grid.Row="5" Margin="10,4,10,4" CornerRadius="12" BorderThickness="1" AllowDrop="True"
+            PreviewDragOver="OnComposerDragOver" PreviewDrop="OnComposerDrop"
             Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}">
       <Border.Style>
         <Style TargetType="Border">
@@ -503,13 +634,26 @@
           </Style.Triggers>
         </Style>
       </Border.Style>
-      <Grid Margin="12,8,8,8">
+      <StackPanel Margin="12,8,8,8">
+      <WrapPanel Margin="0,0,0,2" Visibility="{Binding HasAttachments, Converter={StaticResource BoolToVis}}">
+        <ContentControl Content="{Binding ActiveFile}" ContentTemplate="{StaticResource AttachmentChip}"
+                        Visibility="{Binding HasActiveFile, Converter={StaticResource BoolToVis}}" />
+        <ItemsControl ItemsSource="{Binding Attachments}" ItemTemplate="{StaticResource AttachmentChip}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+        </ItemsControl>
+      </WrapPanel>
+      <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
-        <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="200"
+        <TextBox x:Name="PromptBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="40" MaxHeight="200" AllowDrop="True"
                  VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" PreviewKeyDown="OnPromptKeyDown"
+                 TextChanged="OnPromptTextChanged" LostKeyboardFocus="OnPromptLostFocus" SelectionChanged="OnPromptSelectionChanged"
                  Background="Transparent" BorderThickness="0" Padding="0" FontSize="13"
                  Foreground="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}"
                  CaretBrush="{DynamicResource {x:Static vsshell:VsBrushes.WindowTextKey}}">
@@ -519,8 +663,8 @@
             </ControlTemplate>
           </TextBox.Template>
         </TextBox>
-        <TextBlock Text="Ask Claude about this repository…" IsHitTestVisible="False" FontSize="13" Margin="2,0,0,0"
-                   Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}">
+        <TextBlock Text="Ask Claude about this repository… (/ for commands, @ to mention a file)" IsHitTestVisible="False" FontSize="13" Margin="2,0,0,0"
+                   TextTrimming="CharacterEllipsis" Foreground="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}">
           <TextBlock.Style>
             <Style TargetType="TextBlock">
               <Setter Property="Visibility" Value="Collapsed" />
@@ -539,11 +683,13 @@
                   Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
         </Grid>
       </Grid>
+      </StackPanel>
     </Border>
 
     <!-- Footer: status and keyboard hint -->
     <DockPanel Grid.Row="6" Margin="14,0,14,8">
-      <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="11" Text="Enter to send · Shift+Enter for new line" />
+      <TextBlock DockPanel.Dock="Right" Style="{StaticResource Muted}" FontSize="11" Text="Enter to send · Shift+Enter for new line · ↑ for history"
+                 ToolTip="Type / for commands and @ to mention a file. Paste or drop images to attach them." />
       <TextBlock Style="{StaticResource Muted}" FontSize="11" Text="{Binding Status}" TextTrimming="CharacterEllipsis"
                  ToolTip="{Binding Status}" Margin="0,0,12,0" />
     </DockPanel>

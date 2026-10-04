@@ -24,6 +24,11 @@ public sealed class ClaudePackage : AsyncPackage
     public const string PackageGuidString = "4b0f1f5e-7a3c-4d52-9f1e-2c6a8b9d0e41";
     private static readonly Guid CommandSet = new("9e3d2b1a-5c47-4f8e-a6b2-1d0c3e5f7a92");
     private const int ShowClaudeWindowCommandId = 0x0100;
+    private const int AskAboutSelectionCommandId = 0x0101;
+    private const int ExplainCommandId = 0x0102;
+    private const int FixCommandId = 0x0103;
+    private const int WriteTestsCommandId = 0x0104;
+    private const int FixErrorsCommandId = 0x0105;
 
     private IVsSolution? solution;
     private uint solutionEventsCookie;
@@ -34,19 +39,53 @@ public sealed class ClaudePackage : AsyncPackage
     /// </summary>
     internal event EventHandler<string>? SolutionOpened;
 
+    /// <summary>The editor, Error List, diff viewer and main window. Available once the package has initialized.</summary>
+    internal VsIntegration Vs { get; private set; } = null!;
+
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        this.Vs = new VsIntegration(this);
 
         if (await this.GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService commands)
         {
-            commands.AddCommand(new MenuCommand(
-                (_, _) => this.JoinableTaskFactory.RunAsync(() => this.ShowToolWindowAsync(typeof(ClaudeToolWindow), 0, create: true, this.DisposalToken)).Task.FileAndForget("ClaudeForVS/ShowWindow"),
-                new CommandID(CommandSet, ShowClaudeWindowCommandId)));
+            this.AddCommand(commands, ShowClaudeWindowCommandId, null, chat => chat.FocusPrompt());
+
+            // Editor commands read the selection before the chat window takes focus.
+            this.AddCommand(commands, AskAboutSelectionCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, null));
+            this.AddCommand(commands, ExplainCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, "Explain this code."));
+            this.AddCommand(commands, FixCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, "Find and fix any bugs in this code."));
+            this.AddCommand(commands, WriteTestsCommandId, () => this.Vs.GetEditorContext(), (chat, editor) =>
+                chat.AskAbout(editor, "Write unit tests for this code, following the conventions of the existing tests in this repository."));
+            this.AddCommand(commands, FixErrorsCommandId, () => this.Vs.GetErrors(), (chat, errors) => chat.FixErrors(errors));
         }
 
         this.solution = await this.GetServiceAsync(typeof(SVsSolution)) as IVsSolution;
         this.solution?.AdviseSolutionEvents(new SolutionEvents(this), out this.solutionEventsCookie);
+    }
+
+    private void AddCommand(OleMenuCommandService commands, int id, Func<object?>? capture, Action<ClaudeChatControl> run) =>
+        this.AddCommand<object?>(commands, id, capture ?? (() => null), (chat, _) => run(chat));
+
+    /// <summary>Adds a command that captures something (on the UI thread, before anything changes focus), then shows the chat and acts on it.</summary>
+    private void AddCommand<T>(OleMenuCommandService commands, int id, Func<T> capture, Action<ClaudeChatControl, T> run)
+    {
+        commands.AddCommand(new MenuCommand(
+            (_, _) =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                T captured = capture();
+                this.JoinableTaskFactory.RunAsync(async () =>
+                {
+                    ToolWindowPane pane = await this.ShowToolWindowAsync(typeof(ClaudeToolWindow), 0, create: true, this.DisposalToken);
+                    await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
+                    if (pane.Content is ClaudeChatControl chat)
+                    {
+                        run(chat, captured);
+                    }
+                }).Task.FileAndForget("ClaudeForVS/Command");
+            },
+            new CommandID(CommandSet, id)));
     }
 
     protected override void Dispose(bool disposing)

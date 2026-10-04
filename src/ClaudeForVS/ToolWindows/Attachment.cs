@@ -1,0 +1,176 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Windows.Media;
+using ClaudeForVS.Agent;
+using ClaudeForVS.Markdown;
+
+namespace ClaudeForVS.ToolWindows;
+
+internal enum AttachmentKind
+{
+    /// <summary>The document open in the editor and where the caret is; attached automatically.</summary>
+    ActiveFile,
+
+    /// <summary>Code selected in the editor, sent from the editor's context menu.</summary>
+    Selection,
+
+    /// <summary>Rows from the Error List.</summary>
+    Errors,
+
+    Image,
+}
+
+/// <summary>Something attached to the next prompt, shown as a chip above the prompt box.</summary>
+internal sealed class Attachment
+{
+    private const int MaxSelectionChars = 40_000;
+
+    private Attachment(AttachmentKind kind, string label, string toolTip, string context)
+    {
+        this.Kind = kind;
+        this.Label = label;
+        this.ToolTip = toolTip;
+        this.Context = context;
+    }
+
+    public AttachmentKind Kind { get; }
+
+    /// <summary>Chip text, e.g. "Foo.cs:12-30".</summary>
+    public string Label { get; }
+
+    public string ToolTip { get; }
+
+    /// <summary>What's added to the prompt for Claude; empty for images, which are sent as images.</summary>
+    public string Context { get; }
+
+    public PromptImage? Image { get; private init; }
+
+    public ImageSource? Thumbnail { get; private init; }
+
+    public bool HasThumbnail => this.Thumbnail != null;
+
+    /// <summary>Icon glyph (Segoe Fluent Icons) for the chip.</summary>
+    public string Glyph => this.Kind switch
+    {
+        AttachmentKind.Selection => "", // code
+        AttachmentKind.Errors => "", // error
+        AttachmentKind.Image => "", // picture
+        _ => "", // document
+    };
+
+    /// <summary>The editor's document and caret or selection, attached automatically. The selection is included if there is one.</summary>
+    public static Attachment ForActiveFile(EditorContext editor, string repoRoot)
+    {
+        string path = DisplayPath(editor.FullPath, repoRoot);
+        string lines = LineRange(editor);
+        var context = new StringBuilder();
+        if (editor.HasSelection)
+        {
+            context.Append($"The user has lines {editor.StartLine}-{editor.EndLine} of `{path}` selected in the editor:\n");
+            context.Append(Fence(editor.SelectedText, editor.FullPath));
+        }
+        else
+        {
+            context.Append($"The user has `{path}` open in the editor, with the cursor on line {editor.StartLine}.");
+        }
+
+        return new Attachment(
+            AttachmentKind.ActiveFile,
+            $"{Path.GetFileName(editor.FullPath)}{(editor.HasSelection ? ":" + lines : string.Empty)}",
+            $"{path}{(editor.HasSelection ? $" (lines {lines} selected)" : $" (line {editor.StartLine})")}\nThe open file is sent with your message. Click × to leave it out.",
+            context.ToString());
+    }
+
+    /// <summary>A selection sent from the editor's context menu.</summary>
+    public static Attachment ForSelection(EditorContext editor, string repoRoot)
+    {
+        string path = DisplayPath(editor.FullPath, repoRoot);
+        string lines = LineRange(editor);
+        string context = $"Lines {lines} of `{path}`:\n" + Fence(editor.SelectedText, editor.FullPath);
+        return new Attachment(AttachmentKind.Selection, $"{Path.GetFileName(editor.FullPath)}:{lines}", $"{path}, lines {lines}", context);
+    }
+
+    /// <summary>Rows from the Error List.</summary>
+    public static Attachment ForErrors(IReadOnlyList<ErrorListItem> errors, string repoRoot)
+    {
+        var context = new StringBuilder("Errors from Visual Studio's Error List:\n");
+        foreach (ErrorListItem error in errors)
+        {
+            string where = error.File is null ? string.Empty : $"{DisplayPath(error.File, repoRoot)}{(error.Line > 0 ? $":{error.Line}" : string.Empty)}: ";
+            string code = error.Code.Length > 0 ? $"{error.Code} " : string.Empty;
+            string project = string.IsNullOrEmpty(error.Project) ? string.Empty : $" [{error.Project}]";
+            context.Append($"- {where}{error.Severity} {code}{error.Description}{project}\n");
+        }
+
+        int errorCount = errors.Count(e => e.Severity == "error");
+        string label = errorCount == errors.Count
+            ? $"{errors.Count} {(errors.Count == 1 ? "error" : "errors")}"
+            : $"{errors.Count} Error List {(errors.Count == 1 ? "item" : "items")}";
+        string tip = string.Join("\n", errors.Take(8).Select(e => $"{e.Code} {e.Description}".Trim())) + (errors.Count > 8 ? $"\n… and {errors.Count - 8} more" : string.Empty);
+        return new Attachment(AttachmentKind.Errors, label, tip, context.ToString().TrimEnd());
+    }
+
+    public static Attachment ForImage(PromptImage image, ImageSource? thumbnail, string name) =>
+        new(AttachmentKind.Image, name, $"{name} · {image.Data.Length / 1024:N0} KB", string.Empty) { Image = image, Thumbnail = thumbnail };
+
+    /// <summary>
+    /// Builds what's sent to Claude for a prompt: the user's text followed by the attached context, plus any images,
+    /// and the note shown under the prompt in the transcript.
+    /// </summary>
+    public static (ChatPrompt Prompt, string Note) Compose(string text, IReadOnlyList<Attachment> attachments)
+    {
+        var full = new StringBuilder(text);
+        List<Attachment> withContext = attachments.Where(a => a.Context.Length > 0).ToList();
+        if (withContext.Count > 0)
+        {
+            full.Append("\n\n<context from Visual Studio>\n");
+            full.Append(string.Join("\n\n", withContext.Select(a => a.Context)));
+            full.Append("\n</context from Visual Studio>");
+        }
+
+        List<PromptImage> images = attachments.Where(a => a.Image != null).Select(a => a.Image!).ToList();
+        int imageCount = images.Count;
+        IEnumerable<string> notes = attachments.Where(a => a.Kind != AttachmentKind.Image).Select(a => a.Label);
+        if (imageCount > 0)
+        {
+            notes = notes.Append(imageCount == 1 ? "1 image" : $"{imageCount} images");
+        }
+
+        return (new ChatPrompt(full.ToString(), images), string.Join(" · ", notes));
+    }
+
+    private static string LineRange(EditorContext editor) =>
+        editor.EndLine > editor.StartLine ? $"{editor.StartLine}-{editor.EndLine}" : editor.StartLine.ToString();
+
+    /// <summary>Repository-relative path with forward slashes, or the full path for files outside the repository.</summary>
+    internal static string DisplayPath(string fullPath, string repoRoot)
+    {
+        string root = repoRoot.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        return root.Length > 1 && fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            ? fullPath.Substring(root.Length).Replace('\\', '/')
+            : fullPath;
+    }
+
+    private static string Fence(string code, string path)
+    {
+        if (code.Length > MaxSelectionChars)
+        {
+            code = code.Substring(0, MaxSelectionChars) + "\n… (selection truncated)";
+        }
+
+        // A fence longer than any run of backticks in the code can't be closed early by it.
+        int longest = 0;
+        int run = 0;
+        foreach (char c in code)
+        {
+            run = c == '`' ? run + 1 : 0;
+            longest = Math.Max(longest, run);
+        }
+
+        string fence = new('`', Math.Max(3, longest + 1));
+        return $"{fence}{SyntaxHighlighter.FenceLanguageForFile(path)}\n{code.TrimEnd('\r', '\n')}\n{fence}";
+    }
+}

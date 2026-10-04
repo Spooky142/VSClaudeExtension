@@ -9,7 +9,10 @@ internal enum Approval
     Deny,
     Allow,
 
-    /// <summary>Allow this and every later request of the same kind in this conversation.</summary>
+    /// <summary>
+    /// Allow this and every later request of the same kind: for edits, every edit in this conversation; for
+    /// commands, that command in this repository from now on.
+    /// </summary>
     AllowAll,
 }
 
@@ -53,7 +56,8 @@ internal interface IChatSink
     void AppendThinking(string text);
 
     /// <summary>Shows a completed tool call and its (possibly truncated) output.</summary>
-    void ToolActivity(ActivityKind kind, string title, string detail);
+    /// <param name="change">For file edits, the whole file before and after, so it can be opened in a diff viewer.</param>
+    void ToolActivity(ActivityKind kind, string title, string detail, FileChange? change = null);
 
     void SetStatus(string? status);
 
@@ -79,16 +83,17 @@ internal interface IChatSink
     /// <summary>A plan usage window reported by Claude Code (Claude Code engine).</summary>
     void ReportPlanLimit(PlanLimit limit);
 
-    /// <summary>Asks the user to allow an action that changes the repository.</summary>
-    /// <param name="kind">Git for git commands; Edit or Create for file changes (controls the preview's diff colouring).</param>
-    /// <param name="title">One-line summary, e.g. the git command line or "Edit src/Foo.cs".</param>
-    /// <param name="detail">Optional longer preview, e.g. a diff.</param>
-    /// <param name="allowAllLabel">If not null, offers a third button that approves all similar requests.</param>
     /// <summary>
     /// Shows Claude's multiple-choice questions. Returns each question's answer keyed by question text
     /// (selected labels joined with ", ", or the user's own text), or null if the user skipped them.
     /// </summary>
     Task<IReadOnlyDictionary<string, string>?> AskQuestionsAsync(IReadOnlyList<UserQuestion> questions, CancellationToken cancellationToken);
 
-    Task<Approval> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken);
+    /// <summary>Asks the user to allow an action that changes the repository.</summary>
+    /// <param name="kind">Git for git commands; Edit or Create for file changes (controls the preview's diff colouring).</param>
+    /// <param name="title">One-line summary, e.g. the git command line or "Edit src/Foo.cs".</param>
+    /// <param name="detail">Optional longer preview, e.g. a diff.</param>
+    /// <param name="allowAllLabel">If not null, offers a third button that approves all similar requests.</param>
+    /// <param name="change">For file edits, the whole file before and after, so it can be opened in a diff viewer.</param>
+    Task<Approval> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null);
 }

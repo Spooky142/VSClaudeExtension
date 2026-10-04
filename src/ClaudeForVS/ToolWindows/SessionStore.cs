@@ -29,6 +29,12 @@ internal sealed record SessionInfo
 
     /// <summary>The Claude Code session to <c>--resume</c>; null for chats that ran on the Claude API.</summary>
     public string? ClaudeCodeSessionId { get; init; }
+
+    /// <summary>The latest message in the Claude Code session, so prompts can still be edited after reopening.</summary>
+    public string? ClaudeCodeLastMessageId { get; init; }
+
+    /// <summary>A rewind (a Claude Code checkpoint) still to be carried out by the next message.</summary>
+    public string? ClaudeCodeResumeAt { get; init; }
 }
 
 /// <summary>One transcript entry as saved to disk.</summary>
@@ -43,6 +49,15 @@ internal sealed record SavedEntry
     public string Detail { get; init; } = string.Empty;
 
     public ActivityKind Activity { get; init; }
+
+    // User prompts only; see the matching ChatEntry properties.
+    public string? Note { get; init; }
+
+    public string? Checkpoint { get; init; }
+
+    public string? SnapshotBefore { get; init; }
+
+    public string? SnapshotAfter { get; init; }
 }
 
 /// <summary>
@@ -63,7 +78,28 @@ internal static class SessionStore
     {
         Directory.CreateDirectory(Folder);
         File.WriteAllText(ChatPath(info.Id), JsonSerializer.Serialize(entries, JsonOptions));
-        File.WriteAllText(MetaPath(info.Id), JsonSerializer.Serialize(info, JsonOptions)); // last: the list only shows chats that are complete
+        SaveInfo(info); // last: the list only shows chats that are complete
+    }
+
+    /// <summary>Rewrites only a chat's summary, e.g. after renaming it.</summary>
+    public static void SaveInfo(SessionInfo info)
+    {
+        Directory.CreateDirectory(Folder);
+        File.WriteAllText(MetaPath(info.Id), JsonSerializer.Serialize(info, JsonOptions));
+    }
+
+    /// <summary>True if the chat's saved transcript contains the text (case-insensitive).</summary>
+    public static bool TranscriptContains(string id, string text)
+    {
+        try
+        {
+            return LoadEntries(id) is { } entries
+                && entries.Any(e => e.Text.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Every saved chat, most recently used first. Unreadable files are skipped.</summary>
@@ -131,19 +167,49 @@ internal static class SessionStore
 }
 
 /// <summary>One row in the History tab.</summary>
-internal sealed class SessionItem
+internal sealed class SessionItem : System.ComponentModel.INotifyPropertyChanged
 {
+    private bool isRenaming;
+    private string editTitle = string.Empty;
+
     public SessionItem(SessionInfo info, bool isCurrent)
     {
         this.Info = info;
         this.IsCurrent = isCurrent;
     }
 
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
     public SessionInfo Info { get; }
 
     public bool IsCurrent { get; }
 
     public string Title => this.Info.Title;
+
+    /// <summary>True while the title is being edited in place.</summary>
+    public bool IsRenaming
+    {
+        get => this.isRenaming;
+        set
+        {
+            this.isRenaming = value;
+            this.PropertyChanged?.Invoke(this, new(nameof(this.IsRenaming)));
+            this.PropertyChanged?.Invoke(this, new(nameof(this.IsNotRenaming)));
+        }
+    }
+
+    public bool IsNotRenaming => !this.isRenaming;
+
+    /// <summary>The title being typed while renaming.</summary>
+    public string EditTitle
+    {
+        get => this.editTitle;
+        set
+        {
+            this.editTitle = value;
+            this.PropertyChanged?.Invoke(this, new(nameof(this.EditTitle)));
+        }
+    }
 
     public string Subtitle =>
         $"{Path.GetFileName(this.Info.RepoPath.TrimEnd('\\', '/'))} · {AgentSettings.ModelName(this.Info.Model)}"

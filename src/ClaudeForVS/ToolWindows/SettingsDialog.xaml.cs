@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -48,6 +49,7 @@ public partial class SettingsDialog : DialogWindow
         (settings.Mode switch { AgentMode.Auto => this.ModeAuto, AgentMode.Plan => this.ModePlan, _ => this.ModeCoding }).IsChecked = true;
         this.RepoBox.Text = repoPath;
         this.UpdateRepoHint();
+        this.UpdateAllowedCommands();
         this.ApiKeyHint.Text = hasApiKey
             ? "✓ A key is saved. Leave this empty to keep it, or enter a new one to replace it."
             : "Get a key at console.anthropic.com. It's stored encrypted for your Windows account.";
@@ -261,7 +263,38 @@ public partial class SettingsDialog : DialogWindow
         }
     }
 
-    private void OnRepoChanged(object sender, TextChangedEventArgs e) => this.UpdateRepoHint();
+    private void OnRepoChanged(object sender, TextChangedEventArgs e)
+    {
+        this.UpdateRepoHint();
+        this.UpdateAllowedCommands();
+    }
+
+    /// <summary>Lists the commands remembered with "Always allow" for the repository in the box.</summary>
+    private void UpdateAllowedCommands()
+    {
+        if (this.AllowedCommandsList is null || this.AllowedCommandsHint is null)
+        {
+            return;
+        }
+
+        string? root = Git.GitRunner.FindRepoRoot(this.RepoBox.Text.Trim());
+        IReadOnlyList<string> rules = root is null ? [] : CommandRules.List(root);
+        this.AllowedCommandsList.ItemsSource = rules;
+        this.AllowedCommandsHint.Text = root is null
+            ? "Choose a repository to see the commands allowed in it."
+            : rules.Count == 0
+                ? "None yet. Choose \"Always allow\" when approving a command to run it here without asking."
+                : "These run in this repository without asking, with any arguments. Remove one to be asked again.";
+    }
+
+    private void OnRemoveAllowedCommand(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is string rule && Git.GitRunner.FindRepoRoot(this.RepoBox.Text.Trim()) is string root)
+        {
+            CommandRules.Remove(root, rule);
+            this.UpdateAllowedCommands();
+        }
+    }
 
     /// <summary>The open solution's repository root, if a solution is open and inside a git repository.</summary>
     private string? SolutionRepoRoot() => Git.GitRunner.FindRepoRoot(this.getSolutionDirectory());

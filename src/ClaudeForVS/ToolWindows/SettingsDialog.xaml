@@ -147,6 +147,24 @@
       <TextBlock x:Name="RepoHint" Style="{StaticResource CardNote}" Margin="0" />
     </DockPanel>
 
+    <!-- Commands remembered with "Always allow" on the approval card, for the repository above -->
+    <TextBlock Style="{StaticResource SectionTitle}" Text="Always-allowed commands" />
+    <ItemsControl x:Name="AllowedCommandsList">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate>
+          <Border Margin="0,0,0,4" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+                  Background="{StaticResource SubtleFill}" Padding="10,3,3,3">
+            <DockPanel>
+              <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE74D;" Width="24" Height="24"
+                      ToolTip="Ask again before running this" Click="OnRemoveAllowedCommand" />
+              <TextBlock Text="{Binding}" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    <TextBlock x:Name="AllowedCommandsHint" Style="{StaticResource CardNote}" Margin="2,2,0,0" />
+
     <!-- API key (Claude API engine only) -->
     <StackPanel x:Name="ApiKeySection">
       <TextBlock Style="{StaticResource SectionTitle}" Text="Anthropic API key" />

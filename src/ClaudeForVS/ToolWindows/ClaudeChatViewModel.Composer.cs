@@ -1,0 +1,328 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
+using System.Threading.Tasks;
+using ClaudeForVS.Agent;
+using ClaudeForVS.Git;
+
+namespace ClaudeForVS.ToolWindows;
+
+/// <summary>The prompt box: attachments, @file and /command completion, sending, and slash commands.</summary>
+internal sealed partial class ClaudeChatViewModel
+{
+    private readonly RepoFileIndex repoFiles = new();
+
+    private Attachment? activeFile;
+
+    // The editor document behind the active-file chip, and one the user dismissed (left out until another file is opened).
+    private string? editorPath;
+    private string? dismissedEditorPath;
+
+    // True when the file was left out only because its selection was attached, which lasts for one message.
+    private bool dismissedForSelection;
+
+    /// <summary>Things attached to the next prompt by hand: selections, errors, images.</summary>
+    public ObservableCollection<Attachment> Attachments { get; } = [];
+
+    /// <summary>The editor's document and caret, sent with the next prompt unless dismissed.</summary>
+    public Attachment? ActiveFile
+    {
+        get => this.activeFile;
+        private set
+        {
+            this.Set(ref this.activeFile, value);
+            this.OnPropertyChanged(nameof(this.HasActiveFile));
+            this.OnPropertyChanged(nameof(this.HasAttachments));
+        }
+    }
+
+    public bool HasActiveFile => this.activeFile != null;
+
+    public bool HasAttachments => this.activeFile != null || this.Attachments.Count > 0;
+
+    /// <summary>Updates the active-file chip from the editor.</summary>
+    public void SetEditor(EditorContext? editor)
+    {
+        this.editorPath = editor?.FullPath;
+        if (editor is null)
+        {
+            this.ActiveFile = null;
+            return;
+        }
+
+        if (this.dismissedEditorPath != null)
+        {
+            if (string.Equals(this.dismissedEditorPath, editor.FullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                this.ActiveFile = null;
+                return;
+            }
+
+            this.dismissedEditorPath = null; // another file is open, so the dismissal has served its purpose
+            this.dismissedForSelection = false;
+        }
+
+        this.ActiveFile = Attachment.ForActiveFile(editor, this.RepoRoot ?? this.RepoPath);
+    }
+
+    public void AddAttachment(Attachment attachment)
+    {
+        this.Attachments.Add(attachment);
+        this.ShowHistory = false;
+    }
+
+    /// <summary>Attaches a selection from the editor, leaving that file out of the automatic active-file context.</summary>
+    public void AddSelection(EditorContext editor)
+    {
+        this.dismissedEditorPath = editor.FullPath;
+        this.dismissedForSelection = true;
+        this.ActiveFile = null;
+        this.AddAttachment(Attachment.ForSelection(editor, this.RepoRoot ?? this.RepoPath));
+    }
+
+    public void RemoveAttachment(Attachment attachment)
+    {
+        if (attachment.Kind == AttachmentKind.ActiveFile)
+        {
+            this.dismissedEditorPath = this.editorPath;
+            this.dismissedForSelection = false;
+            this.ActiveFile = null;
+        }
+        else
+        {
+            this.Attachments.Remove(attachment);
+        }
+    }
+
+    /// <summary>
+    /// Completions for the word being typed at <paramref name="caret"/>: commands at the start of the prompt, or
+    /// repository files after "@". <paramref name="start"/> is where the text they replace begins.
+    /// </summary>
+    public IReadOnlyList<Suggestion> GetSuggestions(string text, int caret, out int start)
+    {
+        start = 0;
+        caret = Math.Max(0, Math.Min(caret, text.Length));
+        string before = text.Substring(0, caret);
+
+        if (before.StartsWith("/") && !before.Contains('\n') && before.Count(c => c == ' ') <= 1)
+        {
+            return SlashCommands.Suggest(before);
+        }
+
+        int at = caret - 1;
+        while (at >= 0 && !char.IsWhiteSpace(text[at]) && text[at] != '@')
+        {
+            at--;
+        }
+
+        if (at < 0 || text[at] != '@' || (at > 0 && !char.IsWhiteSpace(text[at - 1])) || this.RepoRoot is not string root)
+        {
+            return [];
+        }
+
+        start = at;
+        string query = text.Substring(at + 1, caret - at - 1);
+        return RepoFileIndex.Match(this.repoFiles.Get(root), query, 12)
+            .Select(f => new Suggestion(f, string.Empty, "@" + f + " "))
+            .ToList();
+    }
+
+    /// <summary>Starts loading the repository's file list, so the first "@" has something to show.</summary>
+    public void WarmFileIndex()
+    {
+        if (this.RepoRoot is string root)
+        {
+            this.repoFiles.Get(root);
+        }
+    }
+
+    /// <summary>Looks a repository file up by name or path, for links in replies. Uses the cached file list.</summary>
+    public string? FindRepoFile(string path)
+    {
+        if (this.RepoRoot is not string root)
+        {
+            return null;
+        }
+
+        string normalized = path.Replace('\\', '/').TrimStart('.', '/');
+        IReadOnlyList<string> files = this.repoFiles.Get(root);
+        if (normalized.Contains('/'))
+        {
+            string? match = files.FirstOrDefault(f => f.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                ?? files.FirstOrDefault(f => f.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase));
+            return match is null ? null : System.IO.Path.Combine(root, match.Replace('/', System.IO.Path.DirectorySeparatorChar));
+        }
+
+        // A bare file name links only when exactly one file in the repository has it.
+        List<string> named = files.Where(f => f.Equals(normalized, StringComparison.OrdinalIgnoreCase) || f.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase)).Take(2).ToList();
+        return named.Count == 1 ? System.IO.Path.Combine(root, named[0].Replace('/', System.IO.Path.DirectorySeparatorChar)) : null;
+    }
+
+    /// <summary>Sends a prompt (or runs a command). Returns false (and leaves the prompt box alone) if it couldn't be sent.</summary>
+    public bool TrySend(string text, out Task run)
+    {
+        run = Task.CompletedTask;
+        text = text.Trim();
+        if (text.Length == 0 || this.IsBusy)
+        {
+            return false;
+        }
+
+        if (SlashCommands.Parse(text) is SlashCommand command)
+        {
+            bool handled = this.RunCommand(command, out run);
+            if (handled)
+            {
+                this.History.Add(text);
+            }
+
+            return handled;
+        }
+
+        var attachments = new List<Attachment>();
+        if (this.activeFile != null)
+        {
+            attachments.Add(this.activeFile);
+        }
+
+        attachments.AddRange(this.Attachments);
+        (ChatPrompt prompt, string note) = Attachment.Compose(text, attachments);
+        if (!this.TrySendPrompt(text, prompt, note, out run))
+        {
+            return false;
+        }
+
+        this.Attachments.Clear();
+        this.History.Add(text);
+        if (this.dismissedForSelection)
+        {
+            this.dismissedEditorPath = null; // the file comes back automatically from the next message
+            this.dismissedForSelection = false;
+        }
+
+        return true;
+    }
+
+    private bool TrySendPrompt(string displayText, ChatPrompt prompt, string note, out Task run)
+    {
+        run = Task.CompletedTask;
+        if (!this.TryGetEngine(out IChatEngine runEngine))
+        {
+            return false;
+        }
+
+        var entry = new ChatEntry(ChatEntryKind.User, "You", displayText)
+        {
+            Note = note,
+            SentPrompt = prompt,
+            Checkpoint = runEngine.Checkpoint,
+        };
+        this.Messages.Add(entry);
+        this.ShowHistory = false;
+        this.PromptSent?.Invoke(this, EventArgs.Empty);
+        this.SaveChat();
+        run = this.RunAsync(runEngine, ct => runEngine.SendAsync(prompt, this, ct), entry);
+        return true;
+    }
+
+    private bool RunCommand(SlashCommand command, out Task run)
+    {
+        run = Task.CompletedTask;
+        switch (command.Name)
+        {
+            case "/help":
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Assistant, "Claude", SlashCommands.HelpText()));
+                this.PromptSent?.Invoke(this, EventArgs.Empty);
+                return true;
+
+            case "/clear":
+                this.NewChat();
+                return true;
+
+            case "/history":
+                this.ShowHistory = true;
+                return true;
+
+            case "/export":
+                this.ExportCurrentChat();
+                return true;
+
+            case "/compact":
+                if (!this.TryGetEngine(out IChatEngine compactEngine))
+                {
+                    return false;
+                }
+
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, "Compacting the conversation…"));
+                this.PromptSent?.Invoke(this, EventArgs.Empty);
+                run = this.RunAsync(compactEngine, ct => compactEngine.CompactAsync(this, ct), null);
+                return true;
+
+            case "/retry":
+                if (this.Messages.LastOrDefault(m => m.Kind == ChatEntryKind.User) is not ChatEntry retry)
+                {
+                    this.Status = "There's no message to retry.";
+                    return false;
+                }
+
+                run = this.RetryAsync(retry);
+                return true;
+
+            case "/undo":
+                if (this.Messages.LastOrDefault(m => m.CanUndo) is not ChatEntry undo)
+                {
+                    this.Status = "There are no file changes to undo.";
+                    return false;
+                }
+
+                run = this.UndoAsync(undo);
+                return true;
+
+            case "/model":
+                return this.SetFromCommand(command, v => v switch
+                {
+                    "opus" => (ClaudeModel?)ClaudeModel.Opus,
+                    "sonnet" => ClaudeModel.Sonnet,
+                    "haiku" => ClaudeModel.Haiku,
+                    _ => null,
+                }, m => this.QuickSet(model: m));
+
+            case "/effort":
+                return this.SetFromCommand(command, v => v switch
+                {
+                    "low" => (EffortLevel?)EffortLevel.Low,
+                    "medium" => EffortLevel.Medium,
+                    "high" => EffortLevel.High,
+                    "xhigh" => EffortLevel.XHigh,
+                    "max" => EffortLevel.Max,
+                    _ => null,
+                }, e => this.QuickSet(effort: e));
+
+            case "/mode":
+                return this.SetFromCommand(command, v => v switch
+                {
+                    "auto" => (AgentMode?)AgentMode.Auto,
+                    "plan" => AgentMode.Plan,
+                    "coding" => AgentMode.Coding,
+                    _ => null,
+                }, m => this.QuickSet(mode: m));
+
+            default:
+                return false;
+        }
+    }
+
+    private bool SetFromCommand<T>(SlashCommand command, Func<string, T?> parse, Action<T> apply)
+        where T : struct
+    {
+        if (parse(command.Argument) is not T value)
+        {
+            this.Status = "Usage: " + SlashCommands.All.First(c => c.Name == command.Name).Usage;
+            return false;
+        }
+
+        apply(value);
+        return true;
+    }
+}
