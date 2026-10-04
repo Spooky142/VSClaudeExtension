@@ -19,8 +19,17 @@ internal static class ShellRunner
     // (e.g. MSBuild nodes) can hold the pipes open indefinitely.
     private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(2);
 
-    /// <summary>Runs the command and returns its exit code (null if it timed out) and combined stdout and stderr.</summary>
-    public static async Task<(int? ExitCode, string Output)> RunAsync(string workingDirectory, string command, TimeSpan timeout, CancellationToken cancellationToken)
+    /// <summary>Runs the command and returns its exit code (null if it timed out or was stopped) and combined stdout and stderr.</summary>
+    /// <param name="cancellationToken">Cancels the whole run, throwing <see cref="OperationCanceledException"/>.</param>
+    /// <param name="stopToken">Stops just this command; it then returns like a timeout, with the output so far.</param>
+    /// <param name="onOutput">Called with each line of output as it arrives, on a background thread.</param>
+    public static async Task<(int? ExitCode, string Output)> RunAsync(
+        string workingDirectory,
+        string command,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        CancellationToken stopToken = default,
+        Action<string>? onOutput = null)
     {
         // UTF-8 for PowerShell's own output and, through the console code page, for the programs it runs. Progress
         // bars would otherwise arrive on stderr as CLIXML. The suffix turns a failing last command into a non-zero exit.
@@ -61,6 +70,7 @@ internal static class ShellRunner
             else
             {
                 output.AppendLine(e.Data);
+                onOutput?.Invoke(e.Data);
             }
         };
         process.ErrorDataReceived += (_, e) =>
@@ -72,6 +82,7 @@ internal static class ShellRunner
             else
             {
                 output.AppendLine(e.Data);
+                onOutput?.Invoke(e.Data);
             }
         };
         process.Exited += (_, _) => exited.TrySetResult(true);
@@ -90,7 +101,7 @@ internal static class ShellRunner
         process.BeginErrorReadLine();
 
         using var timeoutCts = new CancellationTokenSource(timeout);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token, stopToken);
         var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         using (linked.Token.Register(() => stopped.TrySetResult(true)))
         {

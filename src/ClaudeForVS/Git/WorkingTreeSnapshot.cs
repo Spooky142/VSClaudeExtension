@@ -27,12 +27,20 @@ internal sealed record FileStat(char Status, string Path, int Added, int Removed
 /// </summary>
 internal static class WorkingTreeSnapshot
 {
+    /// <summary>
+    /// Untracked files bigger than this (often build output or downloads that aren't git-ignored) are left out of
+    /// snapshots, rather than copied into the repository's object database before every prompt. Changes to them
+    /// aren't listed or undone.
+    /// </summary>
+    internal const long MaxUntrackedFileBytes = 5 * 1024 * 1024;
+
     /// <summary>Returns the snapshot's tree hash, or null if git couldn't make one.</summary>
     public static async Task<string?> CaptureAsync(string repoRoot, CancellationToken cancellationToken)
     {
         // Stage everything into a throwaway copy of the index. Starting from the real index lets git skip
         // re-hashing files whose timestamps haven't changed.
         string tempIndex = Path.Combine(Path.GetTempPath(), "ClaudeForVS", $"index-{Guid.NewGuid():N}");
+        string pathspecFile = tempIndex + ".pathspec";
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(tempIndex)!);
@@ -44,7 +52,16 @@ internal static class WorkingTreeSnapshot
             }
 
             var env = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = tempIndex };
-            (code, _) = await GitRunner.RunAsync(repoRoot, ["add", "-A", "--", "."], cancellationToken, env, includeStderr: false).ConfigureAwait(false);
+            List<string> excluded = await LargeUntrackedFilesAsync(repoRoot, env, cancellationToken).ConfigureAwait(false);
+            List<string> addArgs = ["add", "-A", "--", "."];
+            if (excluded.Count > 0)
+            {
+                // Through a file, since there could be too many to fit on a command line.
+                File.WriteAllText(pathspecFile, string.Join("\0", new[] { "." }.Concat(excluded.Select(p => ":(exclude,literal)" + p))));
+                addArgs = ["add", "-A", $"--pathspec-from-file={pathspecFile}", "--pathspec-file-nul"];
+            }
+
+            (code, _) = await GitRunner.RunAsync(repoRoot, addArgs, cancellationToken, env, includeStderr: false).ConfigureAwait(false);
             if (code != 0)
             {
                 return null;
@@ -60,14 +77,46 @@ internal static class WorkingTreeSnapshot
         }
         finally
         {
-            try
+            foreach (string temp in new[] { tempIndex, pathspecFile })
             {
-                File.Delete(tempIndex);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
+                try
+                {
+                    File.Delete(temp);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
             }
         }
+    }
+
+    /// <summary>Untracked, not ignored files over <see cref="MaxUntrackedFileBytes"/>, as repository-relative paths.</summary>
+    private static async Task<List<string>> LargeUntrackedFilesAsync(string repoRoot, IReadOnlyDictionary<string, string> env, CancellationToken cancellationToken)
+    {
+        (int code, string output) = await GitRunner.RunAsync(
+            repoRoot, ["ls-files", "--others", "--exclude-standard", "-z"], cancellationToken, env, includeStderr: false).ConfigureAwait(false);
+        var large = new List<string>();
+        if (code != 0)
+        {
+            return large;
+        }
+
+        foreach (string path in output.Split(['\0'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                if (new FileInfo(Path.Combine(repoRoot, path.Replace('/', Path.DirectorySeparatorChar))).Length > MaxUntrackedFileBytes)
+                {
+                    large.Add(path);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                // Gone already, or a name Windows can't open; git will deal with it.
+            }
+        }
+
+        return large;
     }
 
     /// <summary>Files that differ between two snapshots.</summary>

@@ -357,6 +357,8 @@ public partial class ClaudeChatControl : UserControl
         }
     }
 
+    private void OnStopEntry(object sender, RoutedEventArgs e) => ContextOf<ChatEntry>(sender)?.RequestStop();
+
     private void OnOpenChangedFile(object sender, RoutedEventArgs e)
     {
         if (ContextOf<ChangedFileRow>(sender) is not ChangedFileRow row)

@@ -118,8 +118,7 @@ internal sealed class PromptHistory
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(this.file)!);
-            File.WriteAllText(this.file, JsonSerializer.Serialize(this.entries));
+            AtomicFile.WriteAllText(this.file,JsonSerializer.Serialize(this.entries));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

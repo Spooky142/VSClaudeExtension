@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClaudeForVS.Agent;
@@ -83,5 +84,59 @@ public class ShellRunnerTests
     {
         (int? code, _) = await ShellRunner.RunAsync(Temp, "Start-Sleep -Seconds 30", TimeSpan.FromSeconds(2), CancellationToken.None);
         Assert.Null(code);
+    }
+
+    [Fact]
+    public async Task StoppingReturnsTheOutputSoFarAndReportsLinesAsTheyArrive()
+    {
+        using var stop = new CancellationTokenSource();
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        (int? code, string output) = await ShellRunner.RunAsync(
+            Temp,
+            "Write-Output started; Start-Sleep -Seconds 30",
+            TimeSpan.FromSeconds(60),
+            CancellationToken.None,
+            stop.Token,
+            line =>
+            {
+                seen.Enqueue(line);
+                stop.Cancel(); // stop as soon as the first line shows
+            });
+
+        Assert.Null(code);
+        Assert.Equal("started", output);
+        Assert.Contains("started", seen);
+    }
+}
+
+public class UnifiedDiffTests
+{
+    [Fact]
+    public void ShowsAHunkWithContextAroundTheChange()
+    {
+        string before = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+        string after = "1\n2\n3\n4\n5\nsix\n7\n8\n9\n10\n";
+        Assert.Equal(
+            "@@ -3,7 +3,7 @@\n  3\n  4\n  5\n- 6\n+ six\n  7\n  8\n  9",
+            UnifiedDiff.Create(before, after));
+    }
+
+    [Fact]
+    public void FarApartChangesGetTheirOwnHunks()
+    {
+        string before = string.Join("\n", Enumerable.Range(1, 30));
+        string after = before.Replace("\n2\n", "\ntwo\n").Replace("\n28\n", "\n28\nnew\n");
+        string diff = UnifiedDiff.Create(before, after);
+        Assert.Equal(2, diff.Split('\n').Count(l => l.StartsWith("@@")));
+        Assert.Contains("- 2\n+ two", diff);
+        Assert.Contains("@@ -26,5 +26,6 @@", diff);
+        Assert.Contains("+ new", diff);
+    }
+
+    [Fact]
+    public void LineEndingsDontCountAsChanges()
+    {
+        Assert.Equal("(no changes)", UnifiedDiff.Create("a\r\nb\r\n", "a\nb\n"));
+        Assert.Equal("@@ -0,0 +1,1 @@\n+ new", UnifiedDiff.Create(string.Empty, "new"));
     }
 }

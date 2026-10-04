@@ -77,27 +77,49 @@ internal sealed class RepoFiles
             throw new ToolInputException($"File not found: {relativePath}");
         }
 
-        byte[] bytes = File.ReadAllBytes(full);
+        (string text, Encoding encoding) = Decode(File.ReadAllBytes(full), relativePath);
+        return new TextFile(full, text, encoding, text.Contains("\r\n") ? "\r\n" : "\n");
+    }
+
+    /// <summary>
+    /// Decodes a text file, returning the encoding to write it back with. A BOM decides the encoding (UTF-16 files
+    /// are full of zero bytes, so this comes before the binary check). Without one, valid UTF-8 is read as UTF-8
+    /// without a BOM, and anything else as the system's ANSI code page (e.g. Windows-1252), so non-ASCII characters
+    /// survive an edit rather than being replaced with U+FFFD.
+    /// </summary>
+    internal static (string Text, Encoding Encoding) Decode(byte[] bytes, string displayPath)
+    {
+        Encoding? withBom =
+            StartsWith(bytes, 0xFF, 0xFE, 0x00, 0x00) ? new UTF32Encoding(bigEndian: false, byteOrderMark: true)
+            : StartsWith(bytes, 0x00, 0x00, 0xFE, 0xFF) ? new UTF32Encoding(bigEndian: true, byteOrderMark: true)
+            : StartsWith(bytes, 0xEF, 0xBB, 0xBF) ? new UTF8Encoding(encoderShouldEmitUTF8Identifier: true)
+            : StartsWith(bytes, 0xFF, 0xFE) ? new UnicodeEncoding(bigEndian: false, byteOrderMark: true)
+            : StartsWith(bytes, 0xFE, 0xFF) ? new UnicodeEncoding(bigEndian: true, byteOrderMark: true)
+            : null;
+        if (withBom != null)
+        {
+            int bom = withBom.GetPreamble().Length;
+            return (withBom.GetString(bytes, bom, bytes.Length - bom), withBom);
+        }
+
         if (bytes.Take(8000).Contains((byte)0))
         {
-            throw new ToolInputException($"{relativePath} looks like a binary file.");
+            throw new ToolInputException($"{displayPath} looks like a binary file.");
         }
 
-        // Detect the encoding from the BOM so it can be preserved on write; default to UTF-8 without BOM.
-        Encoding encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
-        using (var reader = new StreamReader(new MemoryStream(bytes), encoding, detectEncodingFromByteOrderMarks: true))
+        try
         {
-            string text = reader.ReadToEnd();
-            Encoding detected = reader.CurrentEncoding;
-            bool hasBom = detected.GetPreamble().Length > 0 && bytes.Take(detected.GetPreamble().Length).SequenceEqual(detected.GetPreamble());
-            if (detected is UTF8Encoding && !hasBom)
-            {
-                detected = encoding;
-            }
-
-            return new TextFile(full, text, detected, text.Contains("\r\n") ? "\r\n" : "\n");
+            var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+            return (utf8.GetString(bytes), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch (DecoderFallbackException)
+        {
+            return (Encoding.Default.GetString(bytes), Encoding.Default);
         }
     }
+
+    private static bool StartsWith(byte[] bytes, params byte[] prefix)
+        => bytes.Length >= prefix.Length && prefix.Select((b, i) => bytes[i] == b).All(match => match);
 
     public void Write(string fullPath, string text, Encoding encoding)
     {

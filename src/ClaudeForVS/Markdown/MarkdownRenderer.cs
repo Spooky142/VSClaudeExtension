@@ -63,29 +63,93 @@ internal static class MarkdownRenderer
 
     public static FlowDocument Render(string markdown, double baseFontSize)
     {
-        var doc = new FlowDocument
-        {
-            PagePadding = new Thickness(0),
-            FontSize = baseFontSize,
-            TextAlignment = TextAlignment.Left,
-        };
+        var doc = new FlowDocument { PagePadding = new Thickness(0), TextAlignment = TextAlignment.Left };
+        Update(doc, markdown, baseFontSize, new RenderedBlocks());
+        return doc;
+    }
 
-        MarkdownDocument parsed = Markdig.Markdown.Parse(markdown ?? string.Empty, Pipeline);
-        foreach (MdBlock block in parsed)
+    /// <summary>
+    /// Renders Markdown into an existing document. While a reply streams in, only its end changes, so top-level
+    /// blocks whose Markdown is the same as last time are kept rather than rebuilt; only the rest are rendered again.
+    /// </summary>
+    /// <param name="previous">What the document holds from the last call; updated to match the new text.</param>
+    public static void Update(FlowDocument doc, string markdown, double baseFontSize, RenderedBlocks previous)
+    {
+        markdown ??= string.Empty;
+        if (previous.FontSize != baseFontSize)
         {
-            if (RenderBlock(block, baseFontSize) is WpfBlock rendered)
+            previous.Clear();
+            doc.Blocks.Clear();
+            previous.FontSize = baseFontSize;
+        }
+
+        doc.FontSize = baseFontSize;
+        if (previous.Trimmed is { } trimmed)
+        {
+            trimmed.Block.Margin = trimmed.Margin;
+            previous.Trimmed = null;
+        }
+
+        List<MdBlock> blocks = Markdig.Markdown.Parse(markdown, Pipeline).ToList();
+        List<string?> sources = blocks.Select(b => SourceOf(markdown, b)).ToList();
+
+        // The last block rendered before may have been cut off mid-stream, so it's never kept.
+        int keep = 0;
+        while (keep < blocks.Count && keep < previous.Items.Count - 1
+            && sources[keep] != null && string.Equals(previous.Items[keep].Source, sources[keep], StringComparison.Ordinal))
+        {
+            keep++;
+        }
+
+        for (int i = previous.Items.Count - 1; i >= keep; i--)
+        {
+            if (previous.Items[i].Block is WpfBlock stale)
+            {
+                doc.Blocks.Remove(stale);
+            }
+        }
+
+        previous.Items.RemoveRange(keep, previous.Items.Count - keep);
+        for (int i = keep; i < blocks.Count; i++)
+        {
+            WpfBlock? rendered = RenderBlock(blocks[i], baseFontSize);
+            previous.Items.Add((sources[i], rendered));
+            if (rendered != null)
             {
                 doc.Blocks.Add(rendered);
             }
         }
 
-        // Trim the spacing after the last block so messages don't end with a gap.
+        // Trim the spacing after the last block so messages don't end with a gap (put back if it stops being last).
         if (doc.Blocks.LastBlock is WpfBlock last)
         {
+            previous.Trimmed = (last, last.Margin);
             last.Margin = new Thickness(last.Margin.Left, last.Margin.Top, last.Margin.Right, 0);
         }
+    }
 
-        return doc;
+    /// <summary>The Markdown a top-level block came from, or null if its position isn't known.</summary>
+    private static string? SourceOf(string markdown, MdBlock block)
+        => block.Span.Start >= 0 && block.Span.Length > 0 && block.Span.End < markdown.Length
+            ? markdown.Substring(block.Span.Start, block.Span.Length)
+            : null;
+
+    /// <summary>The top-level blocks in a document rendered by <see cref="Update"/>, with the Markdown each came from.</summary>
+    internal sealed class RenderedBlocks
+    {
+        public List<(string? Source, WpfBlock? Block)> Items { get; } = [];
+
+        public double FontSize { get; set; } = double.NaN;
+
+        /// <summary>The block whose bottom margin was trimmed, and the margin it had.</summary>
+        public (WpfBlock Block, Thickness Margin)? Trimmed { get; set; }
+
+        /// <summary>Forgets everything, so the next update renders every block again (e.g. for new code colours).</summary>
+        public void Clear()
+        {
+            this.Items.Clear();
+            this.Trimmed = null;
+        }
     }
 
     private static WpfBlock? RenderBlock(MdBlock block, double baseFontSize)

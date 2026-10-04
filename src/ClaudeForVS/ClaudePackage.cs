@@ -47,6 +47,7 @@ public sealed class ClaudePackage : AsyncPackage
     {
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         this.Vs = new VsIntegration(this);
+        Agent.OpenDocuments.HasUnsavedChanges = this.Vs.HasUnsavedChanges;
 
         if (await this.GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService commands)
         {

@@ -23,10 +23,10 @@ internal sealed class ApprovalServer : IDisposable
     public const string QualifiedToolName = "mcp__" + ServerName + "__" + ToolName;
 
     private readonly HttpListener listener = new();
-    private readonly Func<string, JsonElement, Task<PermissionDecision>> decide;
+    private readonly Func<string, JsonElement, string?, Task<PermissionDecision>> decide;
 
-    /// <param name="decide">Called with Claude Code's tool name and input; returns the user's decision.</param>
-    public ApprovalServer(Func<string, JsonElement, Task<PermissionDecision>> decide)
+    /// <param name="decide">Called with Claude Code's tool name, input and tool call ID (if given); returns the user's decision.</param>
+    public ApprovalServer(Func<string, JsonElement, string?, Task<PermissionDecision>> decide)
     {
         this.decide = decide;
         byte[] secret = new byte[18];
@@ -156,11 +156,12 @@ internal sealed class ApprovalServer : IDisposable
         JsonNode? args = parameters?["arguments"];
         string toolName = args?["tool_name"]?.GetValue<string>() ?? "unknown";
         JsonNode input = args?["input"]?.DeepClone() ?? new JsonObject();
+        string? toolUseId = args?["tool_use_id"] is JsonValue id && id.TryGetValue(out string? value) ? value : null;
 
         PermissionDecision decision;
         using (JsonDocument doc = JsonDocument.Parse(input.ToJsonString()))
         {
-            decision = await this.decide(toolName, doc.RootElement.Clone()).ConfigureAwait(false);
+            decision = await this.decide(toolName, doc.RootElement.Clone(), toolUseId).ConfigureAwait(false);
         }
 
         // Answered questions come back as a modified input (the original questions plus "answers").

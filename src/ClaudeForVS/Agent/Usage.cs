@@ -93,8 +93,7 @@ internal static class PlanUsageStore
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(UsageFile)!);
-            File.WriteAllText(UsageFile, JsonSerializer.Serialize(limits.ToList()));
+            AtomicFile.WriteAllText(UsageFile,JsonSerializer.Serialize(limits.ToList()));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

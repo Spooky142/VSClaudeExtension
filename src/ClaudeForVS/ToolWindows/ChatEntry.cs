@@ -1,8 +1,10 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Windows.Threading;
 using ClaudeForVS.Agent;
 using ClaudeForVS.Git;
 
@@ -72,7 +74,8 @@ internal sealed record DiffLine(string Text, DiffLineKind Kind)
 
     private static DiffLineKind Classify(string line, ActivityKind activity) => activity switch
     {
-        // The agent's edit previews use "- " / "+ " prefixes.
+        // The agent's edit previews use "- " / "+ " prefixes, with "@@" hunk headers.
+        ActivityKind.Edit when line.StartsWith("@@") => DiffLineKind.Hunk,
         ActivityKind.Edit when line.StartsWith("+ ") => DiffLineKind.Added,
         ActivityKind.Edit when line.StartsWith("- ") => DiffLineKind.Removed,
         ActivityKind.Create => DiffLineKind.Added,
@@ -88,8 +91,13 @@ internal sealed record DiffLine(string Text, DiffLineKind Kind)
 /// <summary>One item in the chat transcript.</summary>
 internal sealed class ChatEntry : INotifyPropertyChanged
 {
+    private static readonly TimeSpan TextNotifyInterval = TimeSpan.FromMilliseconds(100);
+
     private readonly StringBuilder buffer = new();
     private string text;
+    private bool textStale;
+    private DateTime lastTextNotify;
+    private DispatcherTimer? textTimer;
     private string? snapshotBefore;
     private string? snapshotAfter;
     private IReadOnlyList<FileStat> files = [];
@@ -190,29 +198,90 @@ internal sealed class ChatEntry : INotifyPropertyChanged
     /// <summary>Markdown body (rendered for user/assistant entries, plain for thinking and errors).</summary>
     public string Text
     {
-        get => this.text;
-        private set
+        get
         {
-            this.text = value;
-            this.OnPropertyChanged();
+            if (this.textStale)
+            {
+                this.text = this.buffer.ToString();
+                this.textStale = false;
+            }
+
+            return this.text;
         }
     }
 
     /// <summary>Expandable monospace detail, e.g. tool output or a diff.</summary>
-    public IReadOnlyList<DiffLine> DetailLines { get; }
+    public IReadOnlyList<DiffLine> DetailLines { get; private set; }
 
     public bool HasDetail => this.DetailLines.Count > 0;
 
+    /// <summary>Replaces the detail, e.g. a running command's output so far.</summary>
+    public void SetDetail(string detail)
+    {
+        this.DetailLines = DiffLine.Parse(detail, this.Activity);
+        this.OnPropertyChanged(nameof(this.DetailLines));
+        this.OnPropertyChanged(nameof(this.HasDetail));
+    }
+
+    // ===== Running tool calls only =====
+
+    /// <summary>Stops the tool call this row shows while it runs; null once it can't be stopped.</summary>
+    public Action? StopAction { get; init; }
+
+    private bool stopRequested;
+
+    public bool CanStop => this.StopAction != null && !this.stopRequested;
+
+    public void RequestStop()
+    {
+        if (this.CanStop)
+        {
+            this.stopRequested = true;
+            this.OnPropertyChanged(nameof(this.CanStop));
+            this.StopAction!();
+        }
+    }
+
+    /// <summary>
+    /// Adds streamed text. Copying the whole reply out of the buffer (and re-rendering it) for every token gets slow
+    /// as replies grow, so the view hears about new text at most every <see cref="TextNotifyInterval"/>; reading
+    /// <see cref="Text"/> always gives everything so far.
+    /// </summary>
     public void Append(string chunk)
     {
         this.buffer.Append(chunk);
-        this.Text = this.buffer.ToString();
+        this.textStale = true;
+        TimeSpan since = DateTime.UtcNow - this.lastTextNotify;
+        if (since >= TextNotifyInterval)
+        {
+            this.NotifyText();
+        }
+        else if (this.textTimer is not { IsEnabled: true })
+        {
+            if (this.textTimer is null)
+            {
+                this.textTimer = new DispatcherTimer(DispatcherPriority.Background);
+                this.textTimer.Tick += (_, _) => this.NotifyText();
+            }
+
+            this.textTimer.Interval = TextNotifyInterval - since;
+            this.textTimer.Start();
+        }
     }
 
     public void SetText(string value)
     {
         this.buffer.Clear().Append(value);
-        this.Text = value;
+        this.text = value;
+        this.textStale = false;
+        this.NotifyText();
+    }
+
+    private void NotifyText()
+    {
+        this.textTimer?.Stop();
+        this.lastTextNotify = DateTime.UtcNow;
+        this.OnPropertyChanged(nameof(this.Text));
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)

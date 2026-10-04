@@ -21,6 +21,22 @@ internal static class CommandRules
     // Anything that could run a second command or write somewhere unexpected in cmd, PowerShell or bash.
     private static readonly char[] ShellMetacharacters = ['&', '|', ';', '<', '>', '`', '$', '\n', '\r', '(', ')', '{', '}'];
 
+    // Programs that run whatever command line or script text they're given; no rule can make them safe.
+    private static readonly HashSet<string> NeverRuled = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cmd", "powershell", "pwsh", "bash", "sh", "wsl", "iex", "Invoke-Expression", "icm", "Invoke-Command",
+        "saps", "start", "Start-Process", "Start-Job", "call", "env", "sudo", "runas", "cscript", "wscript", "mshta",
+        "rundll32", "regsvr32",
+    };
+
+    // Programs whose name alone would allow anything (any git command, any script); a rule needs a subcommand too,
+    // e.g. "git commit" or "dotnet build".
+    private static readonly HashSet<string> NeedsSubcommand = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "git", "python", "python3", "py", "node", "deno", "bun", "dotnet", "npx", "pnpx", "bunx", "uv", "uvx",
+        "ruby", "perl", "php", "java",
+    };
+
     private static readonly object Gate = new();
 
     /// <summary>
@@ -48,8 +64,12 @@ internal static class CommandRules
             words.Add(word);
         }
 
-        return words.Count == 0 ? null : string.Join(" ", words);
+        return words.Count == 0 || !IsSafe(words) ? null : string.Join(" ", words);
     }
+
+    /// <summary>False for rules that would allow arbitrary code, including ones saved by earlier versions.</summary>
+    private static bool IsSafe(IReadOnlyList<string> ruleWords) =>
+        !NeverRuled.Contains(ruleWords[0]) && !(ruleWords.Count == 1 && NeedsSubcommand.Contains(ruleWords[0]));
 
     /// <summary>True if a saved rule for this repository allows the command.</summary>
     public static bool IsAllowed(string repoRoot, string command, bool viaShell)
@@ -61,8 +81,9 @@ internal static class CommandRules
 
         string normalized = string.Join(" ", command.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         return List(repoRoot).Any(rule =>
-            normalized.Equals(rule, StringComparison.OrdinalIgnoreCase)
-            || normalized.StartsWith(rule + " ", StringComparison.OrdinalIgnoreCase));
+            (normalized.Equals(rule, StringComparison.OrdinalIgnoreCase) || normalized.StartsWith(rule + " ", StringComparison.OrdinalIgnoreCase))
+            && rule.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } words
+            && IsSafe(words));
     }
 
     public static IReadOnlyList<string> List(string repoRoot)
@@ -125,8 +146,7 @@ internal static class CommandRules
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(RulesFile)!);
-            File.WriteAllText(RulesFile, JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
+            AtomicFile.WriteAllText(RulesFile,JsonSerializer.Serialize(all, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -16,9 +16,9 @@ internal sealed record FileChange(string FullPath, string Before, string After)
     {
         try
         {
-            return File.Exists(fullPath) ? File.ReadAllText(fullPath) : string.Empty;
+            return File.Exists(fullPath) ? RepoFiles.Decode(File.ReadAllBytes(fullPath), fullPath).Text : string.Empty;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ToolInputException)
         {
             return string.Empty;
         }
@@ -75,4 +75,11 @@ internal sealed record FileChange(string FullPath, string Before, string After)
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+}
+
+/// <summary>What the engines need to know about Visual Studio's open documents. Set by the package; call on the UI thread.</summary>
+internal static class OpenDocuments
+{
+    /// <summary>True if the file is open in an editor with changes that haven't been saved.</summary>
+    public static Func<string, bool> HasUnsavedChanges { get; set; } = _ => false;
 }

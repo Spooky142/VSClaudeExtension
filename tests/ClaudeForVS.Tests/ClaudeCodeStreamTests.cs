@@ -87,6 +87,15 @@ public sealed class ClaudeCodeStreamTests : IDisposable
     }
 
     [Fact]
+    public void ErrorsThatMentionDenialAreStillFailures()
+    {
+        this.Feed("""{"type":"assistant","uuid":"m1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"del locked.dll"}}]}}""");
+        this.Feed("""{"type":"user","uuid":"m2","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"Access is denied."}]}}""");
+
+        Assert.Equal(ActivityKind.Failed, Assert.Single(this.sink.Activities).Kind);
+    }
+
+    [Fact]
     public void EditToolCarriesTheFileChange()
     {
         string file = Path.Combine(this.repo, "a.txt");
@@ -194,6 +203,8 @@ public sealed class ClaudeCodeStreamTests : IDisposable
         public void SetStatus(string? status)
         {
         }
+
+        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop) => throw new NotSupportedException();
 
         public void ReportTokenUsage(ClaudeModel model, TokenUsage usage)
         {

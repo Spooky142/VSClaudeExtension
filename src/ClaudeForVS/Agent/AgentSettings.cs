@@ -86,11 +86,7 @@ internal sealed record AgentSettings
         return new AgentSettings();
     }
 
-    public void Save()
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
-        File.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, JsonOptions));
-    }
+    public void Save() => AtomicFile.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, JsonOptions));
 
     /// <summary>API model ID.</summary>
     public static string ModelId(ClaudeModel model) => model switch
@@ -127,7 +123,7 @@ internal sealed record AgentSettings
         _ => "Coding",
     };
 
-    /// <summary>Appended to the system prompt so Claude knows what it's allowed to do.</summary>
+    /// <summary>Tells Claude what it's allowed to do: in the conversation on the Claude API, in the system prompt on Claude Code.</summary>
     public static string ModeInstructions(AgentMode mode) => mode switch
     {
         AgentMode.Plan =>

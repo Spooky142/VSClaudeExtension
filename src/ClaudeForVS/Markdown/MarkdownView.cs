@@ -36,7 +36,7 @@ internal sealed class MarkdownView : RichTextBox
         this.Background = Brushes.Transparent;
         this.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
         this.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-        this.Document = new FlowDocument();
+        this.Document = new FlowDocument { PagePadding = new Thickness(0), TextAlignment = TextAlignment.Left };
 
         this.timer = new DispatcherTimer(RenderInterval, DispatcherPriority.Background, (_, _) => this.Render(), this.Dispatcher);
         this.timer.Stop();
@@ -62,17 +62,26 @@ internal sealed class MarkdownView : RichTextBox
         }
     }
 
-    /// <summary>Renders the Markdown again now, e.g. after the theme changes the code colours.</summary>
-    public void Rerender() => this.Render();
+    /// <summary>Renders all of the Markdown again now, e.g. after the theme changes the code colours.</summary>
+    public void Rerender()
+    {
+        this.rendered.Clear();
+        this.Document.Blocks.Clear();
+        this.blockWidths.Clear();
+        this.Render();
+    }
 
     private void Render()
     {
         this.timer.Stop();
         this.lastRender = DateTime.UtcNow;
-        this.Document = MarkdownRenderer.Render(this.Markdown, this.FontSize);
+        MarkdownRenderer.Update(this.Document, this.Markdown, this.FontSize, this.rendered);
         this.fitWidth = null;
         this.InvalidateMeasure();
     }
+
+    // What the document holds, so a render only rebuilds the blocks whose Markdown changed.
+    private readonly MarkdownRenderer.RenderedBlocks rendered = new();
 
     // A RichTextBox always wants the full width offered to it, so bubbles around it would span the whole window.
     // Instead the width of the longest line is worked out from the document's text, wrapped at the width on offer,
@@ -102,6 +111,7 @@ internal sealed class MarkdownView : RichTextBox
             || e.Property == FontStyleProperty || e.Property == PaddingProperty)
         {
             this.fitWidth = null;
+            this.blockWidths.Clear();
         }
     }
 
@@ -109,8 +119,13 @@ internal sealed class MarkdownView : RichTextBox
     {
         base.OnDpiChanged(oldDpi, newDpi);
         this.fitWidth = null;
+        this.blockWidths.Clear();
         this.InvalidateMeasure();
     }
+
+    // Widths of the top-level blocks at blockWidthsAvailable, so blocks kept from the last render aren't measured again.
+    private readonly System.Collections.Generic.Dictionary<Block, double> blockWidths = [];
+    private double blockWidthsAvailable;
 
     private double MeasureFitWidth(double constraintWidth)
     {
@@ -118,7 +133,33 @@ internal sealed class MarkdownView : RichTextBox
         Thickness page = this.Document.PagePadding;
         double chrome = page.Left + page.Right + this.Padding.Left + this.Padding.Right
             + this.BorderThickness.Left + this.BorderThickness.Right + WidthSlack;
-        double content = MeasureBlocks(this.Document.Blocks, pixelsPerDip, Math.Max(1, constraintWidth - chrome));
+        double available = Math.Max(1, constraintWidth - chrome);
+        if (available != this.blockWidthsAvailable)
+        {
+            this.blockWidths.Clear();
+            this.blockWidthsAvailable = available;
+        }
+
+        double content = 0;
+        var current = new System.Collections.Generic.Dictionary<Block, double>();
+        foreach (Block block in this.Document.Blocks)
+        {
+            if (!this.blockWidths.TryGetValue(block, out double width))
+            {
+                width = MeasureBlock(block, pixelsPerDip, available);
+            }
+
+            current[block] = width;
+            content = Math.Max(content, width);
+        }
+
+        // Keep only the blocks still in the document.
+        this.blockWidths.Clear();
+        foreach (var pair in current)
+        {
+            this.blockWidths[pair.Key] = pair.Value;
+        }
+
         return double.IsPositiveInfinity(content) ? double.PositiveInfinity : Math.Ceiling(content + chrome);
     }
 
@@ -128,21 +169,26 @@ internal sealed class MarkdownView : RichTextBox
         double max = 0;
         foreach (Block block in blocks)
         {
-            double insets = block.Padding.Left + block.Padding.Right + block.BorderThickness.Left
-                + block.BorderThickness.Right + block.Margin.Left + block.Margin.Right;
-            double inside = Math.Max(1, available - insets);
-            double inner = block switch
-            {
-                Paragraph p => MeasureParagraph(p, pixelsPerDip, inside),
-                List list => MeasureList(list, pixelsPerDip, inside),
-                Section section => MeasureBlocks(section.Blocks, pixelsPerDip, inside),
-                _ => double.PositiveInfinity,
-            };
-
-            max = Math.Max(max, inner + insets);
+            max = Math.Max(max, MeasureBlock(block, pixelsPerDip, available));
         }
 
         return max;
+    }
+
+    private static double MeasureBlock(Block block, double pixelsPerDip, double available)
+    {
+        double insets = block.Padding.Left + block.Padding.Right + block.BorderThickness.Left
+            + block.BorderThickness.Right + block.Margin.Left + block.Margin.Right;
+        double inside = Math.Max(1, available - insets);
+        double inner = block switch
+        {
+            Paragraph p => MeasureParagraph(p, pixelsPerDip, inside),
+            List list => MeasureList(list, pixelsPerDip, inside),
+            Section section => MeasureBlocks(section.Blocks, pixelsPerDip, inside),
+            _ => double.PositiveInfinity,
+        };
+
+        return inner + insets;
     }
 
     private static double MeasureList(List list, double pixelsPerDip, double available)

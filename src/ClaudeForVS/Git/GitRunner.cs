@@ -21,11 +21,19 @@ internal sealed class GitRunner
         "describe", "shortlog", "reflog", "cat-file", "ls-tree", "merge-base", "rev-list", "whatchanged",
     };
 
+    // Options that make an otherwise read-only command write a file (--output), run a program (grep's
+    // --open-files-in-pager, --ext-diff) or read files outside the repository (--no-index, blame's --contents and
+    // --ignore-revs-file, config's --file and --blob).
+    private static readonly string[] UnsafeLongOptions =
+    [
+        "--output", "--open-files-in-pager", "--ext-diff", "--no-index", "--contents", "--ignore-revs-file", "--file", "--blob",
+    ];
+
     private static readonly Lazy<string?> GitExe = new(FindGit);
 
     public static string? GitPath => GitExe.Value;
 
-    /// <summary>True if running these args can't modify the repo or remotes.</summary>
+    /// <summary>True if running these args can't modify the repo or remotes, run other programs or read files outside the repository.</summary>
     public static bool IsReadOnly(IReadOnlyList<string> args)
     {
         if (args.Count == 0)
@@ -34,10 +42,14 @@ internal sealed class GitRunner
         }
 
         string sub = args[0];
+        if (args.Skip(1).TakeWhile(a => a != "--").Any(a => IsUnsafeOption(sub, a)))
+        {
+            return false;
+        }
+
         if (ReadOnlySubcommands.Contains(sub))
         {
-            // "git diff --output=x" writes files; "git log/show --output" too.
-            return !args.Any(a => a.StartsWith("--output", StringComparison.OrdinalIgnoreCase));
+            return true;
         }
 
         // Listing forms of commands that can also mutate.
@@ -49,6 +61,32 @@ internal sealed class GitRunner
             "tag" => rest.Length == 0 || rest.All(a => a is "-l" or "--list" || a.StartsWith("-n")),
             "stash" => rest.Length > 0 && (rest[0] == "list" || rest[0] == "show"),
             "config" => rest.Length > 0 && rest[0] is "--get" or "--get-all" or "--list" or "-l",
+            _ => false,
+        };
+    }
+
+    private static bool IsUnsafeOption(string subcommand, string arg)
+    {
+        if (arg.StartsWith("--", StringComparison.Ordinal))
+        {
+            // Git accepts any unambiguous prefix of a long option, e.g. "--open" for --open-files-in-pager.
+            string name = arg.Split('=')[0];
+            return name.Length > 2 && UnsafeLongOptions.Any(option => option.StartsWith(name, StringComparison.Ordinal));
+        }
+
+        if (arg.Length < 2 || arg[0] != '-')
+        {
+            return false;
+        }
+
+        // Short options can be bundled ("-nOcalc" is -n plus -O calc), so look for the letter anywhere in the cluster:
+        // grep's -O (run a pager) and -f (patterns from a file), blame's -S (revisions from a file), config's -f (a file).
+        string flags = arg.Substring(1);
+        return subcommand.ToLowerInvariant() switch
+        {
+            "grep" => flags.IndexOfAny(['O', 'f']) >= 0,
+            "blame" => flags.IndexOf('S') >= 0,
+            "config" => flags.IndexOf('f') >= 0,
             _ => false,
         };
     }

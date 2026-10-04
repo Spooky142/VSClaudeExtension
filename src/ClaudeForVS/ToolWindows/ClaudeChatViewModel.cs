@@ -768,6 +768,23 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     void IChatSink.SetStatus(string? status) => this.Status = status ?? string.Empty;
 
+    ILiveActivity IChatSink.StartLiveActivity(ActivityKind kind, string title, Action stop)
+    {
+        this.currentAssistant = null;
+        this.currentThinking = null;
+        var entry = new ChatEntry(ChatEntryKind.Tool, title, activity: kind) { StopAction = stop };
+        this.Messages.Add(entry);
+        return new LiveActivity(this.Messages, entry);
+    }
+
+    /// <summary>A tool call's row while it runs; removed when it finishes, as the finished call gets its own row.</summary>
+    private sealed class LiveActivity(ObservableCollection<ChatEntry> messages, ChatEntry entry) : ILiveActivity
+    {
+        public void SetOutput(string output) => entry.SetDetail(Truncate(output));
+
+        public void Dispose() => messages.Remove(entry);
+    }
+
     /// <summary>Questions Claude is waiting on, shown in the question card; empty when there are none.</summary>
     public ObservableCollection<QuestionViewModel> PendingQuestions { get; } = [];
 

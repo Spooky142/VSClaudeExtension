@@ -34,8 +34,7 @@ internal static class ApiKeyStore
 
     public static void Save(string apiKey)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(KeyFile)!);
         byte[] cipher = ProtectedData.Protect(Encoding.UTF8.GetBytes(apiKey.Trim()), null, DataProtectionScope.CurrentUser);
-        File.WriteAllBytes(KeyFile, cipher);
+        AtomicFile.WriteAllBytes(KeyFile, cipher);
     }
 }

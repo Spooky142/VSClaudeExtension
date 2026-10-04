@@ -165,6 +165,75 @@ internal sealed partial class ClaudeChatViewModel
         }
     }
 
+    /// <summary>
+    /// Files a prompt changed that Claude's own file edits don't account for, so were changed while it ran by the user,
+    /// another program or a command it ran. A file Claude edited counts if it ended up as Claude left it; after a chat
+    /// is reopened the edits' contents aren't known, so a tool row naming the file is taken as accounting for it.
+    /// </summary>
+    private async Task<List<string>> UnexplainedChangesAsync(string root, ChatEntry prompt)
+    {
+        var result = new List<string>();
+        if (prompt.SnapshotBefore is not string before || prompt.SnapshotAfter is not string after || before == after)
+        {
+            return result;
+        }
+
+        int start = this.Messages.IndexOf(prompt);
+        List<ChatEntry> tools = this.Messages.Skip(start + 1)
+            .TakeWhile(m => m.Kind != ChatEntryKind.User)
+            .Where(m => m.Kind == ChatEntryKind.Tool && m.Activity != ActivityKind.Declined && m.Activity != ActivityKind.Failed)
+            .ToList();
+
+        // What Claude's file tools last left in each file.
+        string prefix = root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        var written = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (ChatEntry tool in tools)
+        {
+            if (tool.Change is FileChange change && change.FullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                written[change.FullPath.Substring(prefix.Length).Replace('\\', '/')] = change.After;
+            }
+        }
+
+        static string Normalize(string text) => text.TrimStart('﻿').Replace("\r\n", "\n");
+
+        foreach (SnapshotChange change in await WorkingTreeSnapshot.ChangesAsync(root, before, after, CancellationToken.None))
+        {
+            if (written.TryGetValue(change.Path, out string? expected))
+            {
+                string? actual = change.Status == 'D' ? string.Empty : await WorkingTreeSnapshot.ReadFileAsync(root, after, change.Path, CancellationToken.None);
+                if (actual != null && Normalize(actual) == Normalize(expected))
+                {
+                    continue;
+                }
+            }
+            else if (tools.Any(t => NamesPath(t.Header, change.Path)))
+            {
+                continue; // e.g. a move, a binary delete, or an edit in a reopened chat
+            }
+
+            result.Add(change.Path);
+        }
+
+        return result;
+    }
+
+    /// <summary>True if a tool row's title mentions the repository-relative path as a whole word.</summary>
+    private static bool NamesPath(string title, string path)
+    {
+        string normalized = title.Replace('\\', '/');
+        for (int at = normalized.IndexOf(path, StringComparison.OrdinalIgnoreCase); at >= 0; at = normalized.IndexOf(path, at + 1, StringComparison.OrdinalIgnoreCase))
+        {
+            int end = at + path.Length;
+            if ((at == 0 || normalized[at - 1] == ' ') && (end == normalized.Length || normalized[end] == ' '))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Puts every file changed since a prompt started back the way it was, after the user confirms the list.</summary>
     public async Task UndoAsync(ChatEntry entry)
     {
@@ -203,6 +272,32 @@ internal sealed partial class ClaudeChatViewModel
             string warning = later.Count > 0
                 ? $"\n\n{later.Count} of these {(later.Count == 1 ? "file has" : "files have")} changed since that message finished (your own edits or later messages). Those changes will be lost too."
                 : string.Empty;
+
+            // Files that changed while Claude was working, but not (or not only) through its own edits.
+            var undone = new HashSet<string>(changes.Select(c => c.Path), StringComparer.OrdinalIgnoreCase);
+            var during = new List<string>();
+            int promptIndex = this.Messages.IndexOf(entry);
+            foreach (ChatEntry prompt in this.Messages.Skip(Math.Max(0, promptIndex)).Where(m => m.Kind == ChatEntryKind.User).ToList())
+            {
+                foreach (string path in await this.UnexplainedChangesAsync(root, prompt))
+                {
+                    if (undone.Contains(path) && !during.Contains(path, StringComparer.OrdinalIgnoreCase))
+                    {
+                        during.Add(path);
+                    }
+                }
+            }
+
+            if (during.Count > 0)
+            {
+                warning += "\n\nWhile Claude was working, "
+                    + (during.Count == 1 ? "this file" : "these files")
+                    + " also changed in ways its own edits don't account for (your edits, another program, or a command it ran). Undo puts "
+                    + (during.Count == 1 ? "it" : "them")
+                    + " back too:\n"
+                    + string.Join("\n", during.Take(5).Select(p => "    " + p))
+                    + (during.Count > 5 ? $"\n    … and {during.Count - 5} more" : string.Empty);
+            }
             string files = changes.Count == 1 ? "1 file" : $"{changes.Count} files";
             if (!this.Confirm($"Put {files} back the way {(changes.Count == 1 ? "it was" : "they were")} before this message?\n\n{list}{warning}"))
             {

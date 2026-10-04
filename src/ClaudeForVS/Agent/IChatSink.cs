@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -46,6 +47,13 @@ internal enum ActivityKind
     Question,
 }
 
+/// <summary>A tool call shown while it runs; see <see cref="IChatSink.StartLiveActivity"/>.</summary>
+internal interface ILiveActivity : IDisposable
+{
+    /// <summary>Replaces the output shown so far.</summary>
+    void SetOutput(string output);
+}
+
 /// <summary>How the agent reports progress back to the UI. Called on the UI thread.</summary>
 internal interface IChatSink
 {
@@ -58,6 +66,13 @@ internal interface IChatSink
     /// <summary>Shows a completed tool call and its (possibly truncated) output.</summary>
     /// <param name="change">For file edits, the whole file before and after, so it can be opened in a diff viewer.</param>
     void ToolActivity(ActivityKind kind, string title, string detail, FileChange? change = null);
+
+    /// <summary>
+    /// Shows a tool call while it runs, e.g. a command and its output so far, with a button that stops just this
+    /// call. Disposing it removes the row; the finished call is then reported with <see cref="ToolActivity"/>.
+    /// </summary>
+    /// <param name="stop">Called on the UI thread when the user stops it.</param>
+    ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop);
 
     void SetStatus(string? status);
 

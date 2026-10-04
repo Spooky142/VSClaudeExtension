@@ -109,6 +109,29 @@ internal sealed class VsIntegration
         }
     }
 
+    /// <summary>True if the file is open in an editor with changes that haven't been saved.</summary>
+    public bool HasUnsavedChanges(string fullPath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.services.GetService(typeof(SVsRunningDocumentTable)) is not IVsRunningDocumentTable table
+            || ErrorHandler.Failed(table.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock, fullPath, out _, out _, out IntPtr docData, out _))
+            || docData == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            return Marshal.GetObjectForIUnknown(docData) is IVsPersistDocData persist
+                && ErrorHandler.Succeeded(persist.IsDocDataDirty(out int dirty))
+                && dirty != 0;
+        }
+        finally
+        {
+            Marshal.Release(docData);
+        }
+    }
+
     /// <summary>
     /// Opens Visual Studio's side-by-side diff for a change. When the file on disk already matches the "after"
     /// side, the real file is shown on the right so it can be edited there.

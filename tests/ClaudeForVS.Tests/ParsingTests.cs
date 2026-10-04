@@ -33,6 +33,25 @@ public class CommandRulesTests
     [Fact]
     public void GitArgumentsAreNotCheckedForShellCharacters() =>
         Assert.Equal("git commit", CommandRules.RuleFor("git commit -m \"fix; tidy | done\"", viaShell: false));
+
+    [Theory]
+    [InlineData("git -c core.pager=x log", false)] // would be just "git"
+    [InlineData("python script.py", true)]
+    [InlineData("node -e x", true)]
+    [InlineData("dotnet bin/tool.dll", true)]
+    [InlineData("pwsh -File x.ps1", true)]
+    [InlineData("iex something", true)]
+    [InlineData("cmd /c del x", true)]
+    [InlineData("Start-Process notepad", true)]
+    public void RulesThatWouldAllowAnyCodeAreNotOffered(string command, bool viaShell) =>
+        Assert.Null(CommandRules.RuleFor(command, viaShell));
+
+    [Theory]
+    [InlineData("git push", "git push")]
+    [InlineData("python manage", "python manage")]
+    [InlineData("dotnet test --no-build", "dotnet test")]
+    public void LaunchersWithASubcommandStillGetARule(string command, string expected) =>
+        Assert.Equal(expected, CommandRules.RuleFor(command, viaShell: false));
 }
 
 public class GitRunnerTests
@@ -50,8 +69,29 @@ public class GitRunnerTests
     [InlineData(true, "config", "--get", "user.name")]
     [InlineData(false, "config", "user.name", "me")]
     [InlineData(false, "push")]
+    [InlineData(true, "diff", "--output-indicator-new=>")]
+    [InlineData(true, "grep", "-n", "TODO")]
+    [InlineData(true, "log", "-S", "needle")]
+    [InlineData(true, "diff", "--", "--output")] // a path, not an option
     public void ReadOnlyCommandsAreRecognised(bool expected, params string[] args) =>
         Assert.Equal(expected, GitRunner.IsReadOnly(args));
+
+    [Theory]
+    [InlineData("grep", "-Ocalc.exe", "x")] // runs a program
+    [InlineData("grep", "-nOcalc.exe", "x")] // bundled short options
+    [InlineData("grep", "--open-files-in-pager=calc.exe", "x")]
+    [InlineData("grep", "--open=calc.exe", "x")] // abbreviated long option
+    [InlineData("grep", "-f", @"C:\secret.txt")]
+    [InlineData("diff", "--no-index", @"C:\secret.txt", "NUL")] // reads outside the repository
+    [InlineData("diff", "--no-ind", @"C:\secret.txt", "NUL")]
+    [InlineData("diff", "--ext-diff")]
+    [InlineData("log", "--out=patch.txt")]
+    [InlineData("blame", "--contents", @"C:\secret.txt", "a.txt")]
+    [InlineData("blame", "-S", @"C:\revs.txt", "a.txt")]
+    [InlineData("config", "--get", "--file", @"C:\other\.gitconfig", "user.name")]
+    [InlineData("config", "--get", "-f", @"C:\other\.gitconfig", "user.name")]
+    public void OptionsThatRunProgramsOrReadOutsideTheRepositoryNeedApproval(params string[] args) =>
+        Assert.False(GitRunner.IsReadOnly(args));
 
     [Theory]
     [InlineData("plain", "plain")]

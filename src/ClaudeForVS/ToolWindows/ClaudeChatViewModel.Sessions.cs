@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using ClaudeForVS.Agent;
 
 namespace ClaudeForVS.ToolWindows;
@@ -40,7 +42,7 @@ internal sealed partial class ClaudeChatViewModel
         set
         {
             this.Set(ref this.sessionSearch, value);
-            this.RefreshSessions();
+            _ = this.RefreshSessionsAsync(debounce: true);
         }
     }
 
@@ -75,15 +77,64 @@ internal sealed partial class ClaudeChatViewModel
         set => this.ShowHistory = !value;
     }
 
-    public void RefreshSessions()
+    public void RefreshSessions() => _ = this.RefreshSessionsAsync(debounce: false);
+
+    // Cancels a refresh still in progress when a newer one starts.
+    private CancellationTokenSource? sessionRefresh;
+
+    /// <summary>
+    /// Reloads the History list. The files are read and searched on a background thread, since searching transcripts
+    /// means reading every chat; while typing, it waits for a pause first.
+    /// </summary>
+    private async Task RefreshSessionsAsync(bool debounce)
     {
-        this.Sessions.Clear();
-        List<SessionInfo> all = SessionStore.List();
+        this.sessionRefresh?.Cancel();
+        var cts = new CancellationTokenSource();
+        this.sessionRefresh = cts;
+
         string query = this.sessionSearch.Trim();
         string repo = (this.RepoRoot ?? this.RepoPath).Trim().TrimEnd('\\', '/');
+        bool repoOnly = this.thisRepoOnly;
+        try
+        {
+            if (debounce && query.Length >= 3)
+            {
+                await Task.Delay(250, cts.Token);
+            }
+
+            (List<SessionInfo> matches, int total) = await Task.Run(() => FindSessions(query, repo, repoOnly, cts.Token), cts.Token);
+            if (cts.IsCancellationRequested)
+            {
+                return;
+            }
+
+            this.Sessions.Clear();
+            foreach (SessionInfo info in matches)
+            {
+                this.Sessions.Add(new SessionItem(info, info.Id == this.chatId));
+            }
+
+            this.NoSavedSessions = total == 0;
+            this.NoSessionMatches = total > 0 && this.Sessions.Count == 0;
+            this.OnPropertyChanged(nameof(this.HasSessions));
+            this.OnPropertyChanged(nameof(this.NoSavedSessions));
+            this.OnPropertyChanged(nameof(this.NoSessionMatches));
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer refresh replaced this one.
+        }
+    }
+
+    /// <summary>The saved chats to list, pinned first; plus how many there are in all.</summary>
+    private static (List<SessionInfo> Matches, int Total) FindSessions(string query, string repo, bool repoOnly, CancellationToken cancellationToken)
+    {
+        List<SessionInfo> all = SessionStore.List();
+        var matches = new List<SessionInfo>();
         foreach (SessionInfo info in all.OrderByDescending(s => s.Pinned)) // stable: newest first within each group
         {
-            if (this.thisRepoOnly && !string.Equals(info.RepoPath.TrimEnd('\\', '/'), repo, StringComparison.OrdinalIgnoreCase))
+            cancellationToken.ThrowIfCancellationRequested();
+            if (repoOnly && !string.Equals(info.RepoPath.TrimEnd('\\', '/'), repo, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -91,19 +142,15 @@ internal sealed partial class ClaudeChatViewModel
             if (query.Length > 0
                 && info.Title.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0
                 && Path.GetFileName(info.RepoPath.TrimEnd('\\', '/')).IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0
-                && !(query.Length >= 3 && SessionStore.TranscriptContains(info.Id, query)))
+                && !(query.Length >= 3 && SessionStore.TranscriptContains(info, query)))
             {
                 continue;
             }
 
-            this.Sessions.Add(new SessionItem(info, info.Id == this.chatId));
+            matches.Add(info);
         }
 
-        this.NoSavedSessions = all.Count == 0;
-        this.NoSessionMatches = all.Count > 0 && this.Sessions.Count == 0;
-        this.OnPropertyChanged(nameof(this.HasSessions));
-        this.OnPropertyChanged(nameof(this.NoSavedSessions));
-        this.OnPropertyChanged(nameof(this.NoSessionMatches));
+        return (matches, all.Count);
     }
 
     /// <summary>The summary saved for the current chat, or null before its first message.</summary>

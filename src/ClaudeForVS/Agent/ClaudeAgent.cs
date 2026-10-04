@@ -26,6 +26,10 @@ internal sealed class ClaudeAgent : IChatEngine
     private const int DefaultCommandSeconds = 300;
     private const int MaxCommandSeconds = 1800;
 
+    // A running command's row shows this many of its latest output lines, refreshed this often.
+    private const int LiveOutputLines = 40;
+    private static readonly TimeSpan LiveOutputInterval = TimeSpan.FromMilliseconds(250);
+
     // Web searches and fetches allowed per response; each search is billed on top of tokens.
     private const int MaxWebUses = 8;
 
@@ -62,6 +66,9 @@ internal sealed class ClaudeAgent : IChatEngine
 
     // Bumped whenever the history is replaced wholesale, so checkpoints taken before then can't be rewound to.
     private int generation;
+
+    // The mode Claude was last told about in the conversation; null when it needs telling again.
+    private AgentMode? announcedMode;
 
     private readonly string instanceId = Guid.NewGuid().ToString("N").Substring(0, 8);
 
@@ -132,6 +139,7 @@ internal sealed class ClaudeAgent : IChatEngine
     {
         this.history.Clear();
         this.generation++;
+        this.announcedMode = null;
         Role? last = null;
         var text = new StringBuilder();
 
@@ -187,6 +195,7 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         this.history.RemoveRange(count, this.history.Count - count);
+        this.announcedMode = null; // the note may have been in what was removed; repeating it is harmless
         return true;
     }
 
@@ -206,7 +215,8 @@ internal sealed class ClaudeAgent : IChatEngine
     {
         // Finished responses so far; the one streaming is added on top, live.
         long promptTokens = await this.CompactIfNeededAsync(sink, midTask: false, cancellationToken);
-        if (prompt.Images.Count == 0)
+        string? modeNote = this.ModeNote();
+        if (prompt.Images.Count == 0 && modeNote is null)
         {
             this.history.Add(new() { Role = Role.User, Content = prompt.Text });
         }
@@ -219,6 +229,11 @@ internal sealed class ClaudeAgent : IChatEngine
             }
 
             content.Add(new TextBlockParam { Text = prompt.Text });
+            if (modeNote != null)
+            {
+                content.Add(new TextBlockParam { Text = modeNote });
+            }
+
             this.history.Add(new() { Role = Role.User, Content = content });
         }
 
@@ -277,30 +292,44 @@ internal sealed class ClaudeAgent : IChatEngine
 
             // Every tool_use needs a matching tool_result in a single user message, even on cancel.
             var results = new List<ContentBlockParam>();
-            foreach (ToolUseBlockParam toolUse in turn.ToolUses)
+            List<ToolUseBlockParam> uses = turn.ToolUses;
+            for (int i = 0; i < uses.Count;)
             {
                 if (cancellationToken.IsCancellationRequested || turn.StopReason == "max_tokens")
                 {
-                    results.Add(Error(toolUse.ID, cancellationToken.IsCancellationRequested
+                    results.Add(Error(uses[i].ID, cancellationToken.IsCancellationRequested
                         ? "Cancelled by the user."
                         : "Tool input was truncated because the response hit max_tokens; retry with a smaller input."));
+                    i++;
                     continue;
                 }
 
-                try
+                // Read-only tools that Claude asked for together run at the same time.
+                int end = i;
+                while (end < uses.Count && CanRunInParallel(uses[end]))
                 {
-                    string output = await this.ExecuteToolAsync(toolUse, sink, cancellationToken);
-                    results.Add(new ToolResultBlockParam { ToolUseID = toolUse.ID, Content = output });
+                    end++;
                 }
-                catch (OperationCanceledException)
+
+                if (end - i > 1)
                 {
-                    results.Add(Error(toolUse.ID, "Cancelled by the user."));
+                    foreach (ToolResultBlockParam result in await this.RunInParallelAsync(uses.GetRange(i, end - i), sink, cancellationToken))
+                    {
+                        results.Add(result);
+                    }
+
+                    i = end;
                 }
-                catch (Exception ex) when (ex is ToolInputException or InvalidOperationException or IOException or UnauthorizedAccessException)
+                else
                 {
-                    sink.ToolActivity(ActivityKind.Failed, $"{toolUse.Name} failed", ex.Message);
-                    results.Add(Error(toolUse.ID, ex.Message));
+                    results.Add(await this.RunToolAsync(uses[i], sink, cancellationToken));
+                    i++;
                 }
+            }
+
+            if (this.ModeNote() is string note)
+            {
+                results.Add(new TextBlockParam { Text = note }); // the mode changed while Claude was working
             }
 
             this.history.Add(new() { Role = Role.User, Content = results });
@@ -364,16 +393,33 @@ internal sealed class ClaudeAgent : IChatEngine
         long before = this.contextTokens;
         this.history.Clear();
         this.generation++;
+        this.announcedMode = null;
         this.history.Add(new()
         {
             Role = Role.User,
             Content = "This conversation was compacted to free up context. Summary of everything before this point:\n\n"
                 + summary.ToString().Trim()
-                + (midTask ? "\n\nContinue the task from where you left off." : string.Empty),
+                + (midTask ? "\n\nContinue the task from where you left off." : string.Empty)
+                + "\n\n" + this.ModeNote(),
         });
         this.contextTokens = 0;
         sink.ReportCompacted(before);
         return newTokens;
+    }
+
+    /// <summary>
+    /// The current mode's instructions, if Claude hasn't been told them yet or the mode has changed since. They're
+    /// added to the conversation rather than the system prompt, which has to stay the same for the prompt cache.
+    /// </summary>
+    private string? ModeNote()
+    {
+        if (this.announcedMode == this.Mode)
+        {
+            return null;
+        }
+
+        this.announcedMode = this.Mode;
+        return $"[From the Visual Studio extension, not the user: {AgentSettings.ModeInstructions(this.Mode)} This applies until you're told otherwise.]";
     }
 
     private static ToolResultBlockParam Error(string id, string message)
@@ -396,9 +442,10 @@ internal sealed class ClaudeAgent : IChatEngine
             Thinking = haiku ? HaikuThinking(haikuBudget < maxTokens ? haikuBudget : null) :new ThinkingConfigAdaptive { Display = Display.Summarized },
             OutputConfig = haiku ? null : new OutputConfig { Effort = ToApiEffort(this.Effort) },
 
-            // Automatic caching: the breakpoint moves forward with the conversation.
+            // Automatic caching: the breakpoint moves forward with the conversation. The system prompt never changes
+            // (the mode goes in the conversation instead; see ModeNote), so switching mode keeps the cache.
             CacheControl = new CacheControlEphemeral(),
-            System = this.systemPrompt + "\n" + AgentSettings.ModeInstructions(this.Mode),
+            System = this.systemPrompt,
             Tools = ToolDefinitions,
             Messages = extra is null ? [.. this.history] : [.. this.history, extra],
         };
@@ -669,6 +716,55 @@ internal sealed class ClaudeAgent : IChatEngine
         }
     }
 
+    /// <summary>Runs one tool call, turning failures into an error result for Claude.</summary>
+    private async Task<ToolResultBlockParam> RunToolAsync(ToolUseBlockParam toolUse, IChatSink sink, CancellationToken cancellationToken)
+    {
+        try
+        {
+            string output = await this.ExecuteToolAsync(toolUse, sink, cancellationToken);
+            return new ToolResultBlockParam { ToolUseID = toolUse.ID, Content = output };
+        }
+        catch (OperationCanceledException)
+        {
+            return Error(toolUse.ID, "Cancelled by the user.");
+        }
+        catch (Exception ex) when (ex is ToolInputException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            sink.ToolActivity(ActivityKind.Failed, $"{toolUse.Name} failed", ex.Message);
+            return Error(toolUse.ID, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Runs read-only tool calls at the same time, on background threads. What each reports is held back and then
+    /// shown in the order Claude asked for them, so the transcript reads the same as if they'd run one by one.
+    /// </summary>
+    private async Task<ToolResultBlockParam[]> RunInParallelAsync(List<ToolUseBlockParam> toolUses, IChatSink sink, CancellationToken cancellationToken)
+    {
+        sink.SetStatus($"Running {toolUses.Count} read-only tools…");
+        List<DeferredSink> deferred = toolUses.Select(_ => new DeferredSink()).ToList();
+        ToolResultBlockParam[] results = await Task.WhenAll(
+            toolUses.Select((toolUse, i) => Task.Run(() => this.RunToolAsync(toolUse, deferred[i], cancellationToken))));
+        foreach (DeferredSink tool in deferred)
+        {
+            tool.ReplayTo(sink);
+        }
+
+        return results;
+    }
+
+    /// <summary>Tools that only read and never ask the user anything, so they can run alongside each other.</summary>
+    private static bool CanRunInParallel(ToolUseBlockParam toolUse) => toolUse.Name switch
+    {
+        "read_file" or "glob" or "grep" => true,
+        "git" => toolUse.Input.TryGetValue("args", out JsonElement args)
+            && args.ValueKind == JsonValueKind.Array
+            && args.EnumerateArray().All(a => a.ValueKind == JsonValueKind.String)
+            && args.GetArrayLength() > 0
+            && GitRunner.IsReadOnly(args.EnumerateArray().Select(a => a.GetString()!).ToList()),
+        _ => false,
+    };
+
     private Task<string> ExecuteToolAsync(ToolUseBlockParam toolUse, IChatSink sink, CancellationToken cancellationToken)
     {
         IReadOnlyDictionary<string, JsonElement> input = toolUse.Input;
@@ -809,6 +905,21 @@ internal sealed class ClaudeAgent : IChatEngine
         string[] lines = file.Text.Replace("\r\n", "\n").Split('\n');
         int startLine = OptionalInt(input, "start_line") is int s ? Math.Max(1, s) : 1;
         int endLine = OptionalInt(input, "end_line") is int e ? Math.Min(lines.Length, e) : lines.Length;
+        if (file.Text.Length == 0)
+        {
+            sink.ToolActivity(ActivityKind.Read, $"Read {this.files.Relative(file.FullPath)}", "empty file");
+            return "(empty file)";
+        }
+
+        if (startLine > lines.Length)
+        {
+            throw new ToolInputException($"{path} has {lines.Length} line{(lines.Length == 1 ? "" : "s")}, so start_line {startLine} is past the end.");
+        }
+
+        if (startLine > endLine)
+        {
+            throw new ToolInputException($"end_line ({endLine}) is before start_line ({startLine}).");
+        }
 
         var sb = new StringBuilder();
         for (int i = startLine; i <= endLine; i++)
@@ -852,15 +963,17 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         string relative = this.files.Relative(file.FullPath);
-        string diff = Diff(oldString, newString) + (count > 1 ? $"\n({count} occurrences)" : string.Empty);
         string updated = replaceAll ? file.Text.Replace(find, replace) : ReplaceFirst(file.Text, find, replace);
+        string diff = UnifiedDiff.Create(file.Text, updated);
         var change = new FileChange(file.FullPath, file.Text, updated);
+        ThrowIfUnsaved(file.FullPath, relative);
         if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Edit {relative}", diff, change, sink, cancellationToken))
         {
             sink.ToolActivity(ActivityKind.Declined, $"Edit {relative}", "Declined by you.");
             return "The user declined this edit.";
         }
 
+        this.ThrowIfChanged(path, file.Text);
         this.files.Write(file.FullPath, updated, file.Encoding);
         sink.ToolActivity(ActivityKind.Edit, $"Edited {relative}", diff, change);
         return $"Edited {relative} ({count} replacement{(count == 1 ? "" : "s")}).";
@@ -890,17 +1003,22 @@ internal sealed class ClaudeAgent : IChatEngine
             throw new ToolInputException($"{path} is a directory.");
         }
 
-        string preview = Preview(content);
         string after = RepoFiles.NormalizeNewlines(content, newline);
+
+        // A new file is shown whole; an overwritten one as what changed.
+        ActivityKind kind = action == "Create" ? ActivityKind.Create : ActivityKind.Edit;
+        string preview = action == "Create" ? Preview(content) : UnifiedDiff.Create(before, after);
         var change = new FileChange(full, before, after);
-        if (!await this.ApproveEditAsync(ActivityKind.Create, $"{action} {relative}", preview, change, sink, cancellationToken))
+        ThrowIfUnsaved(full, relative);
+        if (!await this.ApproveEditAsync(kind, $"{action} {relative}", preview, change, sink, cancellationToken))
         {
             sink.ToolActivity(ActivityKind.Declined, $"{action} {relative}", "Declined by you.");
             return "The user declined this change.";
         }
 
+        this.ThrowIfChanged(path, action == "Create" ? null : before);
         this.files.Write(full, after, encoding);
-        sink.ToolActivity(ActivityKind.Create, action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview, change);
+        sink.ToolActivity(kind, action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview, change);
         return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}.";
     }
 
@@ -931,10 +1049,20 @@ internal sealed class ClaudeAgent : IChatEngine
         string relative = this.files.Relative(full);
         string preview = before is null ? "(binary file)" : Removed(before);
         FileChange? change = before is null ? null : new FileChange(full, before, string.Empty);
+        ThrowIfUnsaved(full, relative);
         if (!await this.ApproveEditAsync(ActivityKind.Edit, $"Delete {relative}", preview, change, sink, cancellationToken))
         {
             sink.ToolActivity(ActivityKind.Declined, $"Delete {relative}", "Declined by you.");
             return "The user declined to delete this file.";
+        }
+
+        if (before != null)
+        {
+            this.ThrowIfChanged(path, before);
+        }
+        else
+        {
+            ThrowIfUnsaved(full, relative);
         }
 
         File.Delete(full);
@@ -971,10 +1099,18 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         string title = $"{this.files.Relative(source)} → {this.files.Relative(destination)}";
+        ThrowIfUnsaved(source, this.files.Relative(source));
         if (!await this.ApproveEditAsync(ActivityKind.Edit, "Move " + title, string.Empty, null, sink, cancellationToken))
         {
             sink.ToolActivity(ActivityKind.Declined, "Move " + title, "Declined by you.");
             return "The user declined to move this file.";
+        }
+
+        // Things may have moved on while the user was deciding.
+        ThrowIfUnsaved(source, this.files.Relative(source));
+        if (!File.Exists(source) || (!caseOnly && (File.Exists(destination) || Directory.Exists(destination))))
+        {
+            throw new ToolInputException($"{from} or {to} changed while waiting for approval, so the file wasn't moved. Check them again first.");
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -1025,7 +1161,27 @@ internal sealed class ClaudeAgent : IChatEngine
         }
 
         sink.SetStatus($"Running {command}");
-        (int? exitCode, string output) = await ShellRunner.RunAsync(directory, command, TimeSpan.FromSeconds(timeout), cancellationToken);
+        (int? exitCode, string output) result;
+        using (var stop = new CancellationTokenSource())
+        using (ILiveActivity live = sink.StartLiveActivity(ActivityKind.Shell, command + where, stop.Cancel))
+        {
+            // The row shows the end of the output as it arrives, refreshed a few times a second.
+            var tail = new OutputTail(LiveOutputLines);
+            Task<(int?, string)> run = ShellRunner.RunAsync(directory, command, TimeSpan.FromSeconds(timeout), cancellationToken, stop.Token, tail.Add);
+            while (await Task.WhenAny(run, Task.Delay(LiveOutputInterval)) != run)
+            {
+                live.SetOutput(tail.Text);
+            }
+
+            result = await run;
+            if (stop.IsCancellationRequested)
+            {
+                sink.ToolActivity(ActivityKind.Declined, command + where, $"Stopped by you.\n{result.output}".TrimEnd());
+                return $"The user stopped this command before it finished. Don't run it again unless they ask.\n{result.output}".TrimEnd();
+            }
+        }
+
+        (int? exitCode, string output) = result;
         string shown = output.Length == 0 ? "(no output)" : output;
         if (exitCode is not int code)
         {
@@ -1035,6 +1191,31 @@ internal sealed class ClaudeAgent : IChatEngine
 
         sink.ToolActivity(code == 0 ? ActivityKind.Shell : ActivityKind.Failed, command + where, code == 0 ? shown : $"Exit code {code}\n{shown}");
         return code == 0 ? shown : $"Exit code {code}.\n{shown}";
+    }
+
+    /// <summary>Refuses to change a file the user is editing in Visual Studio, rather than racing their unsaved changes.</summary>
+    private static void ThrowIfUnsaved(string fullPath, string relative)
+    {
+        if (OpenDocuments.HasUnsavedChanges(fullPath))
+        {
+            throw new ToolInputException(
+                $"{relative} has unsaved changes in Visual Studio, so it wasn't changed. Ask the user to save or discard them, then read the file again.");
+        }
+    }
+
+    /// <summary>
+    /// Refuses the change if the file isn't as it was when the change was worked out (null: didn't exist), e.g.
+    /// because the user edited it while deciding, so their work isn't overwritten.
+    /// </summary>
+    private void ThrowIfChanged(string path, string? expected)
+    {
+        string full = this.files.Resolve(path);
+        ThrowIfUnsaved(full, this.files.Relative(full));
+        string? now = File.Exists(full) ? this.files.Read(path).Text : null;
+        if (!string.Equals(now, expected, StringComparison.Ordinal))
+        {
+            throw new ToolInputException($"{path} changed while waiting for approval, so the change wasn't made. Read it again first.");
+        }
     }
 
     private async Task<bool> ApproveEditAsync(ActivityKind kind, string title, string detail, FileChange? change, IChatSink sink, CancellationToken cancellationToken)
@@ -1093,22 +1274,6 @@ internal sealed class ClaudeAgent : IChatEngine
     {
         int i = text.IndexOf(find, StringComparison.Ordinal);
         return text.Substring(0, i) + replace + text.Substring(i + find.Length);
-    }
-
-    private static string Diff(string oldText, string newText)
-    {
-        var sb = new StringBuilder();
-        foreach (string line in Lines(oldText).Take(PreviewLines))
-        {
-            sb.Append("- ").Append(line).Append('\n');
-        }
-
-        foreach (string line in Lines(newText).Take(PreviewLines))
-        {
-            sb.Append("+ ").Append(line).Append('\n');
-        }
-
-        return sb.ToString().TrimEnd('\n');
     }
 
     private static string Preview(string content)
@@ -1398,6 +1563,94 @@ internal sealed class ClaudeAgent : IChatEngine
 
         // Server tool blocks as received.
         public IReadOnlyDictionary<string, JsonElement> Raw = new Dictionary<string, JsonElement>();
+    }
+
+    /// <summary>
+    /// Stands in for the chat while a tool runs on a background thread: what it reports is kept, to be replayed on
+    /// the UI thread later. Only for tools that never ask the user anything.
+    /// </summary>
+    private sealed class DeferredSink : IChatSink
+    {
+        private readonly List<Action<IChatSink>> calls = [];
+
+        public void ReplayTo(IChatSink sink)
+        {
+            foreach (Action<IChatSink> call in this.calls)
+            {
+                call(sink);
+            }
+        }
+
+        public void AppendText(string text) => this.Add(s => s.AppendText(text));
+
+        public void AppendThinking(string text) => this.Add(s => s.AppendThinking(text));
+
+        public void ToolActivity(ActivityKind kind, string title, string detail, FileChange? change = null) => this.Add(s => s.ToolActivity(kind, title, detail, change));
+
+        public void SetStatus(string? status)
+        {
+            // Each tool's "Reading…" would be stale by the time it's replayed; the batch has its own status.
+        }
+
+        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop)
+            => throw new InvalidOperationException("Tools running alongside others can't show live progress.");
+
+        public void ReportTokenUsage(ClaudeModel model, TokenUsage usage) => this.Add(s => s.ReportTokenUsage(model, usage));
+
+        public void ReportPromptUsage(TokenUsage usage) => this.Add(s => s.ReportPromptUsage(usage));
+
+        public void ReportLiveTokens(long totalTokens) => this.Add(s => s.ReportLiveTokens(totalTokens));
+
+        public void ReportContext(long tokens) => this.Add(s => s.ReportContext(tokens));
+
+        public void ReportCompacted(long tokensBefore) => this.Add(s => s.ReportCompacted(tokensBefore));
+
+        public void ReportApiRateLimits(ApiRateLimits limits) => this.Add(s => s.ReportApiRateLimits(limits));
+
+        public void ReportPlanLimit(PlanLimit limit) => this.Add(s => s.ReportPlanLimit(limit));
+
+        public Task<IReadOnlyDictionary<string, string>?> AskQuestionsAsync(IReadOnlyList<UserQuestion> questions, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("Tools running alongside others can't ask the user anything.");
+
+        public Task<Approval> RequestApprovalAsync(ActivityKind kind, string title, string detail, string? allowAllLabel, CancellationToken cancellationToken, FileChange? change = null)
+            => throw new InvalidOperationException("Tools running alongside others can't ask for approval.");
+
+        private void Add(Action<IChatSink> call)
+        {
+            lock (this.calls)
+            {
+                this.calls.Add(call);
+            }
+        }
+    }
+
+    /// <summary>The latest lines of a running command's output. Lines arrive on background threads.</summary>
+    private sealed class OutputTail(int maxLines)
+    {
+        private readonly Queue<string> lines = new();
+
+        public string Text
+        {
+            get
+            {
+                lock (this.lines)
+                {
+                    return string.Join("\n", this.lines);
+                }
+            }
+        }
+
+        public void Add(string line)
+        {
+            lock (this.lines)
+            {
+                this.lines.Enqueue(line);
+                while (this.lines.Count > maxLines)
+                {
+                    this.lines.Dequeue();
+                }
+            }
+        }
     }
 
     private sealed class StreamedTurn

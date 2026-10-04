@@ -90,6 +90,19 @@ public sealed class WorkingTreeSnapshotTests : IDisposable
     }
 
     [Fact]
+    public async Task LargeUntrackedFilesAreLeftOutOfSnapshotsAsync()
+    {
+        await this.GitAsync("init");
+        this.Write("small.txt", "hello");
+        this.Write("big [1].bin", new string('x', (int)WorkingTreeSnapshot.MaxUntrackedFileBytes + 1)); // brackets: matched literally
+        string? tree = await WorkingTreeSnapshot.CaptureAsync(this.repo, CancellationToken.None);
+        Assert.NotNull(tree);
+
+        (_, string listed) = await GitRunner.RunAsync(this.repo, ["ls-tree", "-r", "--name-only", tree!], CancellationToken.None, includeStderr: false);
+        Assert.Equal(["small.txt"], listed.Split(['\n'], StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Fact]
     public void NumstatOutputIsParsed()
     {
         var counts = WorkingTreeSnapshot.ParseNumstat("3\t1\ta.txt\0-\t-\timg.png\0" + "0\t5\tdir/with space.txt\0");

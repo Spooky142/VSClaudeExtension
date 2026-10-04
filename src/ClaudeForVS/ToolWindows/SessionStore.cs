@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -83,30 +84,35 @@ internal static class SessionStore
 
     public static void Save(SessionInfo info, IReadOnlyList<SavedEntry> entries)
     {
-        Directory.CreateDirectory(Folder);
-        File.WriteAllText(ChatPath(info.Id), JsonSerializer.Serialize(entries, JsonOptions));
+        AtomicFile.WriteAllText(ChatPath(info.Id), JsonSerializer.Serialize(entries, JsonOptions));
         SaveInfo(info); // last: the list only shows chats that are complete
     }
 
     /// <summary>Rewrites only a chat's summary, e.g. after renaming it.</summary>
     public static void SaveInfo(SessionInfo info)
-    {
-        Directory.CreateDirectory(Folder);
-        File.WriteAllText(MetaPath(info.Id), JsonSerializer.Serialize(info, JsonOptions));
-    }
+        => AtomicFile.WriteAllText(MetaPath(info.Id), JsonSerializer.Serialize(info, JsonOptions));
 
-    /// <summary>True if the chat's saved transcript contains the text (case-insensitive).</summary>
-    public static bool TranscriptContains(string id, string text)
+    // Each searched chat's transcript text, as of the chat's last update, so searching again doesn't re-read every file.
+    private static readonly ConcurrentDictionary<string, (DateTimeOffset Updated, string Text)> SearchText = new(StringComparer.Ordinal);
+
+    /// <summary>True if the chat's saved transcript contains the text (case-insensitive). Safe to call off the UI thread.</summary>
+    public static bool TranscriptContains(SessionInfo info, string text)
     {
-        try
+        if (!SearchText.TryGetValue(info.Id, out var cached) || cached.Updated != info.Updated)
         {
-            return LoadEntries(id) is { } entries
-                && entries.Any(e => e.Text.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0);
+            try
+            {
+                cached = (info.Updated, LoadEntries(info.Id) is { } entries ? string.Join("\n", entries.Select(e => e.Text)) : string.Empty);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                cached = (info.Updated, string.Empty);
+            }
+
+            SearchText[info.Id] = cached;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
+
+        return cached.Text.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     /// <summary>Every saved chat, most recently used first. Unreadable files are skipped.</summary>
@@ -156,6 +162,7 @@ internal static class SessionStore
 
     public static void Delete(string id)
     {
+        SearchText.TryRemove(id, out _);
         foreach (string path in new[] { MetaPath(id), ChatPath(id) })
         {
             try

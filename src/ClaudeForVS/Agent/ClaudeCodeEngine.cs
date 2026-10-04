@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -39,7 +40,14 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     private string? resumeAt;
     private IChatSink? sink;
     private CancellationToken runToken;
-    private Process? running;
+
+    // One Claude Code process answers every message in the chat, reading them from stdin, so each message doesn't
+    // pay for starting it and reconnecting the approval server. It's replaced when something on its command line
+    // changes (mode, effort), after a rewind, or after it was stopped.
+    private Process? process;
+    private Task<string>? processStderr;
+    private (AgentMode Mode, EffortLevel Effort) processSettings;
+    private bool restartNeeded;
 
     public ClaudeCodeEngine(string executable, string repoRoot, ClaudeModel model, EffortLevel effort, AgentMode mode)
     {
@@ -89,6 +97,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
     public bool Rewind(string checkpoint)
     {
+        this.restartNeeded = true; // the running process is in the session as it was before the rewind
         if (checkpoint.Length == 0)
         {
             this.SessionId = this.LastMessageId = this.resumeAt = null; // back to before the first message
@@ -123,6 +132,117 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         this.sink = chatSink;
         this.runToken = cancellationToken;
         this.pendingTools.Clear();
+        this.liveDone = this.liveInput = this.liveOutput = this.liveChars = 0;
+
+        // The prompt goes in on stdin as one stream-json user message, which can carry images as well as text.
+        // It's written as UTF-8 bytes because net48 can't set the stdin encoding.
+        var content = new List<object>();
+        foreach (PromptImage image in prompt.Images)
+        {
+            content.Add(new { type = "image", source = new { type = "base64", media_type = image.MediaType, data = image.Base64 } });
+        }
+
+        content.Add(new { type = "text", text = prompt.Text });
+        string message = JsonSerializer.Serialize(new { type = "user", message = new { role = "user", content } }) + "\n";
+        byte[] promptBytes = new UTF8Encoding(false).GetBytes(message);
+
+        Process process = await this.EnsureProcessAsync(chatSink);
+        try
+        {
+            await WriteAsync(process, promptBytes, cancellationToken);
+        }
+        catch (IOException)
+        {
+            // It exited while idle (the pipe is closed); start another and try once more.
+            await this.StopProcessAsync();
+            process = await this.EnsureProcessAsync(chatSink);
+            await WriteAsync(process, promptBytes, cancellationToken);
+        }
+
+        string? resultError = null;
+        bool gotResult = false;
+        using var pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task poll = PollPlanUsageAsync(chatSink, pollCts.Token);
+        try
+        {
+            using (cancellationToken.Register(() => KillTree(process)))
+            {
+                // Read this message's events, up to and including its result; the process then waits for the next one.
+                string? line;
+                while (!gotResult && (line = await process.StandardOutput.ReadLineAsync()) != null)
+                {
+                    if (line.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        using JsonDocument doc = JsonDocument.Parse(line);
+                        if (this.HandleEvent(doc.RootElement, chatSink) is { } outcome)
+                        {
+                            gotResult = true;
+                            resultError = outcome.Error;
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Not an event (e.g. a stray log line); ignore it.
+                    }
+                }
+            }
+        }
+        finally
+        {
+            pollCts.Cancel();
+        }
+
+        await poll;
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // It was stopped part way (or is being); the next message resumes the session in a new process.
+            await this.StopProcessAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        if (!gotResult)
+        {
+            // Output ended without a result, so Claude Code has exited.
+            string err = await this.StopProcessAsync();
+            throw new InvalidOperationException(err.Length > 0 ? err : "Claude Code exited without answering.");
+        }
+
+        // The stream only says which window is binding; fetch exact percentages for every window.
+        foreach (PlanLimit limit in await PlanUsageClient.FetchAsync(cancellationToken))
+        {
+            chatSink.ReportPlanLimit(limit);
+        }
+
+        if (resultError != null)
+        {
+            throw new InvalidOperationException(resultError);
+        }
+    }
+
+    private static async Task WriteAsync(Process process, byte[] bytes, CancellationToken cancellationToken)
+    {
+        Stream stdin = process.StandardInput.BaseStream;
+        await stdin.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
+        await stdin.FlushAsync(cancellationToken);
+    }
+
+    /// <summary>The Claude Code process for the next message: the running one if it still fits the chat's settings, otherwise a new one.</summary>
+    private async Task<Process> EnsureProcessAsync(IChatSink chatSink)
+    {
+        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort))
+        {
+            chatSink.SetStatus("Claude Code is working…");
+            return running;
+        }
+
+        await this.StopProcessAsync();
+        this.restartNeeded = false;
+        this.processSettings = (this.Mode, this.Effort);
 
         var args = new List<string>
         {
@@ -181,92 +301,80 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         // then rejects as an invalid permission result, so large writes would always fail.
         psi.EnvironmentVariables["MAX_MCP_OUTPUT_TOKENS"] = "2000000";
 
-        this.liveDone = this.liveInput = this.liveOutput = this.liveChars = 0;
         chatSink.SetStatus("Starting Claude Code…");
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("Couldn't start Claude Code.");
-        this.running = process;
-        Task<string> stderr = process.StandardError.ReadToEndAsync();
-
-        // The prompt goes in on stdin as one stream-json user message, which can carry images as well as text.
-        // It's written as UTF-8 bytes because net48 can't set the stdin encoding.
-        var content = new List<object>();
-        foreach (PromptImage image in prompt.Images)
+        var started = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        if (!started.Start())
         {
-            content.Add(new { type = "image", source = new { type = "base64", media_type = image.MediaType, data = image.Base64 } });
+            started.Dispose();
+            throw new InvalidOperationException("Couldn't start Claude Code.");
         }
 
-        content.Add(new { type = "text", text = prompt.Text });
-        string message = JsonSerializer.Serialize(new { type = "user", message = new { role = "user", content } }) + "\n";
-        byte[] promptBytes = new UTF8Encoding(false).GetBytes(message);
-        await process.StandardInput.BaseStream.WriteAsync(promptBytes, 0, promptBytes.Length, cancellationToken);
-        process.StandardInput.Close();
+        this.process = started;
+        this.processStderr = started.StandardError.ReadToEndAsync();
+        return started;
+    }
 
-        string? resultError = null;
-        bool gotResult = false;
-        using var pollCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task poll = PollPlanUsageAsync(chatSink, pollCts.Token);
+    /// <summary>
+    /// Ends the Claude Code process, if there is one, without blocking: closing stdin lets an idle one finish and
+    /// exit, and one that doesn't within a few seconds is stopped. Returns what it wrote to stderr.
+    /// </summary>
+    private async Task<string> StopProcessAsync()
+    {
+        if (this.process is not Process old)
+        {
+            return string.Empty;
+        }
+
+        Task<string>? stderr = this.processStderr;
+        this.process = null;
+        this.processStderr = null;
+        CloseInput(old);
+        if (!await WaitForExitAsync(old, TimeSpan.FromSeconds(5)))
+        {
+            KillTree(old);
+            await WaitForExitAsync(old, TimeSpan.FromSeconds(5));
+        }
+
+        // Once it has exited, stderr reaches its end; read it before Dispose closes the pipe.
+        string err = string.Empty;
+        if (stderr != null && await Task.WhenAny(stderr, Task.Delay(TimeSpan.FromSeconds(2))) == stderr && stderr.Status == TaskStatus.RanToCompletion)
+        {
+            err = (await stderr).Trim();
+        }
+
+        old.Dispose();
+        return err;
+    }
+
+    private static void CloseInput(Process process)
+    {
         try
         {
-            using (cancellationToken.Register(() => KillTree(process)))
+            process.StandardInput.Close();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>Waits for the process to exit without blocking a thread; false if it's still running after the timeout.</summary>
+    private static async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout)
+    {
+        var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.Exited += (_, _) => exited.TrySetResult(true);
+        try
+        {
+            if (process.HasExited)
             {
-                string? line;
-                while ((line = await process.StandardOutput.ReadLineAsync()) != null)
-                {
-                    if (line.Length == 0)
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        using JsonDocument doc = JsonDocument.Parse(line);
-                        if (this.HandleEvent(doc.RootElement, chatSink) is { } outcome)
-                        {
-                            gotResult = true;
-                            resultError = outcome.Error;
-                        }
-                    }
-                    catch (JsonException)
-                    {
-                        // Not an event (e.g. a stray log line); ignore it.
-                    }
-                }
-
-                // Output has ended, so the process is exiting; don't let a stuck child hold up the UI thread.
-                if (!process.WaitForExit(10_000))
-                {
-                    KillTree(process);
-                }
+                return true;
             }
         }
-        finally
+        catch (InvalidOperationException)
         {
-            pollCts.Cancel();
+            return true; // never started, or already released
         }
 
-        this.running = null;
-        await poll;
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // The stream only says which window is binding; fetch exact percentages for every window.
-        if (gotResult)
-        {
-            foreach (PlanLimit limit in await PlanUsageClient.FetchAsync(cancellationToken))
-            {
-                chatSink.ReportPlanLimit(limit);
-            }
-        }
-
-        if (resultError != null)
-        {
-            throw new InvalidOperationException(resultError);
-        }
-
-        if (!gotResult && process.ExitCode != 0)
-        {
-            string err = (await stderr).Trim();
-            throw new InvalidOperationException(err.Length > 0 ? err : $"Claude Code exited with code {process.ExitCode}.");
-        }
+        return await Task.WhenAny(exited.Task, Task.Delay(timeout)).ConfigureAwait(false) == exited.Task;
     }
 
     /// <summary>Refreshes plan usage every so often while a prompt runs, so the bars move before the reply ends.</summary>
@@ -290,9 +398,21 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
     public void Dispose()
     {
-        if (this.running is { } process)
+        if (this.process is { } running)
         {
-            KillTree(process);
+            // Between messages it's idle, so closing stdin lets it save the session and exit by itself. One still
+            // working (or stuck) is stopped after a few seconds.
+            this.process = null;
+            CloseInput(running);
+            _ = Task.Run(async () =>
+            {
+                if (!await WaitForExitAsync(running, TimeSpan.FromSeconds(5)).ConfigureAwait(false))
+                {
+                    KillTree(running);
+                }
+
+                running.Dispose();
+            });
         }
 
         this.approvalServer.Dispose();
@@ -385,10 +505,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                     {
                         this.pendingTools.Remove(id);
                         bool isError = block.TryGetProperty("is_error", out JsonElement e) && e.ValueKind == JsonValueKind.True;
-                        (ActivityKind kind, string title, string detail) = this.Describe(call.Name, call.Input, ResultText(block), isError);
+                        bool denied = this.deniedTools.TryRemove(id, out _);
+                        (ActivityKind kind, string title, string detail) = this.Describe(call.Name, call.Input, ResultText(block), isError, denied);
                         FileChange? change = !isError && call.Before != null && this.FullPath(call.Input) is string path
                             ? new FileChange(path, call.Before, FileChange.ReadOrEmpty(path))
                             : null;
+                        WithDiff(call.Name, change, ref kind, ref detail);
                         chatSink.ToolActivity(kind, title, detail, change);
                     }
                 }
@@ -460,9 +582,35 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         chatSink.ReportLiveTokens(this.liveDone + this.liveInput + Math.Max(this.liveOutput, this.liveChars / 4));
     }
 
+    // Tool calls the extension refused (the user said no, plan mode, unsaved changes...), so their failed results show
+    // as declined rather than as errors. Written by the approval server's threads.
+    private readonly ConcurrentDictionary<string, bool> deniedTools = new(StringComparer.Ordinal);
+
     /// <summary>Called by the approval server (on a thread-pool thread) when Claude Code needs permission.</summary>
-    private async Task<PermissionDecision> DecideAsync(string toolName, JsonElement input)
+    private async Task<PermissionDecision> DecideAsync(string toolName, JsonElement input, string? toolUseId)
     {
+        PermissionDecision decision = await this.DecideCoreAsync(toolName, input).ConfigureAwait(false);
+        if (!decision.Allow && toolUseId != null)
+        {
+            this.deniedTools[toolUseId] = true;
+        }
+
+        return decision;
+    }
+
+    private async Task<PermissionDecision> DecideCoreAsync(string toolName, JsonElement input)
+    {
+        // Writing to a file with unsaved changes in the editor would leave Visual Studio with two versions of it.
+        if (EditTools.Contains(toolName) && this.Mode != AgentMode.Plan && this.FullPath(input) is string editPath)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (OpenDocuments.HasUnsavedChanges(editPath))
+            {
+                return new PermissionDecision(false,
+                    $"{this.Relative(editPath)} has unsaved changes in Visual Studio, so it wasn't changed. Ask the user to save or discard them, then read the file again.");
+            }
+        }
+
         if (this.editsPreApproved && EditTools.Contains(toolName) && this.Mode != AgentMode.Plan)
         {
             return new PermissionDecision(true);
@@ -505,6 +653,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             FileChange? change = isEdit && this.FullPath(input) is string path
                 ? FileChange.ForClaudeCodeTool(toolName, input, path, FileChange.ReadOrEmpty(path))
                 : null;
+            WithDiff(toolName, change, ref kind, ref detail);
             string? rule = command is null ? null : CommandRules.RuleFor(command, viaShell: true);
             string? allowAllLabel = isEdit ? "Allow all edits" : rule != null ? $"Always allow \"{rule}\" here" : null;
 
@@ -590,7 +739,8 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     };
 
     /// <summary>How a completed tool call is shown in the transcript.</summary>
-    private (ActivityKind Kind, string Title, string Detail) Describe(string tool, JsonElement input, string result, bool isError)
+    /// <param name="denied">True if the extension refused this call when Claude Code asked permission.</param>
+    private (ActivityKind Kind, string Title, string Detail) Describe(string tool, JsonElement input, string result, bool isError, bool denied)
     {
         (ActivityKind kind, string title, string detail) = tool switch
         {
@@ -612,9 +762,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
         if (isError)
         {
-            bool declined = result.IndexOf("declined", StringComparison.OrdinalIgnoreCase) >= 0
-                || result.IndexOf("denied", StringComparison.OrdinalIgnoreCase) >= 0
-                || result.IndexOf("cancelled", StringComparison.OrdinalIgnoreCase) >= 0;
+            // Without the call's ID (older Claude Code), go by the wording of the refusals: the extension's own, and
+            // Claude Code's for permission rules. A plain "denied" is usually an error, e.g. "Access denied".
+            bool declined = denied
+                || result.IndexOf("declined", StringComparison.OrdinalIgnoreCase) >= 0
+                || result.IndexOf("Cancelled by the user", StringComparison.OrdinalIgnoreCase) >= 0
+                || result.IndexOf("Permission to use", StringComparison.OrdinalIgnoreCase) >= 0;
             return (declined ? ActivityKind.Declined : ActivityKind.Failed, title, result);
         }
 
@@ -675,6 +828,21 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         }
 
         return new PlanLimit(window, utilization, resetsAt, Str(info, "status") ?? "allowed", DateTimeOffset.Now);
+    }
+
+    /// <summary>
+    /// When the whole file before and after is known, shows the edit as a diff with context instead of the tool's
+    /// old and new strings. A new file stays as its contents.
+    /// </summary>
+    private static void WithDiff(string tool, FileChange? change, ref ActivityKind kind, ref string detail)
+    {
+        if (change is null || (tool == "Write" && change.Before.Length == 0))
+        {
+            return;
+        }
+
+        kind = ActivityKind.Edit;
+        detail = UnifiedDiff.Create(change.Before, change.After);
     }
 
     private static string EditDiff(JsonElement input) => Diff(Str(input, "old_string") ?? string.Empty, Str(input, "new_string") ?? string.Empty);
