@@ -11,6 +11,7 @@ using System.Windows.Threading;
 using ClaudeForVS.Agent;
 using ClaudeForVS.Git;
 using ClaudeForVS.Markdown;
+using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeForVS.ToolWindows;
@@ -74,6 +75,15 @@ public partial class ClaudeChatControl : UserControl
             }
         };
         MarkdownRenderer.IsDarkTheme = this.IsDarkTheme;
+
+        // Theme colours follow a theme change by themselves, but code blocks are coloured for a light or dark theme when
+        // they're rendered. Redraw them once the new theme's resources are in place. The pane lives as long as Visual
+        // Studio, so this subscription never needs removing.
+        VSColorTheme.ThemeChanged += _ => package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await package.JoinableTaskFactory.SwitchToMainThreadAsync(alwaysYield: true);
+            this.OnThemeChanged();
+        }).Task.FileAndForget("ClaudeForVS/ThemeChanged");
 
         this.InitializeComposer();
         this.InitializeFind();
@@ -220,6 +230,23 @@ public partial class ClaudeChatControl : UserControl
         }
 
         return this.viewModel.FindRepoFile(path);
+    }
+
+    private void OnThemeChanged()
+    {
+        this.ClearFindSelection(); // rendering replaces the documents the selection was in
+        foreach (MarkdownView view in this.MessageViews())
+        {
+            view.Rerender();
+        }
+
+        // Put the find highlight back, in the new theme's colour.
+        if (this.FindBar.Visibility == Visibility.Visible && this.currentMatch is (int matchView, int offset))
+        {
+            this.UpdateLayout();
+            this.currentMatch = (matchView, offset - 1);
+            this.FindStep(forward: true);
+        }
     }
 
     private bool IsDarkTheme()

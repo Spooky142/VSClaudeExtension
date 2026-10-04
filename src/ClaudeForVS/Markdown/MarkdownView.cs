@@ -62,6 +62,9 @@ internal sealed class MarkdownView : RichTextBox
         }
     }
 
+    /// <summary>Renders the Markdown again now, e.g. after the theme changes the code colours.</summary>
+    public void Rerender() => this.Render();
+
     private void Render()
     {
         this.timer.Stop();
