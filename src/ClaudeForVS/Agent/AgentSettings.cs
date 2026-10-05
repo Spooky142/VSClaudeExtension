@@ -82,6 +82,12 @@ internal sealed record AgentSettings
     /// </summary>
     public double SpendLimitUsd { get; init; }
 
+    /// <summary>
+    /// After Claude changes C# or Visual Basic code, format the lines it wrote with the user's editor settings
+    /// (.editorconfig), so they match the rest of the file.
+    /// </summary>
+    public bool FormatChangedFiles { get; init; } = true;
+
     public static AgentSettings Load()
     {
         try

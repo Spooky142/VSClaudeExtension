@@ -19,6 +19,7 @@ internal sealed record AllowedRule(string Rule, string Display)
         rule.StartsWith("hooks:", StringComparison.Ordinal) ? "Run this repository's hooks (trusted until they change)"
         : rule == "build_solution" ? "Build the solution in Visual Studio"
         : rule == "run_tests" ? "Run tests"
+        : rule == PackageTools.RuleKey ? "Add, change and remove NuGet packages"
         : rule.StartsWith("mcp__", StringComparison.Ordinal) ? "MCP tool: " + rule.Substring(5).Replace("__", " · ")
         : rule;
 }
@@ -61,6 +62,7 @@ public partial class SettingsDialog : DialogWindow
         (settings.Mode switch { AgentMode.Auto => this.ModeAuto, AgentMode.Plan => this.ModePlan, _ => this.ModeCoding }).IsChecked = true;
         this.RepoBox.Text = repoPath;
         this.RunHooksBox.IsChecked = settings.RunHooks;
+        this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
         this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.UpdateRepoHint();
         this.UpdateAllowedCommands();
@@ -370,6 +372,7 @@ public partial class SettingsDialog : DialogWindow
             Mode = this.SelectedMode,
             PinnedRepoPath = follows ? null : root ?? text,
             RunHooks = this.RunHooksBox.IsChecked == true,
+            FormatChangedFiles = this.FormatChangedBox.IsChecked == true,
             SpendLimitUsd = double.TryParse(this.SpendLimitBox.Text.Trim().TrimStart('$'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out double limit) && limit > 0 ? limit : 0,
         };
         this.ResultRepoPath = text.Length == 0 ? this.SolutionRepoRoot() ?? string.Empty : root ?? text;

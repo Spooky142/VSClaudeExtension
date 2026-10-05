@@ -44,6 +44,7 @@ public partial class ClaudeChatControl : UserControl
             this.Transcript.ScrollToEnd();
         };
         this.viewModel.EditRequested += (_, text) => this.SetPromptText(text);
+        this.viewModel.PropertyChanged += (_, e) => this.ShowWorkInStatusBar(e.PropertyName);
         this.viewModel.AttentionNeeded += (_, message) =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -292,6 +293,25 @@ public partial class ClaudeChatControl : UserControl
             this.SendPrompt();
         }
     }
+
+    // Claude's work in this chat as a task in Visual Studio's status bar, from when it starts until it's done.
+    private WorkStatus? work;
+
+    private void ShowWorkInStatusBar(string? property)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (property == nameof(ClaudeChatViewModel.IsBusy))
+        {
+            this.work?.Dispose();
+            this.work = this.viewModel.IsBusy ? WorkStatus.Begin(this.package, "Claude", WorkText(string.Empty), this.viewModel.Stop) : null; // not the last run's leftover status
+        }
+        else if (property == nameof(ClaudeChatViewModel.Status))
+        {
+            this.work?.Update(WorkText(this.viewModel.Status));
+        }
+    }
+
+    private static string WorkText(string status) => status.Length > 0 ? status : "Working…";
 
     private void RefreshEditorContext()
     {

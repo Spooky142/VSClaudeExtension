@@ -43,6 +43,18 @@ internal sealed partial class ClaudeAgent
         return list;
     }
 
+    /// <summary>The input of a tool that points at a symbol: a file, a line and the name written on it.</summary>
+    private static InputSchema SymbolSite() => new()
+    {
+        Properties = new Dictionary<string, JsonElement>
+        {
+            ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "A file in the repository that mentions the symbol, relative to the repository root." }),
+            ["line"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "The line (1-based) where the symbol appears in that file." }),
+            ["symbol"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The symbol's name as written on that line, e.g. \"GetTotal\"." }),
+        },
+        Required = ["path", "line", "symbol"],
+    };
+
     private static readonly List<ToolUnion> CoreTools =
     [
         new Tool
@@ -141,6 +153,134 @@ internal sealed partial class ClaudeAgent
                 "including C++ and older .NET Framework projects that `dotnet build` can't. The user approves each build " +
                 "unless they've allowed builds already.",
             InputSchema = new() { Properties = new Dictionary<string, JsonElement>() },
+        },
+        new Tool
+        {
+            Name = "go_to_definition",
+            Description =
+                "Find where a symbol is declared, using Visual Studio's code model (Roslyn) for C# and Visual Basic: it " +
+                "understands overloads, namespaces and inheritance, which a text search doesn't. Point at the symbol with " +
+                "a file, a line and the name as written on that line, e.g. the method name in a call. Returns what it is " +
+                "(its kind and signature), where it's declared (file and line) and its documentation summary; symbols from " +
+                "libraries are reported as compiled code without a location.",
+            InputSchema = SymbolSite(),
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "find_references",
+            Description =
+                "List every line that refers to a symbol, across the whole solution, using Visual Studio's code model " +
+                "(Roslyn): usages of this exact method, property or type, not other things that happen to share its name. " +
+                "Point at the symbol with a file, a line and the name as written on that line. Use it before changing a " +
+                "signature or deleting code to see what depends on it.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "A file in the repository that mentions the symbol, relative to the repository root." }),
+                    ["line"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "The line (1-based) where the symbol appears in that file." }),
+                    ["symbol"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The symbol's name as written on that line, e.g. \"GetTotal\"." }),
+                    ["max_results"] = JsonSerializer.SerializeToElement(new { type = "integer", description = $"Most lines to list. Default {CodeTools.DefaultResults}, max {CodeTools.MaxResults}." }),
+                },
+                Required = ["path", "line", "symbol"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "find_symbols",
+            Description =
+                "Search the solution's declarations by name using Visual Studio's code model (Roslyn), like Go To All: " +
+                "types, methods, properties, fields and events whose names match `query` (fuzzy, e.g. \"OrdSvc\" finds " +
+                "OrderService). Or give a `path` without a query to list the types and members declared in one file, with " +
+                "their line numbers, as an outline.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["query"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Part of the name to search for." }),
+                    ["kind"] = JsonSerializer.SerializeToElement(new { type = "string", @enum = new[] { "any", "type", "method", "property", "field", "event" }, description = "Only this kind of symbol. Default any." }),
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Without a query: the file to outline, relative to the repository root." }),
+                    ["max_results"] = JsonSerializer.SerializeToElement(new { type = "integer", description = $"Most symbols to list. Default {CodeTools.DefaultResults}, max {CodeTools.MaxResults}." }),
+                },
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "rename_symbol",
+            Description =
+                "Rename a symbol everywhere it's used, using Visual Studio's code model (Roslyn), so overloads, " +
+                "interface implementations and references in other files are updated and unrelated names aren't touched. " +
+                "Prefer it to editing each file when renaming a type, method, property, field or variable. Point at the " +
+                "symbol with a file, a line and the name as written on that line. The user approves the changes to every " +
+                "file at once. Check the result with get_diagnostics afterwards.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "A file in the repository that mentions the symbol, relative to the repository root." }),
+                    ["line"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "The line (1-based) where the symbol appears in that file." }),
+                    ["symbol"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The symbol's current name as written on that line." }),
+                    ["new_name"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The new name: an identifier, without a namespace or type in front." }),
+                },
+                Required = ["path", "line", "symbol", "new_name"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "list_packages",
+            Description =
+                "List the NuGet packages each project in the solution open in Visual Studio references directly, with " +
+                "versions. Use it before adding or removing a package, and to see which projects there are.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["project"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Only this project. Default: all of them." }),
+                },
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "add_package",
+            Description =
+                "Add a NuGet package to a project, or change the version of one it already references, through Visual " +
+                "Studio's NuGet so the project is restored the way the Manage NuGet Packages window does it. Prefer it to " +
+                "editing the project file by hand or running `dotnet add package`. Leave the version out for the latest " +
+                "stable release. The user approves each change unless they've allowed package changes already. Check the " +
+                "result with build_solution or get_diagnostics.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["project"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The project's name in the solution (see list_packages)." }),
+                    ["package"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The NuGet package ID, e.g. \"Newtonsoft.Json\"." }),
+                    ["version"] = JsonSerializer.SerializeToElement(new { type = "string", description = "An exact version, e.g. \"13.0.3\". Default: the latest stable release." }),
+                },
+                Required = ["project", "package"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "remove_package",
+            Description =
+                "Remove a NuGet package from a project through Visual Studio's NuGet. The user approves each change " +
+                "unless they've allowed package changes already. Check the result with build_solution or get_diagnostics.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["project"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The project's name in the solution (see list_packages)." }),
+                    ["package"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The NuGet package ID to remove." }),
+                },
+                Required = ["project", "package"],
+            },
+            EagerInputStreaming = true,
         },
         new Tool
         {

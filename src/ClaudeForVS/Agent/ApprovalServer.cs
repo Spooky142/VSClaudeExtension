@@ -30,6 +30,20 @@ internal sealed class ApprovalServer : IDisposable
 
     public const string DebugTool = "mcp__" + ServerName + "__get_debug_state";
 
+    public const string DefinitionTool = "mcp__" + ServerName + "__go_to_definition";
+
+    public const string ReferencesTool = "mcp__" + ServerName + "__find_references";
+
+    public const string SymbolsTool = "mcp__" + ServerName + "__find_symbols";
+
+    public const string RenameTool = "mcp__" + ServerName + "__rename_symbol";
+
+    public const string ListPackagesTool = "mcp__" + ServerName + "__list_packages";
+
+    public const string AddPackageTool = "mcp__" + ServerName + "__add_package";
+
+    public const string RemovePackageTool = "mcp__" + ServerName + "__remove_package";
+
     private readonly HttpListener listener;
     private readonly Func<string, JsonElement, string?, Task<PermissionDecision>> decide;
     private readonly Func<string, JsonElement, Task<(string Text, bool IsError)>> runTool;
@@ -280,5 +294,128 @@ internal static class VisualStudioTools
             },
             ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
         },
+        new JsonObject
+        {
+            ["name"] = "go_to_definition",
+            ["description"] =
+                "Find where a symbol is declared, using Visual Studio's code model (Roslyn) for C# and Visual Basic: it understands overloads, " +
+                "namespaces and inheritance, which a text search doesn't. Point at the symbol with a file, a line and the name as written on that " +
+                "line. Returns the symbol's kind and signature, where it's declared (file and line) and its documentation summary.",
+            ["inputSchema"] = SymbolSchema(),
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "find_references",
+            ["description"] =
+                "List every line that refers to a symbol across the whole solution, using Visual Studio's code model (Roslyn): usages of this exact " +
+                "method, property or type, not other things that share its name. Use it before changing a signature or deleting code.",
+            ["inputSchema"] = SymbolSchema(withLimit: true),
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "find_symbols",
+            ["description"] =
+                "Search the solution's declarations by name using Visual Studio's code model (Roslyn), like Go To All: types, methods, properties, " +
+                "fields and events whose names match `query` (fuzzy). Or give a `path` without a query to list the types and members declared in one file.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Part of the name to search for." },
+                    ["kind"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("any", "type", "method", "property", "field", "event") },
+                    ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Without a query: the file to outline, relative to the repository root." },
+                    ["max_results"] = new JsonObject { ["type"] = "integer" },
+                },
+            },
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "rename_symbol",
+            ["description"] =
+                "Rename a symbol everywhere it's used, using Visual Studio's code model (Roslyn): overloads, interface implementations and references " +
+                "in other files are updated and unrelated names aren't touched. Prefer it to editing each file when renaming. Point at the symbol with a " +
+                "file, a line and the name as written on that line. The user approves the changes to every file at once.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["path"] = new JsonObject { ["type"] = "string", ["description"] = "A file that mentions the symbol, relative to the repository root." },
+                    ["line"] = new JsonObject { ["type"] = "integer", ["description"] = "The line (1-based) where the symbol appears." },
+                    ["symbol"] = new JsonObject { ["type"] = "string", ["description"] = "The symbol's current name as written on that line." },
+                    ["new_name"] = new JsonObject { ["type"] = "string", ["description"] = "The new name: an identifier." },
+                },
+                ["required"] = new JsonArray("path", "line", "symbol", "new_name"),
+            },
+        },
+        new JsonObject
+        {
+            ["name"] = "list_packages",
+            ["description"] = "List the NuGet packages each project in the solution open in Visual Studio references directly, with versions.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["project"] = new JsonObject { ["type"] = "string", ["description"] = "Only this project. Default: all of them." },
+                },
+            },
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "add_package",
+            ["description"] =
+                "Add a NuGet package to a project, or change the version of one it already references, through Visual Studio's NuGet so the project is " +
+                "restored the way the Manage NuGet Packages window does it. Prefer it to editing the project file or running `dotnet add package`. " +
+                "Leave the version out for the latest stable release.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["project"] = new JsonObject { ["type"] = "string", ["description"] = "The project's name in the solution (see list_packages)." },
+                    ["package"] = new JsonObject { ["type"] = "string", ["description"] = "The NuGet package ID, e.g. \"Newtonsoft.Json\"." },
+                    ["version"] = new JsonObject { ["type"] = "string", ["description"] = "An exact version. Default: the latest stable release." },
+                },
+                ["required"] = new JsonArray("project", "package"),
+            },
+        },
+        new JsonObject
+        {
+            ["name"] = "remove_package",
+            ["description"] = "Remove a NuGet package from a project through Visual Studio's NuGet.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["project"] = new JsonObject { ["type"] = "string", ["description"] = "The project's name in the solution (see list_packages)." },
+                    ["package"] = new JsonObject { ["type"] = "string", ["description"] = "The NuGet package ID to remove." },
+                },
+                ["required"] = new JsonArray("project", "package"),
+            },
+        },
     ];
+
+    /// <summary>The input of a tool that points at a symbol: a file, a line and the name written on it.</summary>
+    private static JsonObject SymbolSchema(bool withLimit = false)
+    {
+        var properties = new JsonObject
+        {
+            ["path"] = new JsonObject { ["type"] = "string", ["description"] = "A file that mentions the symbol, relative to the repository root." },
+            ["line"] = new JsonObject { ["type"] = "integer", ["description"] = "The line (1-based) where the symbol appears." },
+            ["symbol"] = new JsonObject { ["type"] = "string", ["description"] = "The symbol's name as written on that line, e.g. \"GetTotal\"." },
+        };
+        if (withLimit)
+        {
+            properties["max_results"] = new JsonObject { ["type"] = "integer", ["description"] = "Most lines to list. Default 100." };
+        }
+
+        return new JsonObject { ["type"] = "object", ["properties"] = properties, ["required"] = new JsonArray("path", "line", "symbol") };
+    }
 }

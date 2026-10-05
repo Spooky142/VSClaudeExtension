@@ -716,6 +716,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     private async Task RunAsync(IChatEngine runEngine, Func<CancellationToken, Task> work, ChatEntry? prompt)
     {
         this.IsBusy = true;
+        this.runChanges.Clear();
         this.promptTokens = default;
         this.SetLiveTokens(0);
         this.promptCost = 0;
@@ -777,6 +778,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
             if (prompt?.SnapshotBefore != null)
             {
+                await this.FormatChangedFilesAsync(runEngine, usageEntry); // before the snapshot, so the diff shows the files as they were left
                 prompt.SnapshotAfter = await WorkingTreeSnapshot.CaptureAsync(runEngine.RepoRoot, CancellationToken.None);
                 await this.ShowChangedFilesAsync(runEngine.RepoRoot, prompt, usageEntry);
             }
@@ -820,8 +822,59 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.currentThinking.Append(text);
     }
 
+    // The files this prompt's tools changed, in order, so the code Claude wrote can be formatted when it's done.
+    private readonly List<FileChange> runChanges = [];
+
+    /// <summary>
+    /// Formats the lines Claude wrote in the files it changed (see <see cref="ChangeFormatter"/>) and says so in the
+    /// transcript. Never fails the run: if formatting can't be done the files stay as Claude left them.
+    /// </summary>
+    private async Task FormatChangedFilesAsync(IChatEngine runEngine, ChatEntry? usageEntry)
+    {
+        if (!this.settings.FormatChangedFiles || runEngine.Mode == AgentMode.Plan || this.runChanges.Count == 0 || CodeIntelligenceHost.Current is not ICodeIntelligence code)
+        {
+            return;
+        }
+
+        string status = this.Status; // e.g. "Done in 12s", which formatting shouldn't wipe
+        try
+        {
+            this.Status = "Formatting the changed code…";
+            IReadOnlyList<string> formatted = await ChangeFormatter.FormatAsync(this.runChanges.ToList(), runEngine.RepoRoot, code, OpenDocuments.HasUnsavedChanges, CancellationToken.None);
+            if (formatted.Count == 0)
+            {
+                return;
+            }
+
+            string names = formatted.Count <= 3 ? string.Join(", ", formatted.Select(Path.GetFileName)) : $"{formatted.Count} files";
+            var notice = new ChatEntry(ChatEntryKind.Notice, $"Formatted the code Claude wrote to match your editor settings ({names})");
+            int at = usageEntry is null ? -1 : this.Messages.IndexOf(usageEntry);
+            if (at >= 0)
+            {
+                this.Messages.Insert(at, notice);
+            }
+            else
+            {
+                this.Messages.Add(notice);
+            }
+        }
+        catch (Exception ex) when (ex is ToolInputException or IOException or UnauthorizedAccessException or InvalidOperationException or MissingMemberException or TypeLoadException)
+        {
+            // Formatting is a courtesy; the files are as Claude left them.
+        }
+        finally
+        {
+            this.Status = status;
+        }
+    }
+
     void IChatSink.ToolActivity(ActivityKind kind, string title, string detail, FileChange? change)
     {
+        if (change != null && (kind is ActivityKind.Edit or ActivityKind.Create))
+        {
+            this.runChanges.Add(change);
+        }
+
         this.currentAssistant = null;
         this.currentThinking = null;
         this.Messages.Add(new ChatEntry(ChatEntryKind.Tool, title, detail: Truncate(detail), activity: kind, change: change));

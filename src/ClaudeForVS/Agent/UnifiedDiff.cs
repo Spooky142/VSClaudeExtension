@@ -84,6 +84,42 @@ internal static class UnifiedDiff
         return sb.ToString().TrimEnd('\n');
     }
 
+    /// <summary>
+    /// The runs of lines (1-based, inclusive) in <paramref name="after"/> that were added or changed. A change that only
+    /// removes lines leaves nothing to point at, so it isn't reported.
+    /// </summary>
+    public static IReadOnlyList<(int Start, int End)> ChangedLines(string before, string after)
+    {
+        var ranges = new List<(int Start, int End)>();
+        int line = 0;
+        int? start = null;
+        foreach ((char op, _) in Diff(Lines(before), Lines(after)))
+        {
+            if (op == '-')
+            {
+                continue;
+            }
+
+            line++;
+            if (op == '+')
+            {
+                start ??= line;
+            }
+            else if (start is int first)
+            {
+                ranges.Add((first, line - 1));
+                start = null;
+            }
+        }
+
+        if (start is int last)
+        {
+            ranges.Add((last, line));
+        }
+
+        return ranges;
+    }
+
     private static string[] Lines(string text)
     {
         if (text.Length == 0)

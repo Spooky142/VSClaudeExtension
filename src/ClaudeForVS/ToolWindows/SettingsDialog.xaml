@@ -147,6 +147,13 @@
       <TextBlock x:Name="RepoHint" Style="{StaticResource CardNote}" Margin="0" />
     </DockPanel>
 
+    <!-- Tidying what Claude writes (both engines) -->
+    <TextBlock Style="{StaticResource SectionTitle}" Text="Code style" />
+    <CheckBox x:Name="FormatChangedBox" Content="Format the code Claude writes to match my editor settings"
+              AutomationProperties.Name="Format the code Claude writes to match my editor settings" />
+    <TextBlock Style="{StaticResource CardNote}" Margin="22,2,0,0"
+               Text="When Claude finishes a reply, the lines it changed in C# and Visual Basic files are formatted by Visual Studio's formatter using your .editorconfig. Lines it didn't touch, and files with unsaved changes, are left as they are." />
+
     <!-- Commands remembered with "Always allow" on the approval card, for the repository above -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Always-allowed commands" />
     <ItemsControl x:Name="AllowedCommandsList">

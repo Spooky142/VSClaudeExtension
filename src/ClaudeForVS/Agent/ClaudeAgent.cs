@@ -122,6 +122,13 @@ internal sealed partial class ClaudeAgent : IChatEngine
               open files. Check it after changing code. `build_solution` builds the open solution in Visual Studio, which
               also works for projects `dotnet build` can't handle (C++, older .NET Framework, solutions that need
               Visual Studio's MSBuild); the user approves builds.
+            - `go_to_definition`, `find_references` and `find_symbols` use Visual Studio's code model (Roslyn) for C#
+              and Visual Basic, which knows what a name really refers to; prefer them to `grep` for questions like
+              "where is this declared" or "what calls this". `rename_symbol` renames a symbol everywhere with one
+              approval; prefer it to editing each file by hand.
+            - `list_packages`, `add_package` and `remove_package` manage NuGet packages through Visual Studio, so the
+              project is restored; prefer them to editing a project file or running `dotnet add package`. The user
+              approves package changes.
             - `task` hands a research job to a subagent with its own conversation, which reads and searches and comes
               back with one report. Use it for broad exploration so the files it reads don't fill your context; call it
               several times in one response to explore in parallel.

@@ -16,7 +16,7 @@ The package is written to `src/ClaudeForVS/bin/Release/net48/ClaudeForVS.vsix`. 
 dotnet test tests\ClaudeForVS.Tests -c Release
 ```
 
-xUnit tests for the logic that doesn't need Visual Studio (parsing, Claude Code's stream output, slash and custom commands, highlighting, prompt composition, export, command rules, git's read-only check, the file sandbox and encodings, CLAUDE.md loading, `run_command`, `glob`/`grep`, web results, settings.json permission rules, MCP configuration, partial edits, Error List formatting, task lists, commit messages, hooks, TRX results, the debugger report), the Claude API engine's tool loop against a fake Messages API on localhost, plus git-backed tests for the undo snapshots and diff stats, which need git on PATH. All tests should pass.
+xUnit tests for the logic that doesn't need Visual Studio (parsing, Claude Code's stream output, slash and custom commands, highlighting, prompt composition, export, command rules, git's read-only check, the file sandbox and encodings, CLAUDE.md loading, `run_command`, `glob`/`grep`, web results, settings.json permission rules, MCP configuration, partial edits, Error List formatting, task lists, commit messages, hooks, TRX results, the debugger report, the Roslyn code tools against an in-memory workspace, NuGet package tools and project-file reading, formatting the lines Claude wrote), the Claude API engine's tool loop against a fake Messages API on localhost, plus git-backed tests for the undo snapshots and diff stats, which need git on PATH. All tests should pass.
 
 ## Versioning
 

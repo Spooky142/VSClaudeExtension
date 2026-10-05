@@ -26,7 +26,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         "The " + ApprovalServer.DiagnosticsTool + " tool lists Visual Studio's Error List (build errors and live IntelliSense errors in open files); " +
         "check it after changing code. " + ApprovalServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
         "projects `dotnet build` can't build. " + ApprovalServer.DebugTool + " reads Visual Studio's debugger (the exception, call stack and locals when the " +
-        "user has paused at a breakpoint or exception). The user may approve only some of the changes in an edit; you're then told what was left out.";
+        "user has paused at a breakpoint or exception). " + ApprovalServer.DefinitionTool + ", " + ApprovalServer.ReferencesTool + " and " + ApprovalServer.SymbolsTool +
+        " use Visual Studio's code model (Roslyn) for C# and Visual Basic, which knows what a name really refers to; prefer them to grep for " +
+        "\"where is this declared\" or \"what calls this\", and " + ApprovalServer.RenameTool + " to rename a symbol everywhere with one approval. " +
+        ApprovalServer.ListPackagesTool + ", " + ApprovalServer.AddPackageTool + " and " + ApprovalServer.RemovePackageTool + " manage NuGet packages " +
+        "through Visual Studio so the project is restored; prefer them to editing a project file or `dotnet add package`. " +
+        "The user may approve only some of the changes in an edit; you're then told what was left out.";
 
     private static readonly TimeSpan PlanUsagePollInterval = TimeSpan.FromSeconds(15);
 
@@ -647,17 +652,115 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 DebugState state = await vs.GetDebugStateAsync(cancellationToken).ConfigureAwait(false);
                 return (DebugReport.Format(state, this.RepoRoot, input.ValueKind == JsonValueKind.Object && input.TryGetProperty("frames", out JsonElement framesEl) && framesEl.TryGetInt32(out int frames) ? frames : DebugReport.DefaultFrames), false);
 
+            case "go_to_definition":
+                return (await CodeTools.GoToDefinitionAsync(CodeTools.ToDictionary(input), new RepoFiles(this.RepoRoot), this.RepoRoot, _ => true, cancellationToken).ConfigureAwait(false), false);
+
+            case "find_references":
+                return (await CodeTools.FindReferencesAsync(CodeTools.ToDictionary(input), new RepoFiles(this.RepoRoot), this.RepoRoot, _ => true, cancellationToken).ConfigureAwait(false), false);
+
+            case "find_symbols":
+                return (await CodeTools.FindSymbolsAsync(CodeTools.ToDictionary(input), new RepoFiles(this.RepoRoot), this.RepoRoot, _ => true, cancellationToken).ConfigureAwait(false), false);
+
+            case "rename_symbol":
+                return await this.RenameSymbolAsync(CodeTools.ToDictionary(input), cancellationToken).ConfigureAwait(false);
+
+            case "list_packages":
+                return (await PackageTools.ListAsync(CodeTools.ToDictionary(input), this.RepoRoot, cancellationToken).ConfigureAwait(false), false);
+
+            case "add_package":
+                return (await PackageTools.AddAsync(PackageTools.Parse(CodeTools.ToDictionary(input), withVersion: true), cancellationToken).ConfigureAwait(false), false);
+
+            case "remove_package":
+                return (await PackageTools.RemoveAsync(PackageTools.Parse(CodeTools.ToDictionary(input), withVersion: false), cancellationToken).ConfigureAwait(false), false);
+
             default:
                 return ($"Unknown tool: {name}", true);
         }
     }
 
+    /// <summary>
+    /// rename_symbol for Claude Code: works the rename out, shows every file's changes in one approval, then writes them.
+    /// (The permission prompt lets the tool through, as only now are the changes known.)
+    /// </summary>
+    private async Task<(string Text, bool IsError)> RenameSymbolAsync(IReadOnlyDictionary<string, JsonElement> input, CancellationToken cancellationToken)
+    {
+        var repoFiles = new RepoFiles(this.RepoRoot);
+        RenamePlan plan = await CodeTools.PlanRenameAsync(input, repoFiles, this.RepoRoot, cancellationToken).ConfigureAwait(false);
+        string title = CodeTools.Title(plan);
+        IChatSink? chatSink = this.sink;
+
+        if (this.Mode != AgentMode.Auto && !this.editsPreApproved)
+        {
+            if (chatSink is null)
+            {
+                return ("No one is available to approve this.", true);
+            }
+
+            await this.approvalGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+                chatSink.SetStatus("Waiting for your approval…");
+                ApprovalResult result = await chatSink.RequestApprovalAsync(ActivityKind.Edit, title, CodeTools.Describe(plan, this.RepoRoot), "Allow all edits", cancellationToken);
+                if (result.Decision == Approval.Deny)
+                {
+                    return ("The user declined this rename. Don't retry it; ask what they'd like instead.", true);
+                }
+
+                if (result.Decision == Approval.AllowAll)
+                {
+                    this.editsPreApproved = true;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return ("Cancelled by the user.", true);
+            }
+            finally
+            {
+                this.approvalGate.Release();
+            }
+        }
+
+        // Writing checks for unsaved editor changes, which Visual Studio only answers on its main thread.
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        IReadOnlyList<FileChange> changes = CodeTools.ApplyRename(plan, repoFiles, this.RepoRoot);
+        foreach (FileChange change in changes)
+        {
+            chatSink?.ToolActivity(ActivityKind.Edit, $"Renamed in {this.Relative(change.FullPath)}", UnifiedDiff.Create(change.Before, change.After), change);
+        }
+
+        return ($"Renamed {plan.Symbol} to {plan.NewName} in {string.Join(", ", changes.Select(c => this.Relative(c.FullPath)))}. Check the result with get_diagnostics or build_solution.", false);
+    }
+
+    /// <summary>The approval card's title for add_package or remove_package.</summary>
+    private static string PackageTitle(JsonElement input, bool remove)
+    {
+        try
+        {
+            return PackageTools.Title(PackageTools.Parse(CodeTools.ToDictionary(input), withVersion: !remove), remove);
+        }
+        catch (ToolInputException)
+        {
+            return remove ? "Remove a NuGet package" : "Add a NuGet package";
+        }
+    }
+
     private async Task<PermissionDecision> DecideCoreAsync(string toolName, JsonElement input, string? toolUseId)
     {
-        // Reading the Error List never needs asking; a build is treated like a command.
-        if (toolName is ApprovalServer.DiagnosticsTool or ApprovalServer.DebugTool)
+        // Reading the Error List, the debugger, the code model or the package list never needs asking; a build is treated like a command.
+        if (toolName is ApprovalServer.DiagnosticsTool or ApprovalServer.DebugTool or ApprovalServer.DefinitionTool or ApprovalServer.ReferencesTool
+            or ApprovalServer.SymbolsTool or ApprovalServer.ListPackagesTool)
         {
             return new PermissionDecision(true);
+        }
+
+        // A rename asks for approval itself, once its changes are known and shown together.
+        if (toolName == ApprovalServer.RenameTool)
+        {
+            return this.Mode == AgentMode.Plan
+                ? new PermissionDecision(false, "Plan mode is on, so nothing can be renamed. Describe the rename as text instead; the user can switch modes in Settings.")
+                : new PermissionDecision(true);
         }
 
         if (toolName == ApprovalServer.BuildTool)
@@ -668,6 +771,19 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             }
 
             if (this.Mode == AgentMode.Auto || CommandRules.IsToolAllowed(this.RepoRoot, "build_solution"))
+            {
+                return new PermissionDecision(true);
+            }
+        }
+
+        if (toolName is ApprovalServer.AddPackageTool or ApprovalServer.RemovePackageTool)
+        {
+            if (this.Mode == AgentMode.Plan)
+            {
+                return new PermissionDecision(false, "Plan mode is on, so packages can't be changed. The user can switch modes in Settings.");
+            }
+
+            if (this.Mode == AgentMode.Auto || CommandRules.IsToolAllowed(this.RepoRoot, PackageTools.RuleKey))
             {
                 return new PermissionDecision(true);
             }
@@ -728,8 +844,9 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 : null;
             WithDiff(toolName, change, ref kind, ref detail);
             bool isBuild = toolName == ApprovalServer.BuildTool;
+            bool isPackage = toolName is ApprovalServer.AddPackageTool or ApprovalServer.RemovePackageTool;
             string? rule = command is null ? null : CommandRules.RuleFor(command, viaShell: true);
-            string? allowAllLabel = isEdit ? "Allow all edits" : isBuild ? "Always allow builds here" : rule != null ? $"Always allow \"{rule}\" here" : null;
+            string? allowAllLabel = isEdit ? "Allow all edits" : isBuild ? "Always allow builds here" : isPackage ? "Always allow package changes here" : rule != null ? $"Always allow \"{rule}\" here" : null;
 
             // Only some of an edit can be kept if the extension can write the file itself: a text file inside the repository.
             bool canKeepSome = change != null && toolName != "NotebookEdit" && this.InsideRepo(change.FullPath);
@@ -747,6 +864,10 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             else if (approval == Approval.AllowAll && isBuild)
             {
                 CommandRules.Allow(this.RepoRoot, "build_solution");
+            }
+            else if (approval == Approval.AllowAll && isPackage)
+            {
+                CommandRules.Allow(this.RepoRoot, PackageTools.RuleKey);
             }
             else if (approval == Approval.AllowAll && rule != null)
             {
@@ -854,6 +975,8 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     private (ActivityKind Kind, string Title, string Detail) DescribeRequest(string tool, JsonElement input) => tool switch
     {
         ApprovalServer.BuildTool => (ActivityKind.Shell, "Build the solution in Visual Studio", string.Empty),
+        ApprovalServer.AddPackageTool => (ActivityKind.Shell, PackageTitle(input, remove: false), string.Empty),
+        ApprovalServer.RemovePackageTool => (ActivityKind.Shell, PackageTitle(input, remove: true), string.Empty),
         "Bash" or "PowerShell" => (ActivityKind.Shell, $"Run: {Str(input, "command")}", Str(input, "description") ?? string.Empty),
         "Edit" => (ActivityKind.Edit, $"Edit {this.Relative(Str(input, "file_path"))}", EditDiff(input)),
         "MultiEdit" => (ActivityKind.Edit, $"Edit {this.Relative(Str(input, "file_path"))}", MultiEditDiff(input)),
@@ -884,6 +1007,13 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             ApprovalServer.DiagnosticsTool => (ActivityKind.Search, "Checked the Error List", result),
             ApprovalServer.DebugTool => (ActivityKind.Search, "Read the debugger's state", result),
             ApprovalServer.BuildTool => (result.StartsWith("Build succeeded", StringComparison.Ordinal) ? ActivityKind.Shell : ActivityKind.Failed, "Built the solution", result),
+            ApprovalServer.DefinitionTool => (ActivityKind.Search, $"Go to definition of {Str(input, "symbol")}", result),
+            ApprovalServer.ReferencesTool => (ActivityKind.Search, $"Find references to {Str(input, "symbol")}", result),
+            ApprovalServer.SymbolsTool => (ActivityKind.Search, Str(input, "query") is { Length: > 0 } query ? $"Find symbols matching {query}" : $"Find symbols in {Str(input, "path")}", result),
+            ApprovalServer.RenameTool => (ActivityKind.Edit, $"Rename {Str(input, "symbol")} to {Str(input, "new_name")}", result),
+            ApprovalServer.ListPackagesTool => (ActivityKind.Search, "Listed NuGet packages", result),
+            ApprovalServer.AddPackageTool => (ActivityKind.Shell, PackageTitle(input, remove: false), result),
+            ApprovalServer.RemovePackageTool => (ActivityKind.Shell, PackageTitle(input, remove: true), result),
             "AskUserQuestion" => (ActivityKind.Question, "Asked you " + QuestionCount(input), result),
             "Task" or "Agent" => (ActivityKind.Other, $"Subagent: {Str(input, "description") ?? "task"}", result),
             _ => (ActivityKind.Other, tool, result),

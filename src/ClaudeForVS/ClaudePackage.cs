@@ -1,9 +1,12 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using System.ComponentModel.Design;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using ClaudeForVS.ToolWindows;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
@@ -42,6 +45,74 @@ public sealed class ClaudePackage : AsyncPackage
     private IVsSolution? solution;
     private uint solutionEventsCookie;
 
+    /// <summary>The package, once it has loaded. The light bulb lives in an editor extension that can run before it has.</summary>
+    internal static ClaudePackage? Instance { get; private set; }
+
+    /// <summary>Loads the package if it isn't yet, and returns it (null if it couldn't be loaded).</summary>
+    internal static async System.Threading.Tasks.Task<ClaudePackage?> LoadAsync()
+    {
+        if (Instance is null)
+        {
+            object? shell = await AsyncServiceProvider.GlobalProvider.GetServiceAsync(typeof(SVsShell));
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (shell is IVsShell7 loader)
+            {
+                Guid package = new(PackageGuidString);
+                await loader.LoadPackageAsync(ref package);
+            }
+        }
+
+        return Instance;
+    }
+
+    /// <summary>
+    /// The light bulb's Claude actions. Fix attaches the errors and warnings on the line (from the Error List) and
+    /// asks Claude to fix them; the others attach the code and ask about it, as the editor's Claude menu does.
+    /// </summary>
+    internal void RunLightBulbAction(LightBulb.LightBulbAction action, LightBulb.LightBulbContext context)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var editor = new EditorContext(context.FilePath, context.StartLine, context.EndLine, context.Text);
+        IReadOnlyList<ErrorListItem> problems = action == LightBulb.LightBulbAction.Fix
+            ? this.Vs.GetAllDiagnostics()
+                .Where(i => i.Severity is "error" or "warning" && string.Equals(i.File, context.FilePath, StringComparison.OrdinalIgnoreCase)
+                    && i.Line >= context.CaretStartLine && i.Line <= context.CaretEndLine)
+                .ToList()
+            : [];
+
+        this.JoinableTaskFactory.RunAsync(async () =>
+        {
+            if (await this.ShowChatAsync() is not ClaudeChatControl chat)
+            {
+                return;
+            }
+
+            switch (action)
+            {
+                case LightBulb.LightBulbAction.Fix when problems.Count > 0:
+                    chat.AskAbout(editor, null);
+                    chat.FixErrors(problems);
+                    break;
+                case LightBulb.LightBulbAction.Fix:
+                    // The Error List had nothing for these lines (it can lag behind the squiggles).
+                    chat.AskAbout(editor, context.CaretStartLine == context.CaretEndLine
+                        ? $"Find and fix the problem on line {context.CaretStartLine}."
+                        : $"Find and fix the problems on lines {context.CaretStartLine}-{context.CaretEndLine}.");
+                    break;
+                case LightBulb.LightBulbAction.Explain:
+                    chat.AskAbout(editor, "Explain this code.");
+                    break;
+                case LightBulb.LightBulbAction.WriteTests:
+                    chat.AskAbout(editor, "Write unit tests for this code, following the conventions of the existing tests in this repository.");
+                    break;
+                case LightBulb.LightBulbAction.Document:
+                    chat.AskAbout(editor, "Add XML documentation comments to this code: a summary, and parameters, returns and exceptions where they apply. " +
+                        "Follow the style of the documentation elsewhere in this repository, and don't change the code itself.");
+                    break;
+            }
+        }).Task.FileAndForget("ClaudeForVS/LightBulbAction");
+    }
+
     /// <summary>The chat window used most recently. Commands from the editor, Error List and so on go to it.</summary>
     internal ClaudeChatControl? LastActiveChat { get; set; }
 
@@ -57,9 +128,15 @@ public sealed class ClaudePackage : AsyncPackage
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        Instance = this;
         this.Vs = new VsIntegration(this);
         Agent.OpenDocuments.HasUnsavedChanges = this.Vs.HasUnsavedChanges;
         Agent.VisualStudioHost.Current = this.Vs;
+        Agent.PackageHostRegistry.Current = new VsPackageHost(this);
+        if (await this.GetServiceAsync(typeof(SComponentModel)) is IComponentModel components)
+        {
+            Agent.CodeIntelligenceHost.Current = new VsCodeIntelligence(components);
+        }
 
         if (await this.GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService commands)
         {
@@ -336,3 +413,4 @@ public sealed class ClaudePackage : AsyncPackage
         }
     }
 }
+

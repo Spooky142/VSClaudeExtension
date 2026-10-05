@@ -64,7 +64,7 @@ internal sealed partial class ClaudeAgent
     /// <summary>Tools that only read and never ask the user anything, so they can run alongside each other.</summary>
     private bool CanRunInParallel(ToolUseBlockParam toolUse) => toolUse.Name switch
     {
-        "glob" or "grep" or "task" => true,
+        "glob" or "grep" or "task" or "go_to_definition" or "find_references" or "find_symbols" or "list_packages" => true,
 
         // Unless a permission rule says to ask first.
         "read_file" => !(toolUse.Input.TryGetValue("path", out JsonElement path) && path.ValueKind == JsonValueKind.String
@@ -114,6 +114,13 @@ internal sealed partial class ClaudeAgent
             "get_diagnostics" => this.GetDiagnosticsAsync(input, sink, cancellationToken),
             "build_solution" => this.BuildSolutionAsync(sink, cancellationToken),
             "get_debug_state" => this.GetDebugStateAsync(input, sink, cancellationToken),
+            "go_to_definition" => this.GoToDefinitionAsync(input, sink, cancellationToken),
+            "find_references" => this.FindReferencesAsync(input, sink, cancellationToken),
+            "find_symbols" => this.FindSymbolsAsync(input, sink, cancellationToken),
+            "rename_symbol" => this.RenameSymbolAsync(input, sink, cancellationToken),
+            "list_packages" => this.ListPackagesAsync(input, sink, cancellationToken),
+            "add_package" => this.AddPackageAsync(input, sink, cancellationToken),
+            "remove_package" => this.RemovePackageAsync(input, sink, cancellationToken),
             "task" => this.RunSubagentAsync(input, sink, cancellationToken),
             "todo_write" => Task.FromResult(WriteTodos(input, sink)),
             "ask_user" => AskUserAsync(toolUse.Input, sink, cancellationToken),
