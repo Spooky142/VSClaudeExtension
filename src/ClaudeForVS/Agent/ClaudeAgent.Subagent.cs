@@ -43,7 +43,7 @@ internal sealed partial class ClaudeAgent
         string prompt = RequireString(input, "prompt");
         string title = $"Subagent: {description}";
 
-        IChatSink inner = new SubagentSink(sink);
+        IChatSink inner = new SubagentSink(sink, description);
         List<ToolUnion> tools = (this.tools ?? BuiltInTools(this.permissions)).Where(t => ToolName(t) is string name && SubagentTools.Contains(name)).ToList();
         string system = this.systemPrompt + SubagentInstructions;
         var conversation = new List<MessageParam> { new() { Role = Role.User, Content = prompt } };
@@ -134,7 +134,7 @@ internal sealed partial class ClaudeAgent
     /// Stands in for the chat while a subagent works: its answer and reasoning stay out of the transcript (the report is
     /// shown when it's done), its tools show up marked as the subagent's, and its token use counts towards the chat's.
     /// </summary>
-    private sealed class SubagentSink(IChatSink chat) : IChatSink
+    private sealed class SubagentSink(IChatSink chat, string description) : IChatSink
     {
         public void AppendText(string text)
         {
@@ -149,7 +149,7 @@ internal sealed partial class ClaudeAgent
 
         public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop) => chat.StartLiveActivity(kind, "↳ " + title, stop);
 
-        public void SetStatus(string? status) => chat.SetStatus(status);
+        public void SetStatus(string? status) => chat.SetStatus(status is null ? null : $"Subagent ({description}): {status}");
 
         public void ReportTokenUsage(ClaudeModel model, TokenUsage usage) => chat.ReportTokenUsage(model, usage);
 

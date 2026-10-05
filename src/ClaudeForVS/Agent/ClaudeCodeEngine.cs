@@ -174,12 +174,31 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         Task poll = PollPlanUsageAsync(chatSink, pollCts.Token);
         try
         {
-            using (cancellationToken.Register(() => KillTree(process)))
+            // Stopping must not wait for the output to end: something Claude Code started (a subagent's shell, an MCP server)
+            // can outlive the kill and keep the pipe open, and a read can't be cancelled. The kill itself takes a moment, so
+            // it isn't done on the thread that pressed Stop.
+            var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() =>
+            {
+                stopped.TrySetResult(true);
+                _ = Task.Run(() => KillTree(process));
+            }))
             {
                 // Read this message's events, up to and including its result; the process then waits for the next one.
-                string? line;
-                while (!gotResult && (line = await process.StandardOutput.ReadLineAsync()) != null)
+                while (!gotResult)
                 {
+                    Task<string?> read = process.StandardOutput.ReadLineAsync();
+                    if (await Task.WhenAny(read, stopped.Task) != read)
+                    {
+                        _ = read.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default); // it ends in an error once the process is disposed
+                        break;
+                    }
+
+                    if (await read is not { } line)
+                    {
+                        break;
+                    }
+
                     if (line.Length == 0)
                     {
                         continue;
@@ -340,7 +359,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         CloseInput(old);
         if (!await WaitForExitAsync(old, TimeSpan.FromSeconds(5)))
         {
-            KillTree(old);
+            await Task.Run(() => KillTree(old));
             await WaitForExitAsync(old, TimeSpan.FromSeconds(5));
         }
 
@@ -508,6 +527,22 @@ internal sealed class ClaudeCodeEngine : IChatEngine
 
                 break;
 
+            case "assistant":
+                // A subagent's turn stays out of the transcript, but what it's about to do shows in the status.
+                if (Str(ev, "parent_tool_use_id") is string parentId)
+                {
+                    string who = this.pendingTools.TryGetValue(parentId, out var parentCall) && Str(parentCall.Input, "description") is { Length: > 0 } d ? d : "task";
+                    foreach (JsonElement block in Content(ev))
+                    {
+                        if (Str(block, "type") == "tool_use")
+                        {
+                            chatSink.SetStatus($"Subagent ({who}): {SubagentStep(Str(block, "name") ?? "tool", block.TryGetProperty("input", out JsonElement stepInput) ? stepInput : default)}…");
+                        }
+                    }
+                }
+
+                break;
+
             case "user" when isTopLevel:
                 this.LastMessageId = Str(ev, "uuid") ?? this.LastMessageId;
                 foreach (JsonElement block in Content(ev))
@@ -517,6 +552,11 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                         && this.pendingTools.TryGetValue(id, out var call))
                     {
                         this.pendingTools.Remove(id);
+                        if (call.Name is "Task" or "Agent")
+                        {
+                            chatSink.SetStatus("Claude Code is working…");
+                        }
+
                         if (this.partlyApplied.TryRemove(id, out FileChange? kept))
                         {
                             // The extension wrote the changes the user kept and told Claude Code no, with what was left out.
@@ -562,6 +602,20 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         }
 
         return null;
+    }
+
+    /// <summary>A tool call in a few words, e.g. "Read Foo.cs" or "Grep TODO", for the status line.</summary>
+    internal static string SubagentStep(string tool, JsonElement input)
+    {
+        string? detail = new[] { "file_path", "path", "pattern", "command", "query", "url", "description" }
+            .Select(name => Str(input, name)).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (detail is null)
+        {
+            return tool;
+        }
+
+        detail = detail.Replace('\r', ' ').Replace('\n', ' ');
+        return $"{tool} {(detail.Length > 80 ? detail.Substring(0, 80) + "…" : detail)}";
     }
 
     // Live token count for the prompt in progress: finished messages, plus the one streaming (output estimated until it ends).

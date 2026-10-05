@@ -63,6 +63,19 @@ public sealed class ClaudeCodeStreamTests : IDisposable
     }
 
     [Fact]
+    public void ASubagentsStepsShowInTheStatusButNotTheTranscript()
+    {
+        this.Feed("""{"type":"assistant","uuid":"m1","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"toolu_task","name":"Task","input":{"description":"Find callers","prompt":"Look"}}]}}""");
+        this.Feed("""{"type":"assistant","uuid":"m2","parent_tool_use_id":"toolu_task","message":{"content":[{"type":"tool_use","id":"toolu_sub","name":"Grep","input":{"pattern":"RunAsync"}}]}}""");
+        Assert.Equal("Subagent (Find callers): Grep RunAsync…", this.sink.Statuses.Last());
+        Assert.Empty(this.sink.Activities);
+        Assert.Equal("m1", this.engine.LastMessageId); // only the main conversation's messages count
+
+        this.Feed("""{"type":"user","uuid":"m3","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_task","content":"Found it."}]}}""");
+        Assert.Equal("Claude Code is working…", this.sink.Statuses.Last());
+    }
+
+    [Fact]
     public void ToolCallAndResultBecomeOneActivity()
     {
         this.Feed("""{"type":"assistant","uuid":"msg-1","parent_tool_use_id":null,"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"dotnet build","description":"Build"}}]}}""");
@@ -228,9 +241,9 @@ public sealed class ClaudeCodeStreamTests : IDisposable
             this.Changes.Add(change);
         }
 
-        public void SetStatus(string? status)
-        {
-        }
+        public List<string> Statuses { get; } = [];
+
+        public void SetStatus(string? status) => this.Statuses.Add(status ?? string.Empty);
 
         public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop) => throw new NotSupportedException();
 

@@ -43,6 +43,8 @@ internal sealed partial class ClaudeAgent
         }
     }
 
+    private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(400);
+
     /// <summary>
     /// Runs read-only tool calls at the same time, on background threads. What each reports is held back and then
     /// shown in the order Claude asked for them, so the transcript reads the same as if they'd run one by one.
@@ -51,8 +53,30 @@ internal sealed partial class ClaudeAgent
     {
         sink.SetStatus($"Running {toolUses.Count} read-only tools…");
         List<DeferredSink> deferred = toolUses.Select(_ => new DeferredSink()).ToList();
-        ToolResultBlockParam[] results = await Task.WhenAll(
-            toolUses.Select((toolUse, i) => Task.Run(() => this.RunToolAsync(toolUse, deferred[i], cancellationToken))));
+        Task<ToolResultBlockParam[]> running = Task.WhenAll(
+            toolUses.Select((toolUse, i) => Task.Run(async () =>
+            {
+                try
+                {
+                    return await this.RunToolAsync(toolUse, deferred[i], cancellationToken);
+                }
+                finally
+                {
+                    deferred[i].Finish();
+                }
+            })));
+
+        // A subagent can run for minutes; what each one is doing shows meanwhile (from this thread, which the sink needs).
+        while (await Task.WhenAny(running, Task.Delay(StatusPollInterval)) != running)
+        {
+            List<string> doing = deferred.Select(d => d.Status).OfType<string>().ToList();
+            if (doing.Count > 0)
+            {
+                sink.SetStatus(doing.Count == 1 ? doing[0] : $"{doing[0]} (+{doing.Count - 1} more running)");
+            }
+        }
+
+        ToolResultBlockParam[] results = await running;
         foreach (DeferredSink tool in deferred)
         {
             tool.ReplayTo(sink);
@@ -173,10 +197,16 @@ internal sealed partial class ClaudeAgent
 
         public void ToolActivity(ActivityKind kind, string title, string detail, FileChange? change = null) => this.Add(s => s.ToolActivity(kind, title, detail, change));
 
-        public void SetStatus(string? status)
-        {
-            // Each tool's "Reading…" would be stale by the time it's replayed; the batch has its own status.
-        }
+        private volatile string? status;
+        private volatile bool finished;
+
+        /// <summary>What the tool is doing now, for the batch's status line; null once it's done.</summary>
+        public string? Status => this.finished ? null : this.status;
+
+        public void Finish() => this.finished = true;
+
+        // Not replayed: each tool's "Reading…" would be stale by then. It's only kept for the batch's status while the tool runs.
+        public void SetStatus(string? status) => this.status = status;
 
         public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop)
             => throw new InvalidOperationException("Tools running alongside others can't show live progress.");
