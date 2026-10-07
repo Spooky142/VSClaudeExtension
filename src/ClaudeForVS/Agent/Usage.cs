@@ -110,6 +110,11 @@ internal static class PlanUsageClient
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
+    private static long lastRequestedTicks;
+
+    /// <summary>When usage was last asked for (whether or not it came back), so idle refreshes from several windows don't repeat it.</summary>
+    public static DateTime LastRequestedUtc => new(Interlocked.Read(ref lastRequestedTicks), DateTimeKind.Utc);
+
     public static async Task<IReadOnlyList<PlanLimit>> FetchAsync(CancellationToken cancellationToken)
     {
         if (ReadAccessToken() is not string token)
@@ -117,6 +122,7 @@ internal static class PlanUsageClient
             return [];
         }
 
+        Interlocked.Exchange(ref lastRequestedTicks, DateTime.UtcNow.Ticks);
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");

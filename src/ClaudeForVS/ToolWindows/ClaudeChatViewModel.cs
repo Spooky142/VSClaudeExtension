@@ -42,8 +42,9 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     private ClaudeCodeStatus? codeStatus;
     private string setupMessage = string.Empty;
 
-    // Usage strip state. Plan windows persist across restarts; API totals cover this Visual Studio session.
-    private readonly Dictionary<string, PlanLimit> planLimits = PlanUsageStore.Load();
+    // Usage strip state. Plan windows are shared by every chat window and persist across restarts; API totals cover this
+    // Visual Studio session.
+    private static readonly Dictionary<string, PlanLimit> PlanLimits = PlanUsageStore.Load();
     private TokenUsage sessionTokens;
     private double sessionCost;
     private ApiRateLimits? apiLimits;
@@ -117,7 +118,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         // The 5-hour and weekly windows always show (at 0% until known); the first other window seen takes the third slot.
         string[] order = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included", "overage"];
         IEnumerable<string> windows = new[] { "five_hour", "seven_day" }
-            .Concat(this.planLimits.Keys
+            .Concat(PlanLimits.Keys
                 .Where(w => w is not "five_hour" and not "seven_day")
                 .OrderBy(w => Array.IndexOf(order, w) is int i && i >= 0 ? i : order.Length)
                 .Take(1));
@@ -135,7 +136,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
                 _ => window,
             };
 
-            if (!this.planLimits.TryGetValue(window, out PlanLimit? limit))
+            if (!PlanLimits.TryGetValue(window, out PlanLimit? limit))
             {
                 meters.Add(new UsageMeter(label, "0%", "Updates after your next message", 0, UsageSeverity.Normal));
                 continue;
@@ -435,6 +436,29 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
         {
             this.CodeStatus = new ClaudeCodeStatus(null, null, false, null, null);
+        }
+    }
+
+    // When a Claude Code prompt last finished in any window. The usage endpoint can lag behind the last few requests, so
+    // plan usage is fetched more often for a while afterwards.
+    private static DateTime lastRunEndedUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Whether the view's timer should fetch plan usage: while idle on Claude Code, every minute (so use elsewhere shows),
+    /// or every 15 seconds in the minute after a prompt finishes. Running prompts fetch it themselves.
+    /// </summary>
+    public bool PlanUsageDue
+    {
+        get
+        {
+            if (this.settings.Engine != ChatEngineKind.ClaudeCode || this.IsBusy)
+            {
+                return false;
+            }
+
+            DateTime now = DateTime.UtcNow;
+            TimeSpan interval = now - lastRunEndedUtc < TimeSpan.FromMinutes(1) ? TimeSpan.FromSeconds(15) : TimeSpan.FromMinutes(1);
+            return now - PlanUsageClient.LastRequestedUtc >= interval;
         }
     }
 
@@ -789,6 +813,11 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             }
 
             this.IsBusy = false;
+            if (runEngine.Kind == ChatEngineKind.ClaudeCode)
+            {
+                lastRunEndedUtc = DateTime.UtcNow;
+            }
+
             if (this.Status.StartsWith("Waiting", StringComparison.Ordinal) || this.Status.StartsWith("Running", StringComparison.Ordinal))
             {
                 this.Status = string.Empty;
@@ -1005,7 +1034,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     {
         // Stream events often omit the percentage; keep the last exact figure for the same window period.
         if (limit.Utilization is null
-            && this.planLimits.TryGetValue(limit.Window, out PlanLimit? known)
+            && PlanLimits.TryGetValue(limit.Window, out PlanLimit? known)
             && known.Utilization is double pct
             && known.ResetsAt is DateTimeOffset knownReset && limit.ResetsAt is DateTimeOffset newReset
             && Math.Abs((knownReset - newReset).TotalMinutes) < 5)
@@ -1013,9 +1042,12 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             limit = limit with { Utilization = pct };
         }
 
-        this.planLimits[limit.Window] = limit;
-        PlanUsageStore.Save(this.planLimits.Values);
-        this.RefreshUsage();
+        PlanLimits[limit.Window] = limit;
+        PlanUsageStore.Save(PlanLimits.Values);
+        foreach (ClaudeChatViewModel chat in Instances)
+        {
+            chat.RefreshUsage();
+        }
     }
 
     async Task<ApprovalResult> IChatSink.RequestApprovalAsync(

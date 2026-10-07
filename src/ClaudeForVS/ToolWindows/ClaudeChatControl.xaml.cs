@@ -99,8 +99,15 @@ public partial class ClaudeChatControl : UserControl
         package.SolutionOpened += (_, directory) => this.viewModel.OnSolutionOpened(directory);
         OptionsPage.Applied += (_, settings) => this.viewModel.ApplySettings(settings, this.viewModel.RepoPath, null);
 
-        // Keep the usage strip's "resets in" countdowns current.
-        this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(30), DispatcherPriority.Background, (_, _) => this.viewModel.RefreshUsage(), this.Dispatcher);
+        // Keep the usage strip's "resets in" countdowns current, and plan usage fresh while no prompt is running.
+        this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
+        {
+            this.viewModel.RefreshUsage();
+            if (this.IsVisible && this.viewModel.PlanUsageDue)
+            {
+                this.viewModel.RefreshPlanUsageAsync().FileAndForget("ClaudeForVS/PlanUsage");
+            }
+        }, this.Dispatcher);
 
         // Coming back to the chat picks up whatever is now open in the editor, and makes this the window that
         // commands from the editor, Error List, Test Explorer and Solution Explorer go to.
