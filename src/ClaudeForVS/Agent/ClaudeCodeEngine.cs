@@ -58,6 +58,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
     private (AgentMode Mode, EffortLevel Effort) processSettings;
     private bool restartNeeded;
 
+    // Its output is read between messages too (see DrainIdleOutputAsync). The read in progress then is handed to the
+    // next message, which takes over reading.
+    private readonly object outputLock = new();
+    private Task<string?>? idleRead;
+    private bool messageReading;
+
     public ClaudeCodeEngine(string executable, string repoRoot, ClaudeModel model, EffortLevel effort, AgentMode mode)
     {
         this.executable = executable;
@@ -156,6 +162,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         byte[] promptBytes = new UTF8Encoding(false).GetBytes(message);
 
         Process process = await this.EnsureProcessAsync(chatSink);
+        Task<string?>? firstRead = this.ReadFirstLineAsync(process);
         try
         {
             await WriteAsync(process, promptBytes, cancellationToken);
@@ -163,8 +170,10 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         catch (IOException)
         {
             // It exited while idle (the pipe is closed); start another and try once more.
+            _ = firstRead.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             await this.StopProcessAsync();
             process = await this.EnsureProcessAsync(chatSink);
+            firstRead = this.ReadFirstLineAsync(process);
             await WriteAsync(process, promptBytes, cancellationToken);
         }
 
@@ -187,7 +196,8 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 // Read this message's events, up to and including its result; the process then waits for the next one.
                 while (!gotResult)
                 {
-                    Task<string?> read = process.StandardOutput.ReadLineAsync();
+                    Task<string?> read = firstRead ?? process.StandardOutput.ReadLineAsync();
+                    firstRead = null;
                     if (await Task.WhenAny(read, stopped.Task) != read)
                     {
                         _ = read.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default); // it ends in an error once the process is disposed
@@ -217,6 +227,11 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                     {
                         // Not an event (e.g. a stray log line); ignore it.
                     }
+                }
+
+                if (gotResult)
+                {
+                    _ = this.DrainIdleOutputAsync(process);
                 }
             }
         }
@@ -249,6 +264,71 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         if (resultError != null)
         {
             throw new InvalidOperationException(resultError);
+        }
+    }
+
+    /// <summary>
+    /// A message takes over reading Claude Code's output, before its prompt goes in so no line of the reply can be
+    /// dropped: the first line is the idle read in progress, if there is one, or a new read.
+    /// </summary>
+    private Task<string?> ReadFirstLineAsync(Process process)
+    {
+        lock (this.outputLock)
+        {
+            this.messageReading = true;
+            Task<string?> read = this.idleRead ?? process.StandardOutput.ReadLineAsync();
+            this.idleRead = null;
+            return read;
+        }
+    }
+
+    /// <summary>
+    /// Reads and drops what Claude Code writes after a reply has ended, until the next message takes over. Nothing should
+    /// come then, but if something did and wasn't read, the pipe would fill, and a Claude Code that can't write its output
+    /// stops dead (subagents, API requests and all) until someone reads it.
+    /// </summary>
+    private async Task DrainIdleOutputAsync(Process process)
+    {
+        lock (this.outputLock)
+        {
+            this.messageReading = false;
+        }
+
+        try
+        {
+            while (true)
+            {
+                Task<string?> read;
+                lock (this.outputLock)
+                {
+                    if (this.messageReading || this.process != process)
+                    {
+                        return;
+                    }
+
+                    read = this.idleRead = process.StandardOutput.ReadLineAsync();
+                }
+
+                string? line = await read.ConfigureAwait(false);
+                lock (this.outputLock)
+                {
+                    if (this.idleRead != read)
+                    {
+                        return; // a message took this read over, line and all
+                    }
+
+                    this.idleRead = null;
+                }
+
+                if (line is null)
+                {
+                    return; // it exited
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            // It was stopped.
         }
     }
 
@@ -329,6 +409,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         // then rejects as an invalid permission result, so large writes would always fail.
         psi.EnvironmentVariables["MAX_MCP_OUTPUT_TOKENS"] = "2000000";
 
+        // Left to itself, Claude Code runs subagents (and long commands) in the background and ends its reply while they
+        // work, and a scheduled prompt starts a reply of its own later. Either way the output comes when no message is
+        // waiting for it, so the user never sees it; with these off, a reply waits for its subagents.
+        psi.EnvironmentVariables["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1";
+        psi.EnvironmentVariables["CLAUDE_CODE_DISABLE_CRON"] = "1";
+
         chatSink.SetStatus("Starting Claude Code…");
         var started = new Process { StartInfo = psi, EnableRaisingEvents = true };
         if (!started.Start())
@@ -354,7 +440,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         }
 
         Task<string>? stderr = this.processStderr;
-        this.process = null;
+        lock (this.outputLock)
+        {
+            this.process = null;
+            this.idleRead = null;
+        }
+
         this.processStderr = null;
         CloseInput(old);
         if (!await WaitForExitAsync(old, TimeSpan.FromSeconds(5)))
@@ -430,7 +521,12 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         {
             // Between messages it's idle, so closing stdin lets it save the session and exit by itself. One still
             // working (or stuck) is stopped after a few seconds.
-            this.process = null;
+            lock (this.outputLock)
+            {
+                this.process = null;
+                this.idleRead = null;
+            }
+
             CloseInput(running);
             _ = Task.Run(async () =>
             {
