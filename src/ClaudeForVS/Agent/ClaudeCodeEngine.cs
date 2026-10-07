@@ -674,7 +674,7 @@ internal sealed class ClaudeCodeEngine : IChatEngine
                 break;
 
             case "rate_limit_event" when ev.TryGetProperty("rate_limit_info", out JsonElement info):
-                if (ToPlanLimit(info) is PlanLimit limit)
+                foreach (PlanLimit limit in ToPlanLimits(info))
                 {
                     chatSink.ReportPlanLimit(limit);
                 }
@@ -1213,30 +1213,60 @@ internal sealed class ClaudeCodeEngine : IChatEngine
         return path!.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? path.Substring(root.Length) : path;
     }
 
-    /// <summary>Converts Claude Code's rate_limit_info (claude.ai plan usage) into a <see cref="PlanLimit"/>.</summary>
-    private static PlanLimit? ToPlanLimit(JsonElement info)
+    /// <summary>
+    /// Converts Claude Code's rate_limit_info (claude.ai plan usage) into <see cref="PlanLimit"/>s: the window the event
+    /// is about, plus every window in "unifiedWindows", which carries exact figures even when the event itself has none.
+    /// </summary>
+    private static List<PlanLimit> ToPlanLimits(JsonElement info)
     {
-        if (Str(info, "rateLimitType") is not string window)
+        var limits = new Dictionary<string, PlanLimit>(StringComparer.Ordinal);
+        if (info.TryGetProperty("unifiedWindows", out JsonElement windows) && windows.ValueKind == JsonValueKind.Object)
         {
-            return null;
+            foreach (JsonProperty window in windows.EnumerateObject())
+            {
+                double? utilization = Utilization(window.Value);
+                string status = utilization >= 100 ? "rejected" : "allowed";
+                limits[window.Name] = new PlanLimit(window.Name, utilization, ResetsAt(window.Value), status, DateTimeOffset.Now);
+            }
         }
 
-        double? utilization = null;
-        if (info.TryGetProperty("utilization", out JsonElement u) && u.ValueKind == JsonValueKind.Number)
+        if (Str(info, "rateLimitType") is string type)
         {
+            limits.TryGetValue(type, out PlanLimit? unified);
+            limits[type] = new PlanLimit(
+                type,
+                Utilization(info) ?? unified?.Utilization,
+                ResetsAt(info) ?? unified?.ResetsAt,
+                Str(info, "status") ?? "allowed",
+                DateTimeOffset.Now);
+        }
+
+        return [.. limits.Values];
+
+        static double? Utilization(JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Object
+                || !element.TryGetProperty("utilization", out JsonElement u) || u.ValueKind != JsonValueKind.Number)
+            {
+                return null;
+            }
+
             // The event doesn't document its scale (the /usage data is 0-100); treat values up to 1 as a fraction.
             double value = u.GetDouble();
-            utilization = Math.Max(0, Math.Min(100, value <= 1 ? value * 100 : value));
+            return Math.Max(0, Math.Min(100, value <= 1 ? value * 100 : value));
         }
 
-        DateTimeOffset? resetsAt = null;
-        if (info.TryGetProperty("resetsAt", out JsonElement r) && r.ValueKind == JsonValueKind.Number)
+        static DateTimeOffset? ResetsAt(JsonElement element)
         {
-            long epoch = r.GetInt64();
-            resetsAt = epoch > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds(epoch) : DateTimeOffset.FromUnixTimeSeconds(epoch);
-        }
+            if (element.ValueKind != JsonValueKind.Object
+                || !element.TryGetProperty("resetsAt", out JsonElement r) || r.ValueKind != JsonValueKind.Number)
+            {
+                return null;
+            }
 
-        return new PlanLimit(window, utilization, resetsAt, Str(info, "status") ?? "allowed", DateTimeOffset.Now);
+            long epoch = r.GetInt64();
+            return epoch > 100_000_000_000 ? DateTimeOffset.FromUnixTimeMilliseconds(epoch) : DateTimeOffset.FromUnixTimeSeconds(epoch);
+        }
     }
 
     /// <summary>

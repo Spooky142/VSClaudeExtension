@@ -136,6 +136,22 @@ public sealed class ClaudeCodeStreamTests : IDisposable
     }
 
     [Fact]
+    public void UnifiedWindowsGiveEveryWindowItsPercentage()
+    {
+        // Recorded from Claude Code 2.1.288: the event itself has no utilization, only unifiedWindows does.
+        this.Feed("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1791409800,"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.32,"resetsAt":1791409800},"seven_day":{"utilization":0.54,"resetsAt":1791568800}}}}""");
+
+        Assert.Equal(2, this.sink.PlanLimits.Count);
+        PlanLimit fiveHour = this.sink.PlanLimits.Single(l => l.Window == "five_hour");
+        Assert.Equal(32, fiveHour.Utilization!.Value, 3);
+        Assert.Equal("allowed", fiveHour.Status);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1791409800), fiveHour.ResetsAt);
+        PlanLimit weekly = this.sink.PlanLimits.Single(l => l.Window == "seven_day");
+        Assert.Equal(54, weekly.Utilization!.Value, 3);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1791568800), weekly.ResetsAt);
+    }
+
+    [Fact]
     public void CompactBoundaryIsReported()
     {
         this.Feed("""{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":950000}}""");
