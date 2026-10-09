@@ -481,7 +481,7 @@ internal sealed partial class ClaudeChatViewModel
     private string ContextReport()
     {
         ClaudeModel model = this.engine?.Model ?? this.settings.Model;
-        long window = AgentSettings.ContextWindow(model);
+        long window = AgentSettings.ContextWindow;
         var sb = new System.Text.StringBuilder("**Context**\n\n");
         sb.Append(this.contextTokens > 0
             ? $"- {FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens ({100.0 * this.contextTokens / window:0}%) · {AgentSettings.ModelName(model)}\n"

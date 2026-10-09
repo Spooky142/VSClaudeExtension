@@ -364,19 +364,15 @@ internal sealed class ClaudeCodeEngine : IChatEngine
             "--mcp-config", this.mcpConfigPath,
             "--permission-prompt-tool", ApprovalServer.QualifiedToolName,
             "--append-system-prompt", ExtraSystemPrompt + " " + AgentSettings.ModeInstructions(this.Mode),
-        };
-        if (this.Model != ClaudeModel.Haiku)
-        {
-            args.Add("--effort");
-            args.Add(this.Effort switch
+            "--effort", this.Effort switch
             {
                 EffortLevel.Low => "low",
                 EffortLevel.Medium => "medium",
                 EffortLevel.XHigh => "xhigh",
                 EffortLevel.Max => "max",
                 _ => "high",
-            });
-        }
+            },
+        };
 
         if (this.SessionId != null)
         {

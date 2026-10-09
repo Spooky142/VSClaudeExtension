@@ -131,16 +131,6 @@ public partial class SettingsDialog : DialogWindow
         bool restarts = this.SelectedModel != this.current.Model || this.SelectedEngine != this.current.Engine;
         this.ModelChangeNote.Visibility = this.hasConversation && restarts ? Visibility.Visible : Visibility.Collapsed;
 
-        if (this.SelectedModel == ClaudeModel.Haiku)
-        {
-            this.EffortHint.Text = this.SelectedEngine == ChatEngineKind.ClaudeCode
-                ? "Haiku has no effort setting, so Claude Code uses its own default for it."
-                : AgentSettings.HaikuThinkingBudget(this.SelectedEffort) is int budget
-                    ? $"Haiku has no effort setting, so this sets its thinking budget: up to {budget:N0} tokens."
-                    : "Haiku has no effort setting, so Low turns thinking off for the fastest replies.";
-            return;
-        }
-
         this.EffortHint.Text = this.SelectedEffort switch
         {
             EffortLevel.Low => "Quickest and cheapest. Fine for simple questions and lookups.",

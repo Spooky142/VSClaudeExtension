@@ -183,7 +183,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     private UsageMeter ContextMeter()
     {
-        long window = AgentSettings.ContextWindow(this.engine?.Model ?? this.settings.Model);
+        long window = AgentSettings.ContextWindow;
         double used = Math.Min(100, 100.0 * this.contextTokens / window);
         string detail = this.contextTokens > 0 ? $"{FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens"
             : $"{FormatTokens(window)} token window · updates as Claude replies";

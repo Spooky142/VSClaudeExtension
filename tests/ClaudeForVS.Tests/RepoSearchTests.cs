@@ -157,6 +157,18 @@ public class WebResultTests
         double withSearches = ModelPricing.EstimateCost(ClaudeModel.Sonnet, new TokenUsage(1000, 0, 0, 1000, WebSearches: 3));
         Assert.Equal(0.03, withSearches - tokensOnly, 6);
     }
+
+    [Fact]
+    public void HaikuPromptsOver100KTokensUseTheHigherRates()
+    {
+        // 100K cached input and 1K output: $0.001 + $0.0005 at the lower rates.
+        double atLimit = ModelPricing.EstimateCost(ClaudeModel.Haiku, new TokenUsage(0, 0, 100_000, 1_000));
+        Assert.Equal(0.0015, atLimit, 6);
+
+        // One more token of prompt moves the whole request, output included, to the higher rates.
+        double over = ModelPricing.EstimateCost(ClaudeModel.Haiku, new TokenUsage(1, 0, 100_000, 1_000));
+        Assert.Equal((0.50 + (100_000 * 0.05) + (1_000 * 2.50)) / 1_000_000, over, 9);
+    }
 }
 
 public class ChangesEntryTests

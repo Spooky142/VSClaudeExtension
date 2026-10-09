@@ -53,12 +53,18 @@ internal static class ModelPricing
     /// <summary>Web search is $10 per 1,000 searches; web fetch costs only the tokens it adds.</summary>
     private const double PerWebSearch = 0.01;
 
+    /// <summary>Haiku has a second, higher rate card for prompts longer than this.</summary>
+    private const long HaikuLongPromptTokens = 100_000;
+
+    /// <param name="usage">One response's usage, so its input (uncached, cache writes and reads) is the prompt's length.</param>
     public static double EstimateCost(ClaudeModel model, TokenUsage usage)
     {
+        bool longPrompt = usage.Input + usage.CacheWrite + usage.CacheRead > HaikuLongPromptTokens;
         (double input, double output, double cacheRead, double cacheWrite) = model switch
         {
             ClaudeModel.Sonnet => (2.00, 10.00, 0.20, 2.50),
-            ClaudeModel.Haiku => (1.00, 5.00, 0.10, 1.25),
+            ClaudeModel.Haiku when longPrompt => (0.50, 2.50, 0.05, 0.625),
+            ClaudeModel.Haiku => (0.10, 0.50, 0.01, 0.125),
             _ => (4.00, 20.00, 0.20, 5.00),
         };
         return (((usage.Input * input) + (usage.Output * output) + (usage.CacheRead * cacheRead) + (usage.CacheWrite * cacheWrite)) / 1_000_000)

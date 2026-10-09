@@ -25,7 +25,7 @@ internal sealed partial class ClaudeAgent
     /// </summary>
     private async Task<long> CompactIfNeededAsync(IChatSink sink, bool midTask, CancellationToken cancellationToken, bool force = false)
     {
-        long window = AgentSettings.ContextWindow(this.Model);
+        long window = AgentSettings.ContextWindow;
         double threshold = Math.Min(window * CompactAt, window - MaxOutputTokens - CompactHeadroom);
         if ((!force && this.contextTokens < threshold) || this.history.Count == 0)
         {
@@ -40,25 +40,38 @@ internal sealed partial class ClaudeAgent
 
         var summary = new StringBuilder();
         long newTokens = 0;
-        await foreach (RawMessageStreamEvent ev in this.client.Messages.CreateStreaming(request, cancellationToken))
+
+        // Reported once, even if stopped part-way, so the cost estimate knows the prompt's length when it prices the output.
+        TokenUsage used = default;
+        try
         {
-            if (ev.TryPickStart(out RawMessageStartEvent? start))
+            await foreach (RawMessageStreamEvent ev in this.client.Messages.CreateStreaming(request, cancellationToken))
             {
-                newTokens += start.Message.Usage.InputTokens + (start.Message.Usage.CacheCreationInputTokens ?? 0);
-                this.ReportUsage(sink, new TokenUsage(
-                    start.Message.Usage.InputTokens,
-                    start.Message.Usage.CacheCreationInputTokens ?? 0,
-                    start.Message.Usage.CacheReadInputTokens ?? 0,
-                    0));
+                if (ev.TryPickStart(out RawMessageStartEvent? start))
+                {
+                    newTokens += start.Message.Usage.InputTokens + (start.Message.Usage.CacheCreationInputTokens ?? 0);
+                    used = new TokenUsage(
+                        start.Message.Usage.InputTokens,
+                        start.Message.Usage.CacheCreationInputTokens ?? 0,
+                        start.Message.Usage.CacheReadInputTokens ?? 0,
+                        0);
+                }
+                else if (ev.TryPickContentBlockDelta(out RawContentBlockDeltaEvent? delta) && delta.Delta.TryPickText(out TextDelta? text))
+                {
+                    summary.Append(text.Text);
+                }
+                else if (ev.TryPickDelta(out RawMessageDeltaEvent? messageDelta))
+                {
+                    newTokens += messageDelta.Usage.OutputTokens;
+                    used += new TokenUsage(0, 0, 0, messageDelta.Usage.OutputTokens);
+                }
             }
-            else if (ev.TryPickContentBlockDelta(out RawContentBlockDeltaEvent? delta) && delta.Delta.TryPickText(out TextDelta? text))
+        }
+        finally
+        {
+            if (used != default)
             {
-                summary.Append(text.Text);
-            }
-            else if (ev.TryPickDelta(out RawMessageDeltaEvent? messageDelta))
-            {
-                newTokens += messageDelta.Usage.OutputTokens;
-                this.ReportUsage(sink, new TokenUsage(0, 0, 0, messageDelta.Usage.OutputTokens));
+                this.ReportUsage(sink, used);
             }
         }
 
@@ -115,18 +128,13 @@ internal sealed partial class ClaudeAgent
         List<ToolUnion>? toolList = null)
     {
         messages ??= this.history;
-        bool haiku = this.Model == ClaudeModel.Haiku;
-        int? haikuBudget = AgentSettings.HaikuThinkingBudget(this.Effort);
 
         return new MessageCreateParams
         {
             Model = AgentSettings.ModelId(this.Model),
             MaxTokens = maxTokens,
-
-            // Haiku 4.5 rejects `effort` and adaptive thinking; it takes an explicit thinking budget instead.
-            // The budget has to be below the output limit, which compaction lowers.
-            Thinking = haiku ? HaikuThinking(haikuBudget < maxTokens ? haikuBudget : null) :new ThinkingConfigAdaptive { Display = Display.Summarized },
-            OutputConfig = haiku ? null : new OutputConfig { Effort = ToApiEffort(this.Effort) },
+            Thinking = new ThinkingConfigAdaptive { Display = Display.Summarized },
+            OutputConfig = new OutputConfig { Effort = ToApiEffort(this.Effort) },
 
             // Automatic caching: the breakpoint moves forward with the conversation. The system prompt never changes
             // (the mode goes in the conversation instead; see ModeNote), so switching mode keeps the cache.
@@ -135,17 +143,6 @@ internal sealed partial class ClaudeAgent
             Tools = toolList ?? this.tools ?? BuiltInTools(this.permissions),
             Messages = extra is null ? [.. messages] : [.. messages, extra],
         };
-    }
-
-    /// <summary>No budget means thinking off: leave the parameter out rather than converting a null config.</summary>
-    private static ThinkingConfigParam? HaikuThinking(int? budget)
-    {
-        if (budget is not int tokens)
-        {
-            return null;
-        }
-
-        return new ThinkingConfigEnabled { BudgetTokens = tokens };
     }
 
     private static MediaType ToMediaType(string mediaType) => mediaType switch

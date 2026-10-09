@@ -110,18 +110,18 @@ internal sealed record AgentSettings
     public static string ModelId(ClaudeModel model) => model switch
     {
         ClaudeModel.Sonnet => "claude-sonnet-5-5",
-        ClaudeModel.Haiku => "claude-haiku-4-5",
+        ClaudeModel.Haiku => "claude-haiku-5-5",
         _ => "claude-opus-5-5",
     };
 
-    /// <summary>Context window in tokens.</summary>
-    public static long ContextWindow(ClaudeModel model) => model == ClaudeModel.Haiku ? 200_000 : 1_000_000;
+    /// <summary>Context window in tokens, the same for every model.</summary>
+    public const long ContextWindow = 1_000_000;
 
     /// <summary>Short display name, e.g. "Opus 5.5".</summary>
     public static string ModelName(ClaudeModel model) => model switch
     {
         ClaudeModel.Sonnet => "Sonnet 5.5",
-        ClaudeModel.Haiku => "Haiku 4.5",
+        ClaudeModel.Haiku => "Haiku 5.5",
         _ => "Opus 5.5",
     };
 
@@ -149,18 +149,5 @@ internal sealed record AgentSettings
             "change the repository. Describe proposed changes (with code snippets where useful) for the user to apply.",
         AgentMode.Auto => "You are in Auto mode: edits and commands run without asking the user first, so be careful with destructive actions.",
         _ => "You are in Coding mode: the user approves each edit and command before it runs.",
-    };
-
-    /// <summary>
-    /// Haiku 4.5 has no effort parameter; it takes an explicit thinking budget instead. Low means no thinking.
-    /// Every budget stays below the 64K max_tokens used for Haiku.
-    /// </summary>
-    public static int? HaikuThinkingBudget(EffortLevel effort) => effort switch
-    {
-        EffortLevel.Low => null,
-        EffortLevel.Medium => 4_000,
-        EffortLevel.High => 10_000,
-        EffortLevel.XHigh => 20_000,
-        _ => 32_000,
     };
 }

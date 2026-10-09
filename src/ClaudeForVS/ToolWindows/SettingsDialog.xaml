@@ -101,8 +101,9 @@
     <RadioButton x:Name="HaikuRadio" GroupName="Model" Style="{StaticResource CardRadio}" Checked="OnModelChanged">
       <StackPanel>
         <DockPanel>
-          <TextBlock x:Name="HaikuPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$1 / $5 per MTok" />
-          <TextBlock Style="{StaticResource CardTitle}" Text="Haiku 4.5" />
+          <TextBlock x:Name="HaikuPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$0.10 / $0.50 per MTok"
+                     ToolTip="For prompts up to 100K tokens; longer prompts are $0.50 / $2.50 per MTok." />
+          <TextBlock Style="{StaticResource CardTitle}" Text="Haiku 5.5" />
         </DockPanel>
         <TextBlock Style="{StaticResource CardNote}" Text="Fastest and cheapest. Good for quick questions." />
       </StackPanel>

@@ -62,9 +62,9 @@ It works with either your own Anthropic API key, calling the API directly, or th
     - Claude Code uses its own tools (read, edit, shell, search, web). Its permission prompts appear in the extension's approval card through a local MCP endpoint (`--permission-prompt-tool`) bound to `localhost` under a random path. **Allow all edits** covers Edit/Write for the rest of the chat. Edits to a file with unsaved changes in Visual Studio are refused, so Claude asks you to save first.
     - `ANTHROPIC_API_KEY` is removed from Claude Code's environment, so it uses your plan rather than a stray key.
     - Uses Anthropic's documented options for personal use: the unmodified Claude Code binary, signed in through Anthropic's own flow. Don't distribute a build of this extension that offers Claude plan sign-in to other people; Anthropic doesn't allow that.
-  - Models: Opus 5.5 (`claude-opus-5-5`, default), Sonnet 5.5 (`claude-sonnet-5-5`), Haiku 4.5 (`claude-haiku-4-5`).
+  - Models: Opus 5.5 (`claude-opus-5-5`, default), Sonnet 5.5 (`claude-sonnet-5-5`), Haiku 5.5 (`claude-haiku-5-5`). All three have a 1M-token context window.
   - Effort: Low, Medium, High (default), Extra high or Max. A new effort applies from the next message; switching model starts a new chat.
-  - Haiku 4.5 has no effort setting, so effort maps to its thinking budget: Low means no thinking, then 4K, 10K, 20K or 32K tokens.
+  - Haiku 5.5 is $0.10 / $0.50 per million tokens for prompts up to 100K tokens and $0.50 / $2.50 for longer ones; the cost estimate uses whichever applies to each request.
 - **The Claude API engine's tools.**
   - `git`: read-only commands (`status`, `diff`, `log`, `show`, `blame`, `grep`, `ls-files`, branch/tag/remote listing, …) run immediately. Anything that changes the repo or contacts a remote (`commit`, `checkout`, `reset`, `push`, `merge`, `stash`, …) shows an **Allow / Deny** prompt first, as do options that write files, run other programs or read files outside the repository (`--output`, `grep -O`, `--ext-diff`, `--no-index`, `blame --contents`, `config --file`, …).
   - Read-only tools that Claude asks for together (`read_file`, `glob`, `grep`, read-only `git`) run at the same time.
