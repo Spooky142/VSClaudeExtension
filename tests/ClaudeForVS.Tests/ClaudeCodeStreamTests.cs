@@ -63,16 +63,34 @@ public sealed class ClaudeCodeStreamTests : IDisposable
     }
 
     [Fact]
-    public void ASubagentsStepsShowInTheStatusButNotTheTranscript()
+    public void ASubagentsStepsShowInItsOwnRowAmongTheReplies()
     {
         this.Feed("""{"type":"assistant","uuid":"m1","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"toolu_task","name":"Task","input":{"description":"Find callers","prompt":"Look"}}]}}""");
+        LiveRow row = Assert.Single(this.sink.LiveRows);
+        Assert.Equal("Subagent: Find callers", row.Title);
+        Assert.True(row.Expanded);
+        Assert.Null(row.Stop); // Claude Code can't stop one subagent on its own
+
         this.Feed("""{"type":"assistant","uuid":"m2","parent_tool_use_id":"toolu_task","message":{"content":[{"type":"tool_use","id":"toolu_sub","name":"Grep","input":{"pattern":"RunAsync"}}]}}""");
-        Assert.Equal("Subagent (Find callers): Grep RunAsync…", this.sink.Statuses.Last());
+        this.Feed("""{"type":"assistant","uuid":"m3","parent_tool_use_id":"toolu_task","message":{"content":[{"type":"tool_use","id":"toolu_sub2","name":"Read","input":{"file_path":"src/Runner.cs"}}]}}""");
+        Assert.Equal("Grep RunAsync\nRead src/Runner.cs", row.Output);
         Assert.Empty(this.sink.Activities);
         Assert.Equal("m1", this.engine.LastMessageId); // only the main conversation's messages count
 
-        this.Feed("""{"type":"user","uuid":"m3","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_task","content":"Found it."}]}}""");
-        Assert.Equal("Claude Code is working…", this.sink.Statuses.Last());
+        this.Feed("""{"type":"user","uuid":"m4","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_task","content":"Found it."}]}}""");
+        Assert.True(row.Disposed);
+        Assert.Equal("Subagent: Find callers", Assert.Single(this.sink.Activities).Title);
+    }
+
+    [Fact]
+    public void ASubagentsRowListsItsLatestSteps()
+    {
+        Assert.Equal("Starting…", SubagentProgress.Format([]));
+        string[] steps = Enumerable.Range(1, SubagentProgress.ShownSteps + 2).Select(i => $"Read {i}.cs").ToArray();
+        string[] lines = SubagentProgress.Format(steps).Split('\n');
+        Assert.Equal("(2 earlier steps)", lines[0]);
+        Assert.Equal("Read 3.cs", lines[1]);
+        Assert.Equal($"Read {steps.Length}.cs", lines.Last());
     }
 
     [Fact]
@@ -261,7 +279,14 @@ public sealed class ClaudeCodeStreamTests : IDisposable
 
         public void SetStatus(string? status) => this.Statuses.Add(status ?? string.Empty);
 
-        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop) => throw new NotSupportedException();
+        public List<LiveRow> LiveRows { get; } = [];
+
+        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded = false)
+        {
+            var row = new LiveRow(title, stop, expanded);
+            this.LiveRows.Add(row);
+            return row;
+        }
 
         public void ReportTokenUsage(ClaudeModel model, TokenUsage usage)
         {
@@ -290,5 +315,22 @@ public sealed class ClaudeCodeStreamTests : IDisposable
         public List<IReadOnlyList<TaskItem>> TaskLists { get; } = [];
 
         public void ReportTasks(IReadOnlyList<TaskItem> tasks) => this.TaskLists.Add(tasks);
+    }
+
+    private sealed class LiveRow(string title, Action? stop, bool expanded) : ILiveActivity
+    {
+        public string Title => title;
+
+        public Action? Stop => stop;
+
+        public bool Expanded => expanded;
+
+        public string Output { get; private set; } = string.Empty;
+
+        public bool Disposed { get; private set; }
+
+        public void SetOutput(string output) => this.Output = output;
+
+        public void Dispose() => this.Disposed = true;
     }
 }

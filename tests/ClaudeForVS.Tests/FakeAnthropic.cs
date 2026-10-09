@@ -179,7 +179,15 @@ internal sealed class RecordingSink : IChatSink
 
     public void ToolActivity(ActivityKind kind, string title, string detail, FileChange? change = null) => this.Activities.Add((kind, title, detail));
 
-    public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop) => new Live();
+    /// <summary>The titles of the rows shown while tools ran, and what each showed last.</summary>
+    public List<(string Title, Live Row)> LiveRows { get; } = [];
+
+    public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded = false)
+    {
+        var row = new Live();
+        this.LiveRows.Add((title, row));
+        return row;
+    }
 
     public void SetStatus(string? status) => this.Statuses.Add(status ?? string.Empty);
 
@@ -220,14 +228,14 @@ internal sealed class RecordingSink : IChatSink
 
     public void ReportTasks(IReadOnlyList<TaskItem> tasks) => this.Tasks = tasks;
 
-    private sealed class Live : ILiveActivity
+    internal sealed class Live : ILiveActivity
     {
-        public void SetOutput(string output)
-        {
-        }
+        public string Output { get; private set; } = string.Empty;
 
-        public void Dispose()
-        {
-        }
+        public bool Disposed { get; private set; }
+
+        public void SetOutput(string output) => this.Output = output;
+
+        public void Dispose() => this.Disposed = true;
     }
 }

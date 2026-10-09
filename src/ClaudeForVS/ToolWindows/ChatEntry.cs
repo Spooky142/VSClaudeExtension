@@ -269,6 +269,9 @@ internal sealed class ChatEntry : INotifyPropertyChanged
     /// <summary>Stops the tool call this row shows while it runs; null once it can't be stopped.</summary>
     public Action? StopAction { get; init; }
 
+    /// <summary>True to show the detail without a click, e.g. a subagent's steps while it works.</summary>
+    public bool StartsExpanded { get; init; }
+
     private bool stopRequested;
 
     public bool CanStop => this.StopAction != null && !this.stopRequested;

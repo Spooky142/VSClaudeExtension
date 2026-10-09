@@ -43,7 +43,10 @@ internal sealed partial class ClaudeAgent
         string prompt = RequireString(input, "prompt");
         string title = $"Subagent: {description}";
 
-        IChatSink inner = new SubagentSink(sink, description);
+        // Its row in the chat lists what it does as it goes, and its Stop button stops just this subagent.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var progress = new SubagentProgress(sink.StartLiveActivity(ActivityKind.Other, title, stop.Cancel, expanded: true));
+        IChatSink inner = new SubagentSink(sink, progress);
         List<ToolUnion> tools = (this.tools ?? BuiltInTools(this.permissions)).Where(t => ToolName(t) is string name && SubagentTools.Contains(name)).ToList();
         string system = this.systemPrompt + SubagentInstructions;
         var conversation = new List<MessageParam> { new() { Role = Role.User, Content = prompt } };
@@ -54,61 +57,71 @@ internal sealed partial class ClaudeAgent
         int round = 0;
         string report = string.Empty;
         bool atLimit = false;
-        for (; round < MaxSubagentRounds; round++)
+        bool stopped = false;
+        try
         {
-            // A subagent can't ask the user (it may be running beside others), so it stops itself at the limit and the
-            // main conversation, which can ask, takes it from there.
-            if (round > 0 && this.OverSpendLimit)
+            for (; round < MaxSubagentRounds; round++)
             {
-                atLimit = true;
-                break;
-            }
+                // A subagent can't ask the user (it may be running beside others), so it stops itself at the limit and the
+                // main conversation, which can ask, takes it from there.
+                if (round > 0 && this.OverSpendLimit)
+                {
+                    atLimit = true;
+                    break;
+                }
 
-            StreamedTurn turn = await this.StreamTurnAsync(inner, 0, cancellationToken, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools));
-            this.ReportUsage(sink, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens, turn.WebSearches));
-            if (paused != null)
-            {
-                // A response the API paused (during long web searches) continues as the same assistant message.
-                conversation.RemoveAt(conversation.Count - 1);
-                turn.Content.InsertRange(0, paused);
-                paused = null;
-            }
+                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools));
+                this.ReportUsage(sink, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens, turn.WebSearches));
+                if (paused != null)
+                {
+                    // A response the API paused (during long web searches) continues as the same assistant message.
+                    conversation.RemoveAt(conversation.Count - 1);
+                    turn.Content.InsertRange(0, paused);
+                    paused = null;
+                }
 
-            conversation.Add(new() { Role = Role.Assistant, Content = turn.Content });
-            if (turn.StopReason == "pause_turn")
-            {
-                paused = turn.Content;
-                continue;
-            }
+                conversation.Add(new() { Role = Role.Assistant, Content = turn.Content });
+                if (turn.StopReason == "pause_turn")
+                {
+                    paused = turn.Content;
+                    continue;
+                }
 
-            report = string.Concat(turn.Content.Select(block => block.TryPickText(out TextBlockParam? text) ? text.Text : string.Empty)).Trim();
-            if (turn.ToolUses.Count == 0 || turn.StopReason is "refusal" or "max_tokens")
-            {
-                break;
-            }
+                report = string.Concat(turn.Content.Select(block => block.TryPickText(out TextBlockParam? text) ? text.Text : string.Empty)).Trim();
+                if (turn.ToolUses.Count == 0 || turn.StopReason is "refusal" or "max_tokens")
+                {
+                    break;
+                }
 
-            // A subagent only reads, so everything it's allowed to run can run at once.
-            List<ToolUseBlockParam> allowed = turn.ToolUses.Where(use => SubagentTools.Contains(use.Name) && this.CanRunInParallel(use)).ToList();
-            toolCalls += allowed.Count;
-            Dictionary<string, ToolResultBlockParam> ran = allowed.Count == 0
-                ? []
-                : (await this.RunInParallelAsync(allowed, inner, cancellationToken)).ToDictionary(r => r.ToolUseID);
-            var results = new List<ContentBlockParam>();
-            foreach (ToolUseBlockParam use in turn.ToolUses)
-            {
-                results.Add(ran.TryGetValue(use.ID, out ToolResultBlockParam? result)
-                    ? result
-                    : Error(use.ID, SubagentTools.Contains(use.Name)
-                        ? $"`{use.Name}` needs the user's approval for this, which a subagent can't ask for. Leave it out, or say in your report that the main conversation should do it."
-                        : $"`{use.Name}` isn't available to a subagent, which can only read and search."));
-            }
+                // A subagent only reads, so everything it's allowed to run can run at once.
+                List<ToolUseBlockParam> allowed = turn.ToolUses.Where(use => SubagentTools.Contains(use.Name) && this.CanRunInParallel(use)).ToList();
+                toolCalls += allowed.Count;
+                Dictionary<string, ToolResultBlockParam> ran = allowed.Count == 0
+                    ? []
+                    : (await this.RunInParallelAsync(allowed, inner, stop.Token)).ToDictionary(r => r.ToolUseID);
+                var results = new List<ContentBlockParam>();
+                foreach (ToolUseBlockParam use in turn.ToolUses)
+                {
+                    results.Add(ran.TryGetValue(use.ID, out ToolResultBlockParam? result)
+                        ? result
+                        : Error(use.ID, SubagentTools.Contains(use.Name)
+                            ? $"`{use.Name}` needs the user's approval for this, which a subagent can't ask for. Leave it out, or say in your report that the main conversation should do it."
+                            : $"`{use.Name}` isn't available to a subagent, which can only read and search."));
+                }
 
-            conversation.Add(new() { Role = Role.User, Content = results });
-            cancellationToken.ThrowIfCancellationRequested();
+                conversation.Add(new() { Role = Role.User, Content = results });
+                stop.Token.ThrowIfCancellationRequested();
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The user stopped just this subagent; Claude carries on with whatever it found.
+            stopped = true;
         }
 
         // Why it stopped short, if it did: its last turn may have been a tool call with no text, so there may be no report at all.
-        string? cut = atLimit ? "stopped early because this chat reached its spending limit"
+        string? cut = stopped ? "was stopped by the user"
+            : atLimit ? "stopped early because this chat reached its spending limit"
             : round >= MaxSubagentRounds ? $"stopped after {MaxSubagentRounds} rounds"
             : null;
         if (cut != null)
@@ -125,16 +138,19 @@ internal sealed partial class ClaudeAgent
             report = report.Substring(0, MaxSubagentReportChars) + "\n[Report truncated.]";
         }
 
-        sink.ToolActivity(ActivityKind.Other, title, $"{(round + 1 == 1 ? "1 round" : $"{round + 1} rounds")}, {(toolCalls == 1 ? "1 tool call" : $"{toolCalls} tool calls")}\n\n{report}");
+        // Its row gives way to one with what it did and its report.
+        string steps = string.Concat(progress.Steps.Select(step => "\n  " + step));
+        progress.Dispose();
+        sink.ToolActivity(ActivityKind.Other, title, $"{(round + 1 == 1 ? "1 round" : $"{round + 1} rounds")}, {(toolCalls == 1 ? "1 tool call" : $"{toolCalls} tool calls")}{(steps.Length > 0 ? ":" : string.Empty)}{steps}\n\n{report}");
         sink.SetStatus("Waiting for Claude…");
         return report;
     }
 
     /// <summary>
     /// Stands in for the chat while a subagent works: its answer and reasoning stay out of the transcript (the report is
-    /// shown when it's done), its tools show up marked as the subagent's, and its token use counts towards the chat's.
+    /// shown when it's done), its tool calls are listed in its own row, and its token use counts towards the chat's.
     /// </summary>
-    private sealed class SubagentSink(IChatSink chat, string description) : IChatSink
+    private sealed class SubagentSink(IChatSink chat, SubagentProgress progress) : IChatSink
     {
         public void AppendText(string text)
         {
@@ -144,12 +160,14 @@ internal sealed partial class ClaudeAgent
         {
         }
 
-        public void ToolActivity(ActivityKind kind, string title, string detail, FileChange? change = null) =>
-            chat.ToolActivity(kind, "↳ " + title, detail, change);
+        public void ToolActivity(ActivityKind kind, string title, string detail, FileChange? change = null) => progress.Add(title);
 
-        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop) => chat.StartLiveActivity(kind, "↳ " + title, stop);
+        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded = false) => chat.StartLiveActivity(kind, "↳ " + title, stop, expanded);
 
-        public void SetStatus(string? status) => chat.SetStatus(status is null ? null : $"Subagent ({description}): {status}");
+        // The status line keeps saying a subagent is running; what it's doing is in its row.
+        public void SetStatus(string? status)
+        {
+        }
 
         public void ReportTokenUsage(ClaudeModel model, TokenUsage usage) => chat.ReportTokenUsage(model, usage);
 

@@ -617,11 +617,11 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     void IChatSink.SetStatus(string? status) => this.Status = status ?? string.Empty;
 
-    ILiveActivity IChatSink.StartLiveActivity(ActivityKind kind, string title, Action stop)
+    ILiveActivity IChatSink.StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded)
     {
         this.currentAssistant = null;
         this.currentThinking = null;
-        var entry = new ChatEntry(ChatEntryKind.Tool, title, activity: kind) { StopAction = stop };
+        var entry = new ChatEntry(ChatEntryKind.Tool, title, activity: kind) { StopAction = stop, StartsExpanded = expanded };
         this.Messages.Add(entry);
         return new LiveActivity(this.Messages, entry);
     }

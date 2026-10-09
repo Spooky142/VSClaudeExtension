@@ -90,8 +90,9 @@ internal interface IChatSink
     /// Shows a tool call while it runs, e.g. a command and its output so far, with a button that stops just this
     /// call. Disposing it removes the row; the finished call is then reported with <see cref="ToolActivity"/>.
     /// </summary>
-    /// <param name="stop">Called on the UI thread when the user stops it.</param>
-    ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop);
+    /// <param name="stop">Called on the UI thread when the user stops it; null if it can't be stopped on its own.</param>
+    /// <param name="expanded">True to show its output from the start, e.g. a subagent's steps, rather than on a click.</param>
+    ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded = false);
 
     void SetStatus(string? status);
 

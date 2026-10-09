@@ -43,6 +43,9 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     private readonly SemaphoreSlim approvalGate = new(1, 1);
     private readonly Dictionary<string, (string Name, JsonElement Input, string? Before)> pendingTools = new();
 
+    // The rows of subagents at work, by the ID of the tool call that started each.
+    private readonly Dictionary<string, SubagentProgress> subagents = new();
+
     private bool editsPreApproved;
 
     // Set by Rewind: the next message resumes the session as it was at this message, in a forked copy.
@@ -246,6 +249,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
         finally
         {
             pollCts.Cancel();
+            this.EndSubagents();
         }
 
         await poll;

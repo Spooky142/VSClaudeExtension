@@ -85,21 +85,26 @@ internal sealed partial class ClaudeCodeEngine
                         {
                             chatSink.ReportTasks(TaskList.Parse(input));
                         }
+                        else if (name is "Task" or "Agent" && !this.subagents.ContainsKey(id))
+                        {
+                            // Claude Code can't stop one subagent on its own, so its row has no Stop button.
+                            string who = Str(input, "description") is { Length: > 0 } d ? d : "task";
+                            this.subagents[id] = new SubagentProgress(chatSink.StartLiveActivity(ActivityKind.Other, $"Subagent: {who}", stop: null, expanded: true));
+                        }
                     }
                 }
 
                 break;
 
             case "assistant":
-                // A subagent's turn stays out of the transcript, but what it's about to do shows in the status.
-                if (Str(ev, "parent_tool_use_id") is string parentId)
+                // A subagent's turn stays out of the transcript, but what it's about to do is added to its row.
+                if (Str(ev, "parent_tool_use_id") is string parentId && this.subagents.TryGetValue(parentId, out SubagentProgress? progress))
                 {
-                    string who = this.pendingTools.TryGetValue(parentId, out var parentCall) && Str(parentCall.Input, "description") is { Length: > 0 } d ? d : "task";
                     foreach (JsonElement block in Content(ev))
                     {
                         if (Str(block, "type") == "tool_use")
                         {
-                            chatSink.SetStatus($"Subagent ({who}): {SubagentStep(Str(block, "name") ?? "tool", block.TryGetProperty("input", out JsonElement stepInput) ? stepInput : default)}…");
+                            progress.Add(SubagentStep(Str(block, "name") ?? "tool", block.TryGetProperty("input", out JsonElement stepInput) ? stepInput : default));
                         }
                     }
                 }
@@ -115,9 +120,11 @@ internal sealed partial class ClaudeCodeEngine
                         && this.pendingTools.TryGetValue(id, out var call))
                     {
                         this.pendingTools.Remove(id);
-                        if (call.Name is "Task" or "Agent")
+                        if (this.subagents.TryGetValue(id, out SubagentProgress? finished))
                         {
-                            chatSink.SetStatus("Claude Code is working…");
+                            // Its row gives way to the finished call's, with the report.
+                            this.subagents.Remove(id);
+                            finished.Dispose();
                         }
 
                         if (this.partlyApplied.TryRemove(id, out FileChange? kept))
@@ -167,7 +174,18 @@ internal sealed partial class ClaudeCodeEngine
         return null;
     }
 
-    /// <summary>A tool call in a few words, e.g. "Read Foo.cs" or "Grep TODO", for the status line.</summary>
+    /// <summary>Removes the rows of subagents still working when a reply ends (it was stopped, or Claude Code exited).</summary>
+    private void EndSubagents()
+    {
+        foreach (SubagentProgress progress in this.subagents.Values)
+        {
+            progress.Dispose();
+        }
+
+        this.subagents.Clear();
+    }
+
+    /// <summary>A tool call in a few words, e.g. "Read Foo.cs" or "Grep TODO", for a subagent's row.</summary>
     internal static string SubagentStep(string tool, JsonElement input)
     {
         string? detail = new[] { "file_path", "path", "pattern", "command", "query", "url", "description" }

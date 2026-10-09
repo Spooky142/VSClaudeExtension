@@ -281,8 +281,15 @@ public sealed class AgentLoopTests : IDisposable
         Assert.DoesNotContain("line two", this.api.Requests[3].RootElement.GetRawText());
         Assert.Empty(this.sink.Approvals);
         Assert.Equal("It has two lines.", this.sink.Text.ToString());
-        Assert.Contains(this.sink.Activities, a => a.Title.StartsWith("↳ ")); // its tool use is shown, marked as the subagent's
-        Assert.Contains(this.sink.Activities, a => a.Title == "Subagent: Read the notes");
+        // Its tool use shows in its own row while it works, which then gives way to one with its report.
+        (string liveTitle, RecordingSink.Live row) = Assert.Single(this.sink.LiveRows);
+        Assert.Equal("Subagent: Read the notes", liveTitle);
+        Assert.Contains("hello.txt", row.Output);
+        Assert.True(row.Disposed);
+        (_, string title, string detail) = Assert.Single(this.sink.Activities);
+        Assert.Equal("Subagent: Read the notes", title);
+        Assert.Contains("hello.txt", detail.Split('\n')[1]); // the step it took
+        Assert.EndsWith("Report: hello.txt has two lines.", detail);
         Assert.Equal(4, this.sink.Usages.Count); // its tokens count too
     }
 

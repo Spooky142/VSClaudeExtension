@@ -81,11 +81,17 @@ internal sealed partial class ClaudeAgent
             {
                 sink.SetStatus(doing.Count == 1 ? doing[0] : $"{doing[0]} (+{doing.Count - 1} more running)");
             }
+
+            foreach (DeferredSink tool in deferred)
+            {
+                tool.ShowLive(sink);
+            }
         }
 
         ToolResultBlockParam[] results = await running;
         foreach (DeferredSink tool in deferred)
         {
+            tool.ShowLive(sink); // removes the rows of tools that have finished, which is all of them now
             tool.ReplayTo(sink);
         }
 
@@ -184,11 +190,13 @@ internal sealed partial class ClaudeAgent
 
     /// <summary>
     /// Stands in for the chat while a tool runs on a background thread: what it reports is kept, to be replayed on
-    /// the UI thread later. Only for tools that never ask the user anything.
+    /// the UI thread later, and the rows it shows while it runs are brought up to date from there (see
+    /// <see cref="ShowLive"/>). Only for tools that never ask the user anything.
     /// </summary>
     private sealed class DeferredSink : IChatSink
     {
         private readonly List<Action<IChatSink>> calls = [];
+        private readonly List<DeferredLive> live = [];
 
         public void ReplayTo(IChatSink sink)
         {
@@ -215,8 +223,37 @@ internal sealed partial class ClaudeAgent
         // Not replayed: each tool's "Reading…" would be stale by then. It's only kept for the batch's status while the tool runs.
         public void SetStatus(string? status) => this.status = status;
 
-        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action stop)
-            => throw new InvalidOperationException("Tools running alongside others can't show live progress.");
+        public ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded = false)
+        {
+            var row = new DeferredLive(kind, title, stop, expanded);
+            lock (this.live)
+            {
+                this.live.Add(row);
+            }
+
+            return row;
+        }
+
+        /// <summary>Shows the tool's rows in the chat with their output so far, and removes finished ones. On the UI thread.</summary>
+        public void ShowLive(IChatSink sink)
+        {
+            DeferredLive[] rows;
+            lock (this.live)
+            {
+                rows = [.. this.live];
+            }
+
+            foreach (DeferredLive row in rows)
+            {
+                if (row.Show(sink))
+                {
+                    lock (this.live)
+                    {
+                        this.live.Remove(row);
+                    }
+                }
+            }
+        }
 
         public void ReportTokenUsage(ClaudeModel model, TokenUsage usage) => this.Add(s => s.ReportTokenUsage(model, usage));
 
@@ -245,6 +282,43 @@ internal sealed partial class ClaudeAgent
             lock (this.calls)
             {
                 this.calls.Add(call);
+            }
+        }
+
+        /// <summary>A row started on the tool's thread; the chat's own row is made, updated and removed by <see cref="Show"/>.</summary>
+        private sealed class DeferredLive(ActivityKind kind, string title, Action? stop, bool expanded) : ILiveActivity
+        {
+            private volatile string? output;
+            private volatile bool disposed;
+
+            // UI thread only.
+            private ILiveActivity? shown;
+            private string? shownOutput;
+
+            public void SetOutput(string output) => this.output = output;
+
+            public void Dispose() => this.disposed = true;
+
+            /// <summary>Brings the chat's row up to date; returns true once it's gone for good.</summary>
+            public bool Show(IChatSink sink)
+            {
+                if (this.disposed)
+                {
+                    this.shown?.Dispose();
+                    this.shown = null;
+                    return true;
+                }
+
+                // Stop can be pressed just after the tool finished, before its row is removed; by then there's nothing to stop.
+                this.shown ??= sink.StartLiveActivity(kind, title, stop is null ? null : () => { if (!this.disposed) stop(); }, expanded);
+                string? now = this.output;
+                if (now != null && !ReferenceEquals(now, this.shownOutput))
+                {
+                    this.shown.SetOutput(now);
+                    this.shownOutput = now;
+                }
+
+                return false;
             }
         }
     }

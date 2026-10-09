@@ -249,7 +249,8 @@
             <Button DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Stop" Margin="0,0,4,0" VerticalAlignment="Center"
                     Click="OnStopEntry" ToolTip="Stop this command; Claude carries on without it"
                     Visibility="{Binding CanStop, Converter={StaticResource BoolToVis}}" />
-            <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}">
+            <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}"
+                          IsChecked="{Binding StartsExpanded, Mode=OneTime}">
               <DockPanel Margin="8,5">
                 <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;"
                            Margin="8,0,0,0" Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}" />
