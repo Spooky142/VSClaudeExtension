@@ -76,6 +76,11 @@ internal sealed class MarkdownView : RichTextBox
         this.timer.Stop();
         this.lastRender = DateTime.UtcNow;
         MarkdownRenderer.Update(this.Document, this.Markdown, this.FontSize, this.rendered);
+        if (this.rendered.ChangedInPlace is Block changed)
+        {
+            this.blockWidths.Remove(changed); // a streaming code block that grew
+        }
+
         this.fitWidth = null;
         this.InvalidateMeasure();
     }

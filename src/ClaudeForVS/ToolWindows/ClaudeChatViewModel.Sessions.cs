@@ -225,11 +225,17 @@ internal sealed partial class ClaudeChatViewModel
             this.chatTitle = oneLine.Length > 80 ? oneLine.Substring(0, 80) + "…" : oneLine;
         }
 
+        // The entries are copied here, on the UI thread; turning them into JSON and writing it happens in the background.
+        _ = this.SaveChatAsync(this.CurrentInfo()!, this.SavedEntries());
+    }
+
+    private async Task SaveChatAsync(SessionInfo info, List<SavedEntry> entries)
+    {
         try
         {
-            SessionStore.Save(this.CurrentInfo()!, this.SavedEntries());
+            await SessionStore.SaveInBackgroundAsync(info, entries);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
             this.Status = "Couldn't save this chat to history: " + ex.Message;
             return;
@@ -242,7 +248,10 @@ internal sealed partial class ClaudeChatViewModel
     }
 
     /// <summary>Replaces the current chat with a saved one. The next message continues it.</summary>
-    public void OpenSession(SessionItem item)
+    public void OpenSession(SessionItem item) => this.OpenSession(item, null);
+
+    /// <param name="loaded">The chat's transcript, if it has been read already.</param>
+    private void OpenSession(SessionItem item, List<SavedEntry>? loaded)
     {
         if (this.IsBusy)
         {
@@ -263,7 +272,7 @@ internal sealed partial class ClaudeChatViewModel
             return;
         }
 
-        if (SessionStore.LoadEntries(info.Id) is not { } entries)
+        if ((loaded ?? SessionStore.LoadEntries(info.Id)) is not { } entries)
         {
             this.Status = "This chat's saved transcript couldn't be read.";
             return;
@@ -313,7 +322,8 @@ internal sealed partial class ClaudeChatViewModel
     }
 
     /// <summary>Reopens the most recent chat for the current repository, so a chat carries over when Visual Studio restarts.</summary>
-    public void RestoreLastSession()
+    /// <remarks>Every saved chat's summary and then the transcript are read on a background thread, so the window opens straight away.</remarks>
+    public async Task RestoreLastSessionAsync()
     {
         if (this.Messages.Count > 0 || this.engine != null)
         {
@@ -321,12 +331,18 @@ internal sealed partial class ClaudeChatViewModel
         }
 
         string repo = this.RepoPath.Trim().TrimEnd('\\', '/');
-        SessionInfo? last = SessionStore.List().FirstOrDefault(s =>
-            string.Equals(s.RepoPath.TrimEnd('\\', '/'), repo, StringComparison.OrdinalIgnoreCase)
-            && s.Engine == this.settings.Engine);
-        if (last != null)
+        ChatEngineKind engineKind = this.settings.Engine;
+        (SessionInfo? last, List<SavedEntry>? entries) = await Task.Run(() =>
         {
-            this.OpenSession(new SessionItem(last, isCurrent: false));
+            SessionInfo? found = SessionStore.List().FirstOrDefault(s =>
+                string.Equals(s.RepoPath.TrimEnd('\\', '/'), repo, StringComparison.OrdinalIgnoreCase) && s.Engine == engineKind);
+            return (found, found is null ? null : SessionStore.LoadEntries(found.Id));
+        });
+
+        // Unless something was started (or opened) meanwhile.
+        if (last != null && entries != null && this.Messages.Count == 0 && this.engine == null && this.chatId == null)
+        {
+            this.OpenSession(new SessionItem(last, isCurrent: false), entries);
         }
     }
 

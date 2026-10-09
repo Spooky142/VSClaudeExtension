@@ -18,7 +18,11 @@ namespace ClaudeForVS.Agent;
 /// <summary>The type or member the caret is in.</summary>
 /// <param name="Kind">e.g. "method" or "class".</param>
 /// <param name="StartLine">1-based.</param>
-internal sealed record EnclosingMember(string Name, string Kind, int StartLine, int EndLine, string Text, bool HasDocumentation);
+internal sealed record EnclosingMember(string Name, string Kind, int StartLine, int EndLine, SourceText Source, TextSpan Span, bool HasDocumentation)
+{
+    /// <summary>The member's code. Only copied out when asked for, since the light bulb looks for a member on every caret move.</summary>
+    public string Text => this.Source.ToString(this.Span);
+}
 
 /// <summary>
 /// <see cref="ICodeIntelligence"/> on Roslyn. Takes the solution from a function, so Visual Studio supplies its live
@@ -348,7 +352,7 @@ internal sealed class RoslynCodeIntelligence(Func<Solution> solution) : ICodeInt
             int start = text.Lines.GetLinePosition(node.Span.Start).Line + 1;
             int end = text.Lines.GetLinePosition(node.Span.End).Line + 1;
             bool documented = !string.IsNullOrWhiteSpace(symbol.GetDocumentationCommentXml(cancellationToken: cancellationToken));
-            return new EnclosingMember(symbol.Name, KindOf(symbol), start, end, text.ToString(node.Span), documented);
+            return new EnclosingMember(symbol.Name, KindOf(symbol), start, end, text, node.Span, documented);
         }
 
         return null;
@@ -445,7 +449,7 @@ internal sealed class RoslynCodeIntelligence(Func<Solution> solution) : ICodeInt
         }
 
         string text = Regex.Replace(Regex.Replace(match.Groups[1].Value, @"<[^>]+>", string.Empty), @"\s+", " ").Trim();
-        return text.Length == 0 ? null : text.Length > 400 ? text.Substring(0, 400) + "â€¦" : text;
+        return text.Length == 0 ? null : text.Length > 400 ? text.Substring(0, 400) + "…" : text;
     }
 
     private static string StripWhitespace(string text) => Regex.Replace(text, @"\s+", string.Empty);
@@ -453,7 +457,7 @@ internal sealed class RoslynCodeIntelligence(Func<Solution> solution) : ICodeInt
     private static string LineText(SourceText text, int line)
     {
         string value = line >= 1 && line <= text.Lines.Count ? text.Lines[line - 1].ToString().Trim() : string.Empty;
-        return value.Length > MaxLineChars ? value.Substring(0, MaxLineChars) + "â€¦" : value;
+        return value.Length > MaxLineChars ? value.Substring(0, MaxLineChars) + "…" : value;
     }
 
     /// <summary>A path relative to the repository with forward slashes, or the full path for files outside it.</summary>

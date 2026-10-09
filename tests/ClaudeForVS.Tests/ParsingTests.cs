@@ -73,6 +73,11 @@ public class GitRunnerTests
     [InlineData(true, "grep", "-n", "TODO")]
     [InlineData(true, "log", "-S", "needle")]
     [InlineData(true, "diff", "--", "--output")] // a path, not an option
+    [InlineData(true, "reflog")]
+    [InlineData(true, "reflog", "show", "main")]
+    [InlineData(true, "reflog", "-n", "10")]
+    [InlineData(false, "reflog", "expire", "--expire=now", "--all")]
+    [InlineData(false, "reflog", "delete", "HEAD@{1}")]
     public void ReadOnlyCommandsAreRecognised(bool expected, params string[] args) =>
         Assert.Equal(expected, GitRunner.IsReadOnly(args));
 

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -44,9 +45,7 @@ internal static class WorkingTreeSnapshot
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(tempIndex)!);
-            (int code, string indexPath) = await GitRunner.RunAsync(repoRoot, ["rev-parse", "--git-path", "index"], cancellationToken, includeStderr: false).ConfigureAwait(false);
-            string realIndex = Path.Combine(repoRoot, indexPath.Trim());
-            if (code == 0 && File.Exists(realIndex))
+            if (await IndexPathAsync(repoRoot, cancellationToken).ConfigureAwait(false) is string realIndex && File.Exists(realIndex))
             {
                 File.Copy(realIndex, tempIndex, overwrite: true);
             }
@@ -61,7 +60,7 @@ internal static class WorkingTreeSnapshot
                 addArgs = ["add", "-A", $"--pathspec-from-file={pathspecFile}", "--pathspec-file-nul"];
             }
 
-            (code, _) = await GitRunner.RunAsync(repoRoot, addArgs, cancellationToken, env, includeStderr: false).ConfigureAwait(false);
+            (int code, _) = await GitRunner.RunAsync(repoRoot, addArgs, cancellationToken, env, includeStderr: false).ConfigureAwait(false);
             if (code != 0)
             {
                 return null;
@@ -88,6 +87,25 @@ internal static class WorkingTreeSnapshot
                 }
             }
         }
+    }
+
+    // Where each repository keeps its index (it differs in worktrees), which doesn't change, so git is asked once.
+    private static readonly ConcurrentDictionary<string, string> IndexPaths = new(StringComparer.OrdinalIgnoreCase);
+
+    private static async Task<string?> IndexPathAsync(string repoRoot, CancellationToken cancellationToken)
+    {
+        if (IndexPaths.TryGetValue(repoRoot, out string? known))
+        {
+            return known;
+        }
+
+        (int code, string indexPath) = await GitRunner.RunAsync(repoRoot, ["rev-parse", "--git-path", "index"], cancellationToken, includeStderr: false).ConfigureAwait(false);
+        if (code != 0)
+        {
+            return null;
+        }
+
+        return IndexPaths[repoRoot] = Path.Combine(repoRoot, indexPath.Trim());
     }
 
     /// <summary>Untracked, not ignored files over <see cref="MaxUntrackedFileBytes"/>, as repository-relative paths.</summary>
@@ -135,14 +153,18 @@ internal static class WorkingTreeSnapshot
     /// <summary>Files that differ between two snapshots, with lines added and removed in each.</summary>
     public static async Task<IReadOnlyList<FileStat>> StatsAsync(string repoRoot, string fromTree, string toTree, CancellationToken cancellationToken)
     {
-        IReadOnlyList<SnapshotChange> changes = await ChangesAsync(repoRoot, fromTree, toTree, cancellationToken).ConfigureAwait(false);
-        if (changes.Count == 0)
+        if (fromTree == toTree)
         {
             return [];
         }
 
-        (int code, string output) = await GitRunner.RunAsync(
-            repoRoot, ["diff", "--numstat", "--no-renames", "-z", fromTree, toTree], cancellationToken, includeStderr: false).ConfigureAwait(false);
+        // Both at once; neither depends on the other.
+        Task<IReadOnlyList<SnapshotChange>> changing = ChangesAsync(repoRoot, fromTree, toTree, cancellationToken);
+        Task<(int ExitCode, string Output)> counting = GitRunner.RunAsync(
+            repoRoot, ["diff", "--numstat", "--no-renames", "-z", fromTree, toTree], cancellationToken, includeStderr: false);
+        await Task.WhenAll(changing, counting).ConfigureAwait(false);
+        IReadOnlyList<SnapshotChange> changes = await changing.ConfigureAwait(false);
+        (int code, string output) = await counting.ConfigureAwait(false);
         Dictionary<string, (int Added, int Removed, bool Binary)> counts = code == 0 ? ParseNumstat(output) : [];
         return changes
             .Select(c => counts.TryGetValue(c.Path, out var n) ? new FileStat(c.Status, c.Path, n.Added, n.Removed, n.Binary) : new FileStat(c.Status, c.Path, 0, 0, false))

@@ -81,7 +81,7 @@ internal sealed partial class ClaudeAgent
         string where = folder.Length > 0 ? $" in {folder}" : string.Empty;
 
         sink.SetStatus($"Finding {pattern}{where}");
-        IReadOnlyList<string> all = this.Readable(await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken));
+        IReadOnlyList<string> all = await this.ReadableRepoFilesAsync(cancellationToken);
         IReadOnlyList<string> matches = RepoSearch.Glob(all, pattern, folder);
         string list = string.Join("\n", matches.Take(RepoSearch.MaxGlobResults));
         string more = matches.Count > RepoSearch.MaxGlobResults
@@ -114,7 +114,7 @@ internal sealed partial class ClaudeAgent
 
         string where = (scope.Length > 0 ? $" in {scope}" : string.Empty) + (glob is null ? string.Empty : $" ({glob})");
         sink.SetStatus($"Searching for {pattern}{where}");
-        IReadOnlyList<string> all = this.Readable(await RepoSearch.ListFilesAsync(this.RepoRoot, cancellationToken));
+        IReadOnlyList<string> all = await this.ReadableRepoFilesAsync(cancellationToken);
         bool scopeIsFile = scope.Length > 0 && File.Exists(Path.Combine(this.RepoRoot, scope));
         IEnumerable<string> files = glob is null || scopeIsFile ? RepoSearch.Under(all, scope) : RepoSearch.Glob(all, glob, scope);
         string result = await Task.Run(
@@ -124,6 +124,48 @@ internal sealed partial class ClaudeAgent
     }
 
     /// <summary>The files glob and grep may show: all of them, less any the permission rules deny reading.</summary>
+    // The repository's readable files, shared by glob and grep calls close together (several often run at once, in
+    // subagents too), so git lists them and each is checked against the permission rules once. Forgotten after a few
+    // seconds, and as soon as a tool runs that might add or remove files.
+    private readonly object repoFilesLock = new();
+    private Task<IReadOnlyList<string>>? repoFiles;
+    private DateTime repoFilesListed;
+    private static readonly TimeSpan RepoFilesLifetime = TimeSpan.FromSeconds(10);
+
+    private async Task<IReadOnlyList<string>> ReadableRepoFilesAsync(CancellationToken cancellationToken)
+    {
+        Task<IReadOnlyList<string>> listing;
+        lock (this.repoFilesLock)
+        {
+            if (this.repoFiles is null || this.repoFiles.IsFaulted || this.repoFiles.IsCanceled || DateTime.UtcNow - this.repoFilesListed > RepoFilesLifetime)
+            {
+                // Not cancelled by this call's token, since other calls may be waiting for it too.
+                this.repoFiles = Task.Run(async () => this.Readable(await RepoSearch.ListFilesAsync(this.RepoRoot, CancellationToken.None).ConfigureAwait(false)));
+                this.repoFilesListed = DateTime.UtcNow;
+            }
+
+            listing = this.repoFiles;
+        }
+
+        var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (cancellationToken.Register(() => cancelled.TrySetCanceled()))
+        {
+            await Task.WhenAny(listing, cancelled.Task).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return await listing.ConfigureAwait(false);
+    }
+
+    /// <summary>Lists the repository's files afresh next time, e.g. after a tool that may have created or deleted some.</summary>
+    private void ForgetRepoFiles()
+    {
+        lock (this.repoFilesLock)
+        {
+            this.repoFiles = null;
+        }
+    }
+
     private IReadOnlyList<string> Readable(IReadOnlyList<string> files) => !this.permissions.HasReadDenials
         ? files
         : files.Where(f => this.permissions.ForRead(Path.Combine(this.RepoRoot, f.Replace('/', Path.DirectorySeparatorChar))) != PermissionVerdict.Deny).ToList();

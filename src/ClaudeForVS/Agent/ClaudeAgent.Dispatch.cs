@@ -21,6 +21,11 @@ internal sealed partial class ClaudeAgent
     /// <summary>Runs one tool call, turning failures into an error result for Claude.</summary>
     private async Task<ToolResultBlockParam> RunToolAsync(ToolUseBlockParam toolUse, IChatSink sink, CancellationToken cancellationToken)
     {
+        if (!this.CanRunInParallel(toolUse))
+        {
+            this.ForgetRepoFiles(); // it may write files (or run something that does)
+        }
+
         try
         {
             if (await this.RunPreToolHooksAsync(toolUse, sink, cancellationToken) is string blockedBy)
@@ -36,8 +41,10 @@ internal sealed partial class ClaudeAgent
         {
             return Error(toolUse.ID, "Cancelled by the user.");
         }
-        catch (Exception ex) when (ex is ToolInputException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
+            // Any failure (an API error in a subagent, a process that won't start, a regex timeout) must still answer the
+            // tool call: a tool_use left without a tool_result makes every later request in this chat fail.
             sink.ToolActivity(ActivityKind.Failed, $"{toolUse.Name} failed", ex.Message);
             return Error(toolUse.ID, ex.Message);
         }

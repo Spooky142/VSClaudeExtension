@@ -55,16 +55,46 @@ internal static class FileLinks
         return null;
     }
 
+    // What Resolve said about each path lately. A streaming reply is rendered again several times a second, and each
+    // time every path in its last paragraph would otherwise go to the disk. Forgotten after a few seconds, so a file
+    // that's created or deleted soon gets its link (or loses it).
+    private static readonly Dictionary<string, string?> Resolved = new(StringComparer.Ordinal);
+    private static DateTime resolvedSince = DateTime.MinValue;
+    private static Func<string, string?>? resolvedBy;
+    private static readonly TimeSpan ResolvedLifetime = TimeSpan.FromSeconds(5);
+
     /// <summary>The file a mention refers to, if <see cref="Resolve"/> finds it.</summary>
     public static FileTarget? Target(PathMention mention)
     {
-        try
-        {
-            return Resolve?.Invoke(mention.Path) is string full ? new FileTarget(full, mention.Line, mention.EndLine) : null;
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.IO.PathTooLongException)
+        if (Resolve is not { } resolve)
         {
             return null;
+        }
+
+        lock (Resolved)
+        {
+            if (DateTime.UtcNow - resolvedSince > ResolvedLifetime || !ReferenceEquals(resolve, resolvedBy))
+            {
+                Resolved.Clear();
+                resolvedSince = DateTime.UtcNow;
+                resolvedBy = resolve;
+            }
+
+            if (!Resolved.TryGetValue(mention.Path, out string? full))
+            {
+                try
+                {
+                    full = resolve(mention.Path);
+                }
+                catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.IO.PathTooLongException)
+                {
+                    full = null;
+                }
+
+                Resolved[mention.Path] = full;
+            }
+
+            return full is null ? null : new FileTarget(full, mention.Line, mention.EndLine);
         }
     }
 }

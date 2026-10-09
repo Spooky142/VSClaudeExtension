@@ -135,7 +135,7 @@ internal static class ClaudeCodeCli
         using var process = Process.Start(psi)!;
         Task<string> output = process.StandardOutput.ReadToEndAsync();
         _ = process.StandardError.ReadToEndAsync();
-        using (cancellationToken.Register(() => { try { process.Kill(); } catch (InvalidOperationException) { } }))
+        using (cancellationToken.Register(() => Processes.Kill(process)))
         {
             await WaitForExitAsync(process).ConfigureAwait(false);
         }

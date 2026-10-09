@@ -142,7 +142,7 @@ public partial class ClaudeChatControl : UserControl
                 // Only the first window carries the last chat over from before Visual Studio restarted; others start empty.
                 if (this.Pane.InstanceNumber == 0)
                 {
-                    this.viewModel.RestoreLastSession();
+                    this.viewModel.RestoreLastSessionAsync().FileAndForget("ClaudeForVS/RestoreSession");
                 }
             }
 

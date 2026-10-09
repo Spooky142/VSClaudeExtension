@@ -37,7 +37,10 @@ internal static class SyntaxHighlighter
         bool PascalCaseTypes = false,
         bool HashPreprocessor = false,
         bool TripleQuotes = false,
-        bool DollarVariables = false);
+        bool DollarVariables = false)
+    {
+        public HashSet<string> KeywordSet { get; } = new(Keywords, CaseInsensitive ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    }
 
     private static readonly string[] CSharpKeywords =
     [
@@ -203,7 +206,7 @@ internal static class SyntaxHighlighter
     {
         var tokens = new List<CodeToken>();
         var plain = new StringBuilder();
-        var keywords = new HashSet<string>(lang.Keywords, lang.CaseInsensitive ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        HashSet<string> keywords = lang.KeywordSet;
 
         void Emit(string text, TokenKind kind)
         {
@@ -237,7 +240,7 @@ internal static class SyntaxHighlighter
                 continue;
             }
 
-            if (lang.LineComments.FirstOrDefault(lc => At(code, i, lc)) is string _)
+            if (StartsLineComment(code, i, lang.LineComments))
             {
                 int stop = LineEnd(code, i);
                 Emit(code.Substring(i, stop - i), TokenKind.Comment);
@@ -264,7 +267,7 @@ internal static class SyntaxHighlighter
 
                 if (q < code.Length && code[q] == '"' && q > i)
                 {
-                    bool verbatim = code.Substring(i, q - i).Contains('@');
+                    bool verbatim = code.IndexOf('@', i, q - i) >= 0;
                     int stop = StringEnd(code, q, '"', verbatim);
                     Emit(code.Substring(i, stop - i), TokenKind.String);
                     i = stop;
@@ -337,7 +340,7 @@ internal static class SyntaxHighlighter
                 continue;
             }
 
-            Emit(c.ToString(), TokenKind.Plain);
+            plain.Append(c);
             if (c == '\n')
             {
                 lineStart = true;
@@ -451,6 +454,19 @@ internal static class SyntaxHighlighter
     }
 
     private static bool At(string code, int i, string text) => string.CompareOrdinal(code, i, text, 0, text.Length) == 0;
+
+    private static bool StartsLineComment(string code, int i, string[] markers)
+    {
+        foreach (string marker in markers)
+        {
+            if (At(code, i, marker))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 

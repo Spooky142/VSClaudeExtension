@@ -322,8 +322,7 @@ internal sealed class McpClient : IDisposable
                 this.process.StandardInput.Close();
                 if (!this.process.WaitForExit(2000))
                 {
-                    using var kill = Process.Start(new ProcessStartInfo("taskkill", $"/T /F /PID {this.process.Id}") { CreateNoWindow = true, UseShellExecute = false });
-                    kill?.WaitForExit(5000);
+                    Processes.KillTree(this.process);
                 }
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)

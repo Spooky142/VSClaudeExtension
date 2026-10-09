@@ -90,8 +90,26 @@ internal static class MarkdownRenderer
             previous.Trimmed = null;
         }
 
+        previous.ChangedInPlace = null;
         List<MdBlock> blocks = Markdig.Markdown.Parse(markdown, Pipeline).ToList();
         List<string?> sources = blocks.Select(b => SourceOf(markdown, b)).ToList();
+
+        // A code block still streaming in only grows at its end, so new lines are added to it rather than the whole
+        // block being highlighted and built again on every update. Once its fence closes it's rendered afresh.
+        int last = blocks.Count - 1;
+        if (last >= 0 && last == previous.Items.Count - 1 && previous.Streaming is { } streaming
+            && ReferenceEquals(previous.Items[last].Block, streaming.Section)
+            && blocks[last] is FencedCodeBlock { ClosingFencedCharCount: 0 } open && (open.Info ?? string.Empty) == streaming.Info
+            && Enumerable.Range(0, last).All(i => sources[i] != null && string.Equals(previous.Items[i].Source, sources[i], StringComparison.Ordinal))
+            && streaming.TryAppend(CodeText(open)))
+        {
+            previous.Items[last] = (sources[last], streaming.Section);
+            previous.ChangedInPlace = streaming.Section;
+            TrimLastMargin(doc, previous);
+            return;
+        }
+
+        previous.Streaming = null;
 
         // The last block rendered before may have been cut off mid-stream, so it's never kept.
         int keep = 0;
@@ -112,7 +130,18 @@ internal static class MarkdownRenderer
         previous.Items.RemoveRange(keep, previous.Items.Count - keep);
         for (int i = keep; i < blocks.Count; i++)
         {
-            WpfBlock? rendered = RenderBlock(blocks[i], baseFontSize);
+            WpfBlock? rendered;
+            if (i == last && blocks[i] is FencedCodeBlock { ClosingFencedCharCount: 0 } unclosed)
+            {
+                previous.Streaming = new StreamingCode(unclosed.Info ?? string.Empty, baseFontSize);
+                previous.Streaming.TryAppend(CodeText(unclosed));
+                rendered = previous.Streaming.Section;
+            }
+            else
+            {
+                rendered = RenderBlock(blocks[i], baseFontSize);
+            }
+
             previous.Items.Add((sources[i], rendered));
             if (rendered != null)
             {
@@ -120,11 +149,77 @@ internal static class MarkdownRenderer
             }
         }
 
-        // Trim the spacing after the last block so messages don't end with a gap (put back if it stops being last).
+        TrimLastMargin(doc, previous);
+    }
+
+    // Trim the spacing after the last block so messages don't end with a gap (put back if it stops being last).
+    private static void TrimLastMargin(FlowDocument doc, RenderedBlocks previous)
+    {
         if (doc.Blocks.LastBlock is WpfBlock last)
         {
             previous.Trimmed = (last, last.Margin);
             last.Margin = new Thickness(last.Margin.Left, last.Margin.Top, last.Margin.Right, 0);
+        }
+    }
+
+    private static string CodeText(LeafBlock code)
+        => string.Join("\n", code.Lines.Lines.Take(code.Lines.Count).Select(l => l.Slice.ToString())).TrimEnd('\n');
+
+    /// <summary>
+    /// A code block whose closing fence hasn't arrived yet. Its complete lines are highlighted once and kept; only the
+    /// line still being written is replaced on each update. Lines are highlighted a batch at a time, so a comment or
+    /// string spanning batches may be coloured wrongly until the fence closes and the block is rendered whole.
+    /// </summary>
+    internal sealed class StreamingCode
+    {
+        private readonly string? language;
+        private string text = string.Empty;
+        private int committed; // length of the text up to and including its last line break, which is never redone
+        private WpfInline? committedEnd;
+
+        public StreamingCode(string info, double baseFontSize)
+        {
+            this.Info = info;
+            this.language = SyntaxHighlighter.NormalizeLanguage(info);
+            (this.Section, this.Body) = CodeSection(info, baseFontSize, () => this.text);
+        }
+
+        public string Info { get; }
+
+        public Section Section { get; }
+
+        private Paragraph Body { get; }
+
+        /// <summary>Shows <paramref name="code"/>, which must start with the lines already shown; false if it doesn't.</summary>
+        public bool TryAppend(string code)
+        {
+            if (code.Length < this.committed || string.CompareOrdinal(code, 0, this.text, 0, this.committed) != 0)
+            {
+                return false;
+            }
+
+            InlineCollection inlines = this.Body.Inlines;
+            while (inlines.LastInline is WpfInline tail && !ReferenceEquals(tail, this.committedEnd))
+            {
+                inlines.Remove(tail);
+            }
+
+            bool dark = IsDarkTheme();
+            int lineEnd = code.LastIndexOf('\n') + 1;
+            if (lineEnd > this.committed)
+            {
+                AddCodeTokens(inlines, SyntaxHighlighter.Tokenize(code.Substring(this.committed, lineEnd - this.committed), this.language), dark);
+                this.committed = lineEnd;
+                this.committedEnd = inlines.LastInline;
+            }
+
+            if (code.Length > this.committed)
+            {
+                AddCodeTokens(inlines, SyntaxHighlighter.Tokenize(code.Substring(this.committed), this.language), dark);
+            }
+
+            this.text = code;
+            return true;
         }
     }
 
@@ -144,11 +239,19 @@ internal static class MarkdownRenderer
         /// <summary>The block whose bottom margin was trimmed, and the margin it had.</summary>
         public (WpfBlock Block, Thickness Margin)? Trimmed { get; set; }
 
+        /// <summary>The last block, if it's a code block still streaming in.</summary>
+        public StreamingCode? Streaming { get; set; }
+
+        /// <summary>A block the last update changed without replacing it, so anything cached about it is stale.</summary>
+        public WpfBlock? ChangedInPlace { get; set; }
+
         /// <summary>Forgets everything, so the next update renders every block again (e.g. for new code colours).</summary>
         public void Clear()
         {
             this.Items.Clear();
             this.Trimmed = null;
+            this.Streaming = null;
+            this.ChangedInPlace = null;
         }
     }
 
@@ -254,10 +357,16 @@ internal static class MarkdownRenderer
     /// <summary>A code block: a header with the language and a Copy button, then the code, coloured by language.</summary>
     private static Section RenderCodeBlock(LeafBlock code, double baseFontSize)
     {
-        string text = string.Join("\n", code.Lines.Lines.Take(code.Lines.Count).Select(l => l.Slice.ToString())).TrimEnd('\n');
+        string text = CodeText(code);
         string info = (code as FencedCodeBlock)?.Info ?? string.Empty;
-        string? language = SyntaxHighlighter.NormalizeLanguage(info);
+        (Section section, Paragraph body) = CodeSection(info, baseFontSize, () => text);
+        AddCodeTokens(body.Inlines, SyntaxHighlighter.Tokenize(text, SyntaxHighlighter.NormalizeLanguage(info)), IsDarkTheme());
+        return section;
+    }
 
+    /// <summary>An empty code block: the header, and the paragraph for the code.</summary>
+    private static (Section Section, Paragraph Body) CodeSection(string info, double baseFontSize, Func<string> copyText)
+    {
         var header = new Paragraph
         {
             Background = CodeBackground,
@@ -272,7 +381,7 @@ internal static class MarkdownRenderer
             header.Inlines.Add(new Run(label + "  ") { Foreground = MutedBrush });
         }
 
-        header.Inlines.Add(new InlineUIContainer(CopyButton(text)) { BaselineAlignment = BaselineAlignment.Center });
+        header.Inlines.Add(new InlineUIContainer(CopyButton(copyText)) { BaselineAlignment = BaselineAlignment.Center });
 
         var body = new Paragraph
         {
@@ -281,16 +390,17 @@ internal static class MarkdownRenderer
             Padding = new Thickness(8, 0, 8, 6),
             Margin = new Thickness(0),
         };
-        AddCodeTokens(body.Inlines, SyntaxHighlighter.Tokenize(text, language), IsDarkTheme());
 
         var section = new Section { Margin = new Thickness(0, 0, 0, 8) };
         section.Blocks.Add(header);
         section.Blocks.Add(body);
-        return section;
+        return (section, body);
     }
 
     /// <summary>A small flat "Copy" button that puts <paramref name="text"/> on the clipboard.</summary>
-    internal static Button CopyButton(string text, string label = "Copy")
+    internal static Button CopyButton(string text, string label = "Copy") => CopyButton(() => text, label);
+
+    private static Button CopyButton(Func<string> text, string label = "Copy")
     {
         var button = new Button
         {
@@ -309,7 +419,7 @@ internal static class MarkdownRenderer
         {
             try
             {
-                Clipboard.SetText(text);
+                Clipboard.SetText(text());
                 button.Content = "Copied";
             }
             catch (System.Runtime.InteropServices.ExternalException)

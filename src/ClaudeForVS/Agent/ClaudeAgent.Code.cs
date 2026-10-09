@@ -19,7 +19,7 @@ internal sealed partial class ClaudeAgent
             return refusal;
         }
 
-        sink.SetStatus("Looking up a definitionâ€¦");
+        sink.SetStatus("Looking up a definition…");
         string result = await CodeTools.GoToDefinitionAsync(input, this.files, this.RepoRoot, this.CanShow, cancellationToken);
         sink.ToolActivity(ActivityKind.Search, title, result);
         return result;
@@ -33,7 +33,7 @@ internal sealed partial class ClaudeAgent
             return refusal;
         }
 
-        sink.SetStatus("Finding referencesâ€¦");
+        sink.SetStatus("Finding references…");
         string result = await CodeTools.FindReferencesAsync(input, this.files, this.RepoRoot, this.CanShow, cancellationToken);
         sink.ToolActivity(ActivityKind.Search, title, result);
         return result;
@@ -50,7 +50,7 @@ internal sealed partial class ClaudeAgent
             return refusal;
         }
 
-        sink.SetStatus("Searching the code modelâ€¦");
+        sink.SetStatus("Searching the code model…");
         string result = await CodeTools.FindSymbolsAsync(input, this.files, this.RepoRoot, this.CanShow, cancellationToken);
         sink.ToolActivity(ActivityKind.Search, title, result);
         return result;
@@ -69,7 +69,7 @@ internal sealed partial class ClaudeAgent
             return refusal;
         }
 
-        sink.SetStatus("Working out the renameâ€¦");
+        sink.SetStatus("Working out the rename…");
         RenamePlan plan = await CodeTools.PlanRenameAsync(input, this.files, this.RepoRoot, cancellationToken);
         string title = CodeTools.Title(plan);
         foreach (RenamedFile file in plan.Files)
@@ -97,7 +97,7 @@ internal sealed partial class ClaudeAgent
 
     private async Task<string> ListPackagesAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
     {
-        sink.SetStatus("Reading the projects' NuGet packagesâ€¦");
+        sink.SetStatus("Reading the projects' NuGet packages…");
         string result = await PackageTools.ListAsync(input, this.RepoRoot, cancellationToken);
         sink.ToolActivity(ActivityKind.Search, "Listed NuGet packages", result);
         return result;
@@ -121,7 +121,7 @@ internal sealed partial class ClaudeAgent
 
         if (this.Mode == AgentMode.Coding && !CommandRules.IsToolAllowed(this.RepoRoot, PackageTools.RuleKey))
         {
-            sink.SetStatus("Waiting for your approvalâ€¦");
+            sink.SetStatus("Waiting for your approval…");
             ApprovalResult approval = await sink.RequestApprovalAsync(ActivityKind.Shell, title, string.Empty, "Always allow package changes here", cancellationToken);
             if (approval.Decision == Approval.Deny)
             {
@@ -135,7 +135,7 @@ internal sealed partial class ClaudeAgent
             }
         }
 
-        sink.SetStatus(remove ? $"Removing {request.PackageId}â€¦" : $"Adding {request.PackageId}â€¦");
+        sink.SetStatus(remove ? $"Removing {request.PackageId}…" : $"Adding {request.PackageId}…");
         string result = remove
             ? await PackageTools.RemoveAsync(request, cancellationToken)
             : await PackageTools.AddAsync(request, cancellationToken);

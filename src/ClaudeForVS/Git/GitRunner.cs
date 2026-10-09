@@ -18,7 +18,7 @@ internal sealed class GitRunner
     private static readonly HashSet<string> ReadOnlySubcommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "status", "diff", "log", "show", "blame", "rev-parse", "ls-files", "grep",
-        "describe", "shortlog", "reflog", "cat-file", "ls-tree", "merge-base", "rev-list", "whatchanged",
+        "describe", "shortlog", "cat-file", "ls-tree", "merge-base", "rev-list", "whatchanged",
     };
 
     // Options that make an otherwise read-only command write a file (--output), run a program (grep's
@@ -61,6 +61,7 @@ internal sealed class GitRunner
             "tag" => rest.Length == 0 || rest.All(a => a is "-l" or "--list" || a.StartsWith("-n")),
             "stash" => rest.Length > 0 && (rest[0] == "list" || rest[0] == "show"),
             "config" => rest.Length > 0 && rest[0] is "--get" or "--get-all" or "--list" or "-l",
+            "reflog" => rest.Length == 0 || rest[0] is "show" or "exists" or "list" || rest[0].StartsWith("-", StringComparison.Ordinal), // not expire, delete or drop
             _ => false,
         };
     }
@@ -137,7 +138,7 @@ internal sealed class GitRunner
 
         using (cancellationToken.Register(() =>
         {
-            try { process.Kill(); } catch (InvalidOperationException) { }
+            Processes.Kill(process);
             exited.TrySetCanceled();
         }))
         {

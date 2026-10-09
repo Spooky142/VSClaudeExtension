@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using ClaudeForVS.Agent;
 using ClaudeForVS.Git;
 
@@ -85,15 +86,77 @@ internal static class SessionStore
         Converters = { new JsonStringEnumConverter() },
     };
 
+    // Held while a chat's files are written or deleted, so background saves and everything else happen in turn.
+    private static readonly object WriteLock = new();
+
+    // Saves waiting for a background thread, by chat. A newer save of the same chat replaces one still waiting.
+    private static readonly Dictionary<string, (SessionInfo Info, IReadOnlyList<SavedEntry> Entries)> PendingSaves = new(StringComparer.Ordinal);
+
     public static void Save(SessionInfo info, IReadOnlyList<SavedEntry> entries)
     {
+        lock (WriteLock)
+        {
+            lock (PendingSaves)
+            {
+                PendingSaves.Remove(info.Id); // older than this one
+            }
+
+            Write(info, entries);
+        }
+    }
+
+    /// <summary>
+    /// Saves a chat on a background thread, since a long transcript takes a while to serialize and write. Anything
+    /// that reads or changes the same chat's files first waits for this.
+    /// </summary>
+    public static Task SaveInBackgroundAsync(SessionInfo info, IReadOnlyList<SavedEntry> entries)
+    {
+        lock (PendingSaves)
+        {
+            PendingSaves[info.Id] = (info, entries);
+        }
+
+        return Task.Run(() =>
+        {
+            lock (WriteLock)
+            {
+                WritePending(info.Id);
+            }
+        });
+    }
+
+    /// <summary>Writes the chat's waiting save, if it has one. Called with <see cref="WriteLock"/> held.</summary>
+    private static void WritePending(string id)
+    {
+        (SessionInfo Info, IReadOnlyList<SavedEntry> Entries) save;
+        lock (PendingSaves)
+        {
+            if (!PendingSaves.TryGetValue(id, out save))
+            {
+                return; // already written by an earlier call, or deleted
+            }
+
+            PendingSaves.Remove(id);
+        }
+
+        Write(save.Info, save.Entries);
+    }
+
+    private static void Write(SessionInfo info, IReadOnlyList<SavedEntry> entries)
+    {
         AtomicFile.WriteAllText(ChatPath(info.Id), JsonSerializer.Serialize(entries, JsonOptions));
-        SaveInfo(info); // last: the list only shows chats that are complete
+        AtomicFile.WriteAllText(MetaPath(info.Id), JsonSerializer.Serialize(info, JsonOptions)); // last: the list only shows chats that are complete
     }
 
     /// <summary>Rewrites only a chat's summary, e.g. after renaming it.</summary>
     public static void SaveInfo(SessionInfo info)
-        => AtomicFile.WriteAllText(MetaPath(info.Id), JsonSerializer.Serialize(info, JsonOptions));
+    {
+        lock (WriteLock)
+        {
+            WritePending(info.Id); // so it can't overwrite this summary afterwards
+            AtomicFile.WriteAllText(MetaPath(info.Id), JsonSerializer.Serialize(info, JsonOptions));
+        }
+    }
 
     // Each searched chat's transcript text, as of the chat's last update, so searching again doesn't re-read every file.
     private static readonly ConcurrentDictionary<string, (DateTimeOffset Updated, string Text)> SearchText = new(StringComparer.Ordinal);
@@ -155,7 +218,14 @@ internal static class SessionStore
     {
         try
         {
-            return JsonSerializer.Deserialize<List<SavedEntry>>(File.ReadAllText(ChatPath(id)), JsonOptions);
+            string json;
+            lock (WriteLock)
+            {
+                WritePending(id);
+                json = File.ReadAllText(ChatPath(id));
+            }
+
+            return JsonSerializer.Deserialize<List<SavedEntry>>(json, JsonOptions);
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
@@ -166,14 +236,22 @@ internal static class SessionStore
     public static void Delete(string id)
     {
         SearchText.TryRemove(id, out _);
-        foreach (string path in new[] { MetaPath(id), ChatPath(id) })
+        lock (WriteLock)
         {
-            try
+            lock (PendingSaves)
             {
-                File.Delete(path);
+                PendingSaves.Remove(id); // a save still waiting would bring the chat back
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+
+            foreach (string path in new[] { MetaPath(id), ChatPath(id) })
             {
+                try
+                {
+                    File.Delete(path);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
             }
         }
     }

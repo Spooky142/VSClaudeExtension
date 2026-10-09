@@ -165,7 +165,7 @@ internal static class CommitMessageWriter
         Task<string> errors = process.StandardError.ReadToEndAsync();
         using (cancellationToken.Register(() =>
         {
-            try { process.Kill(); } catch (InvalidOperationException) { }
+            Processes.Kill(process);
             exited.TrySetCanceled();
         }))
         {

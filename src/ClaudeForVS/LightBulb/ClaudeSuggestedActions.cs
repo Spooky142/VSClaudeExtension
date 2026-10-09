@@ -33,7 +33,11 @@ internal enum LightBulbAction
 /// <summary>What the caret is on, worked out when the light bulb opens and handed to the action the user picks.</summary>
 /// <param name="StartLine">First line of the code the action is about (1-based): the selection, or the type or member the caret is in.</param>
 /// <param name="CaretStartLine">The lines the light bulb was opened on, which is where a problem to fix is looked for.</param>
-internal sealed record LightBulbContext(string FilePath, int StartLine, int EndLine, string Text, int CaretStartLine, int CaretEndLine);
+/// <param name="GetText">The code itself, which is only copied out when an action is picked.</param>
+internal sealed record LightBulbContext(string FilePath, int StartLine, int EndLine, Func<string> GetText, int CaretStartLine, int CaretEndLine)
+{
+    public string Text => this.GetText();
+}
 
 /// <summary>What the light bulb offers at the caret.</summary>
 /// <param name="HasProblem">The line has an error or warning squiggle.</param>
@@ -84,6 +88,12 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
 #pragma warning disable CS0067 // Part of the interface; the actions available don't change on their own.
     public event EventHandler<EventArgs>? SuggestedActionsChanged;
 #pragma warning restore CS0067
+
+    // The member found for the last caret position asked about. The editor asks whether there are actions and then,
+    // for the same place, what they are; this saves looking for the member (in Roslyn) twice. Squiggles aren't kept,
+    // since they can appear without the text changing.
+    private readonly object lastLock = new();
+    private (ITextSnapshot Snapshot, int Position, EnclosingMember? Member)? lastMember;
 
     public Task<bool> HasSuggestedActionsAsync(ISuggestedActionCategorySet requestedActionCategories, SnapshotSpan range, CancellationToken cancellationToken) =>
         Task.Run(() => this.Collect(range, cancellationToken) is not null, cancellationToken);
@@ -151,21 +161,57 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
             .Any(t => SquiggleErrorTypes.Contains(t.Tag.ErrorType));
 
         // A selection is what the user means; otherwise the member the caret is in.
-        if (!range.IsEmpty && range.GetText().Trim().Length > 0)
+        if (HasNonWhiteSpace(range))
         {
-            return new LightBulbOffer(new LightBulbContext(document.FilePath, caretStart, caretEnd, range.GetText(), caretStart, caretEnd), hasProblem, HasCode: true, CanDocument: false);
+            return new LightBulbOffer(new LightBulbContext(document.FilePath, caretStart, caretEnd, range.GetText, caretStart, caretEnd), hasProblem, HasCode: true, CanDocument: false);
         }
 
-        if (FindMember(snapshot, range.Start, cancellationToken) is EnclosingMember member)
+        if (this.FindMemberCached(snapshot, range.Start, cancellationToken) is EnclosingMember member)
         {
             return new LightBulbOffer(
-                new LightBulbContext(document.FilePath, member.StartLine, member.EndLine, member.Text, caretStart, caretEnd), hasProblem, HasCode: true, CanDocument: !member.HasDocumentation);
+                new LightBulbContext(document.FilePath, member.StartLine, member.EndLine, () => member.Text, caretStart, caretEnd), hasProblem, HasCode: true, CanDocument: !member.HasDocumentation);
         }
 
         return hasProblem
-            ? new LightBulbOffer(new LightBulbContext(document.FilePath, caretStart, caretEnd, string.Empty, caretStart, caretEnd), HasProblem: true, HasCode: false, CanDocument: false)
+            ? new LightBulbOffer(new LightBulbContext(document.FilePath, caretStart, caretEnd, () => string.Empty, caretStart, caretEnd), HasProblem: true, HasCode: false, CanDocument: false)
             : null;
     }
+
+    // Without copying the selection, which can be the whole file.
+    private static bool HasNonWhiteSpace(SnapshotSpan range)
+    {
+        for (int i = range.Start.Position; i < range.End.Position; i++)
+        {
+            if (!char.IsWhiteSpace(range.Snapshot[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+    private EnclosingMember? FindMemberCached(ITextSnapshot snapshot, int position, CancellationToken cancellationToken)
+    {
+        lock (this.lastLock)
+        {
+            if (this.lastMember is { } cached && cached.Snapshot == snapshot && cached.Position == position)
+            {
+                return cached.Member;
+            }
+        }
+
+        EnclosingMember? member = FindMember(snapshot, position, cancellationToken);
+        if (!cancellationToken.IsCancellationRequested) // a cancelled lookup finds nothing, which isn't the answer
+        {
+            lock (this.lastLock)
+            {
+                this.lastMember = (snapshot, position, member);
+            }
+        }
+
+        return member;
+    }
+
     /// <summary>The type or member containing the caret, from Roslyn; null for languages it doesn't cover or if it isn't available.</summary>
     private static EnclosingMember? FindMember(ITextSnapshot snapshot, int position, CancellationToken cancellationToken)
     {

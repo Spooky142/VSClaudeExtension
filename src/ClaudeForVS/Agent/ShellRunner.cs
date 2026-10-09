@@ -157,7 +157,7 @@ internal static class ShellRunner
         {
             if (await Task.WhenAny(exited.Task, stopped.Task).ConfigureAwait(false) == stopped.Task)
             {
-                KillTree(process);
+                Processes.KillTree(process); // the shell and everything it started
                 cancellationToken.ThrowIfCancellationRequested();
                 await Task.WhenAny(Task.WhenAll(stdoutDone.Task, stderrDone.Task), Task.Delay(DrainTimeout)).ConfigureAwait(false);
                 return new ShellResult(null, output.ToString(), stdoutOnly.ToString(), stderrOnly.ToString());
@@ -209,31 +209,6 @@ internal static class ShellRunner
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
             // The command exited without reading it all, or has already finished.
-        }
-    }
-
-    /// <summary>Stops the shell and everything it started; Process.Kill on .NET Framework only stops the shell.</summary>
-    private static void KillTree(Process process)
-    {
-        try
-        {
-            using Process? taskkill = Process.Start(new ProcessStartInfo("taskkill.exe", $"/T /F /PID {process.Id}")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            });
-            taskkill?.WaitForExit(5000);
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-        {
-        }
-
-        try
-        {
-            process.Kill();
-        }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-        {
         }
     }
 
