@@ -112,7 +112,7 @@ internal sealed record AgentSettings
     /// </summary>
     public bool ShowNotifications { get; init; } = true;
 
-    /// <summary>Check this extension's GitHub releases when a chat window opens (and daily after that), and offer to install a newer version.</summary>
+    /// <summary>Check this extension's GitHub releases when a chat window is shown (and daily after that), and offer to install a newer version.</summary>
     public bool CheckForExtensionUpdates { get; init; } = true;
 
     /// <summary>

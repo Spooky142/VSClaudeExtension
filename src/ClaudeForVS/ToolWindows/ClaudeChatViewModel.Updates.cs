@@ -29,6 +29,9 @@ internal sealed partial class ClaudeChatViewModel
 {
     private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
 
+    // Showing a chat window checks again, but not every time one is switched to.
+    private static readonly TimeSpan ShownCheckInterval = TimeSpan.FromMinutes(15);
+
     private enum CodeUpdateState
     {
         Available,
@@ -49,7 +52,7 @@ internal sealed partial class ClaudeChatViewModel
 
     private sealed record ExtensionUpdate(ExtensionUpdateState State, ExtensionRelease Release, string Detail = "");
 
-    // Shared by every chat window: a check when one opens and then daily, one update at a time, and a banner dismissed in one window goes from all.
+    // Shared by every chat window: a check when one is shown and then daily, one update at a time, and a banner dismissed in one window goes from all.
     private static DateTime lastUpdateCheckUtc = DateTime.MinValue;
     private static bool checkingForUpdates;
     private static bool installingUpdate;
@@ -63,10 +66,10 @@ internal sealed partial class ClaudeChatViewModel
     public bool UpdateCheckDue => !checkingForUpdates && DateTime.UtcNow - lastUpdateCheckUtc >= UpdateCheckInterval;
 
     /// <summary>Checks for a newer Claude Code (installing it when no chat is busy), newer API models and a newer version of this extension. Never throws.</summary>
-    /// <param name="now">Check even if the last check was less than a day ago, as when a chat window opens.</param>
-    public async Task CheckForUpdatesAsync(bool now = false)
+    /// <param name="shown">A chat window has been shown: check if the last check was more than a few minutes ago, rather than a day.</param>
+    public async Task CheckForUpdatesAsync(bool shown = false)
     {
-        if (checkingForUpdates || (!now && !this.UpdateCheckDue))
+        if (checkingForUpdates || DateTime.UtcNow - lastUpdateCheckUtc < (shown ? ShownCheckInterval : UpdateCheckInterval))
         {
             return;
         }
@@ -75,9 +78,9 @@ internal sealed partial class ClaudeChatViewModel
         lastUpdateCheckUtc = DateTime.UtcNow;
         try
         {
+            await CheckExtensionAsync();
             await CheckApiModelsAsync();
             await CheckClaudeCodeAsync();
-            await CheckExtensionAsync();
         }
         finally
         {
@@ -117,7 +120,8 @@ internal sealed partial class ClaudeChatViewModel
         SetCodeUpdate(new CodeUpdate(CodeUpdateState.Available, installed, latest));
         if (!ClaudeCodeCli.AutoUpdateDisabled())
         {
-            await InstallUpdateAsync(exe, installed, latest);
+            // It can wait a long while for the chats to finish; later checks shouldn't wait on it.
+            _ = InstallUpdateAsync(exe, installed, latest);
         }
     }
 

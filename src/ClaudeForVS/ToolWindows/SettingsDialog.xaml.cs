@@ -63,7 +63,7 @@ public partial class SettingsDialog : DialogWindow
         this.NotificationsBox.IsChecked = settings.ShowNotifications;
         this.ExtensionUpdatesBox.IsChecked = settings.CheckForExtensionUpdates;
         this.ExtensionUpdatesHint.Text =
-            $"Whenever a chat window opens (and daily while Visual Studio stays open), looks for a newer release on GitHub ({ExtensionUpdates.Repository}) and offers to install it. You have {ExtensionUpdates.InstalledVersion}.";
+            $"Whenever a chat window is shown (at most every 15 minutes, and daily while Visual Studio stays open), looks for a newer release on GitHub ({ExtensionUpdates.Repository}) and offers to install it. You have {ExtensionUpdates.InstalledVersion}.";
         this.NewestModelsBox.IsChecked = settings.UseNewestApiModels;
         this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.CompactAtBox.Text = settings.CompactAtTokens > 0 ? (settings.CompactAtTokens / 1000).ToString(System.Globalization.CultureInfo.CurrentCulture) : string.Empty;

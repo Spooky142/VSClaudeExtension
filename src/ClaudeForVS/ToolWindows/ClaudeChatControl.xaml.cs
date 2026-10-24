@@ -115,7 +115,7 @@ public partial class ClaudeChatControl : UserControl
         OptionsPage.Applied += (_, settings) => this.viewModel.ApplySettings(settings, this.viewModel.RepoPath, null);
 
         // Keep the usage strip's "resets in" countdowns current, and plan usage fresh while no prompt is running. Each chat
-        // window checks for updates when it opens; past that, one tick a day checks again for Claude Code, model and extension updates.
+        // window checks for updates when it's shown; past that, one tick a day checks again for Claude Code, model and extension updates.
         this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
         {
             this.viewModel.RefreshUsage();
@@ -161,15 +161,16 @@ public partial class ClaudeChatControl : UserControl
                     this.viewModel.SetRepoFromDirectory(solutionDir);
                 }
 
-                // Each chat window checks for updates when it opens; the usage timer rechecks daily if Visual Studio stays open.
-                this.viewModel.CheckForUpdatesAsync(now: true).FileAndForget("ClaudeForVS/CheckForUpdates");
-
                 // Only the first window carries the last chat over from before Visual Studio restarted; others start empty.
                 if (this.Pane.InstanceNumber == 0)
                 {
                     this.viewModel.RestoreLastSessionAsync().FileAndForget("ClaudeForVS/RestoreSession");
                 }
             }
+
+            // Showing a chat window (a new one, or a closed one reused by New chat window) checks for updates unless that was
+            // done a few minutes ago; the usage timer rechecks daily if Visual Studio stays open.
+            this.viewModel.CheckForUpdatesAsync(shown: true).FileAndForget("ClaudeForVS/CheckForUpdates");
 
             this.RefreshEditorContext();
             this.viewModel.WarmFileIndex();
