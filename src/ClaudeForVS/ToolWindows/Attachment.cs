@@ -108,7 +108,7 @@ internal sealed class Attachment
     };
 
     // A file attached from Solution Explorer is sent whole up to this size; beyond it Claude is told to read it itself.
-    private const int MaxAttachedFileChars = 60_000;
+    private const int MaxAttachedFileChars = 40_000;
 
     // Most files listed for an attached folder.
     private const int MaxFolderFiles = 300;

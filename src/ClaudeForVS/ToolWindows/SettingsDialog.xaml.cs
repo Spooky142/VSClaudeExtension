@@ -65,6 +65,7 @@ public partial class SettingsDialog : DialogWindow
         this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
         this.NewestModelsBox.IsChecked = settings.UseNewestApiModels;
         this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
+        this.CompactAtBox.Text = settings.CompactAtTokens > 0 ? (settings.CompactAtTokens / 1000).ToString(System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.UpdateRepoHint();
         this.UpdateAllowedCommands();
         this.ApiKeyHint.Text = hasApiKey
@@ -396,9 +397,24 @@ public partial class SettingsDialog : DialogWindow
             FormatChangedFiles = this.FormatChangedBox.IsChecked == true,
             UseNewestApiModels = this.NewestModelsBox.IsChecked == true,
             SpendLimitUsd = double.TryParse(this.SpendLimitBox.Text.Trim().TrimStart('$'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out double limit) && limit > 0 ? limit : 0,
+            CompactAtTokens = ParseCompactAt(this.CompactAtBox.Text),
         };
         this.ResultRepoPath = text.Length == 0 ? this.SolutionRepoRoot() ?? string.Empty : root ?? text;
         this.ResultApiKey = this.ApiKeyBox.Password.Trim() is { Length: > 0 } key ? key : null;
         this.DialogResult = true;
+    }
+
+    /// <summary>Thousands of tokens to summarize at: empty means only when the window is nearly full, and anything unreadable keeps the default.</summary>
+    private static long ParseCompactAt(string text)
+    {
+        text = text.Trim().TrimEnd('k', 'K');
+        if (text.Length == 0)
+        {
+            return 0;
+        }
+
+        return double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out double thousands) && thousands > 0
+            ? (long)(Math.Max(20, Math.Min(900, thousands)) * 1000)
+            : AgentSettings.DefaultCompactAtTokens;
     }
 }

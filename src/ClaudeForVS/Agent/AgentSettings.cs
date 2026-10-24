@@ -60,7 +60,8 @@ internal sealed record AgentSettings
 
     public ClaudeModel Model { get; init; } = ClaudeModel.Opus;
 
-    public EffortLevel Effort { get; init; } = EffortLevel.High;
+    // Medium thinks noticeably less than High and is enough for most coding; settings saved before keep their own.
+    public EffortLevel Effort { get; init; } = EffortLevel.Medium;
 
     public AgentMode Mode { get; init; } = AgentMode.Coding;
 
@@ -81,6 +82,15 @@ internal sealed record AgentSettings
     /// going on. 0 means no limit.
     /// </summary>
     public double SpendLimitUsd { get; init; }
+
+    /// <summary>
+    /// On the Claude API engine, the context size (in tokens) at which the conversation is summarized and restarted
+    /// from the summary. Every request re-reads the whole conversation, so summarizing well before the window is full
+    /// keeps long chats cheaper. 0 means only when the window is nearly full.
+    /// </summary>
+    public long CompactAtTokens { get; init; } = DefaultCompactAtTokens;
+
+    public const long DefaultCompactAtTokens = 300_000;
 
     /// <summary>
     /// After Claude changes C# or Visual Basic code, format the lines it wrote with the user's editor settings
@@ -156,6 +166,27 @@ internal sealed record AgentSettings
         EffortLevel.XHigh => "Extra high",
         EffortLevel.Max => "Max",
         _ => "High",
+    };
+
+    /// <summary>The effort's name in the API and on Claude Code's command line, e.g. "xhigh".</summary>
+    public static string EffortApiName(EffortLevel effort) => effort switch
+    {
+        EffortLevel.Low => "low",
+        EffortLevel.Medium => "medium",
+        EffortLevel.XHigh => "xhigh",
+        EffortLevel.Max => "max",
+        _ => "high",
+    };
+
+    /// <summary>The effort an API name stands for; null if it isn't one.</summary>
+    public static EffortLevel? ParseEffortApiName(string name) => name switch
+    {
+        "low" => EffortLevel.Low,
+        "medium" => EffortLevel.Medium,
+        "high" => EffortLevel.High,
+        "xhigh" => EffortLevel.XHigh,
+        "max" => EffortLevel.Max,
+        _ => null,
     };
 
     public static string ModeName(AgentMode mode) => mode switch

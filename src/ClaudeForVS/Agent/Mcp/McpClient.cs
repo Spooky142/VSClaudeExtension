@@ -28,7 +28,7 @@ internal sealed record McpCallResult(string Text, bool IsError);
 internal sealed class McpClient : IDisposable
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const int MaxResultChars = 100_000;
+    private const int MaxResultChars = 30_000;
 
     private readonly IMcpTransport transport;
 

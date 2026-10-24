@@ -30,7 +30,7 @@ internal enum GrepOutput
 internal static class RepoSearch
 {
     public const int MaxGlobResults = 500;
-    public const int MaxOutputChars = 60_000;
+    public const int MaxOutputChars = 30_000;
     private const int MaxFileBytes = 2_000_000;
     private const int MaxLineChars = 500;
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);

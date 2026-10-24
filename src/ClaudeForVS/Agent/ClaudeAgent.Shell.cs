@@ -15,6 +15,30 @@ internal sealed partial class ClaudeAgent
 {
     private const int DefaultTestSeconds = 600;
 
+    // A command's output stays in the conversation, so a long one is cut down to its start and its end (where errors
+    // and summaries usually are).
+    private const int MaxCommandOutputHead = 10_000;
+    private const int MaxCommandOutputTail = 20_000;
+
+    /// <summary>The output Claude gets back: all of it if it's short, otherwise its start and end with a note between. Internal for tests.</summary>
+    internal static string CapCommandOutput(string output)
+    {
+        if (output.Length <= MaxCommandOutputHead + MaxCommandOutputTail)
+        {
+            return output;
+        }
+
+        // Cut at line breaks so no line is left half shown.
+        int headEnd = output.LastIndexOf('\n', MaxCommandOutputHead);
+        headEnd = headEnd > 0 ? headEnd + 1 : MaxCommandOutputHead;
+        int tailStart = output.IndexOf('\n', output.Length - MaxCommandOutputTail);
+        tailStart = tailStart >= 0 && tailStart < output.Length - 1 ? tailStart + 1 : output.Length - MaxCommandOutputTail;
+        int omittedLines = output.Substring(headEnd, tailStart - headEnd).Count(c => c == '\n');
+        return output.Substring(0, headEnd)
+            + $"[… {omittedLines:N0} lines ({tailStart - headEnd:N0} characters) omitted. Narrow the command or filter its output (e.g. Select-String, Select-Object -Last) to see them …]\n"
+            + output.Substring(tailStart);
+    }
+
     private async Task<string> RunCommandAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
     {
         string command = RequireString(input, "command").Trim();
@@ -65,6 +89,7 @@ internal sealed partial class ClaudeAgent
         }
 
         (int? exitCode, string output, bool stoppedByUser) = await this.RunWithLiveRowAsync(directory, command, command + where, timeout, sink, cancellationToken);
+        output = CapCommandOutput(output);
         string shown = output.Length == 0 ? "(no output)" : output;
         if (stoppedByUser)
         {

@@ -10,11 +10,13 @@ using System.Threading.Tasks;
 namespace ClaudeForVS.Agent;
 
 /// <summary>Tokens used by one API response.</summary>
+/// <param name="CacheWrite">All tokens written to the cache, whichever lifetime.</param>
 /// <param name="WebSearches">Web searches run by the response, which are billed per search.</param>
-internal readonly record struct TokenUsage(long Input, long CacheWrite, long CacheRead, long Output, long WebSearches = 0)
+/// <param name="CacheWrite1h">The part of <paramref name="CacheWrite"/> cached for an hour, which costs more to write than five minutes.</param>
+internal readonly record struct TokenUsage(long Input, long CacheWrite, long CacheRead, long Output, long WebSearches = 0, long CacheWrite1h = 0)
 {
     public static TokenUsage operator +(TokenUsage a, TokenUsage b) =>
-        new(a.Input + b.Input, a.CacheWrite + b.CacheWrite, a.CacheRead + b.CacheRead, a.Output + b.Output, a.WebSearches + b.WebSearches);
+        new(a.Input + b.Input, a.CacheWrite + b.CacheWrite, a.CacheRead + b.CacheRead, a.Output + b.Output, a.WebSearches + b.WebSearches, a.CacheWrite1h + b.CacheWrite1h);
 }
 
 /// <summary>One Claude plan usage window (5-hour, weekly, ...) as last reported by Claude Code.</summary>
@@ -67,7 +69,10 @@ internal static class ModelPricing
             ClaudeModel.Haiku => (0.10, 0.50, 0.01, 0.125),
             _ => (4.00, 20.00, 0.20, 5.00),
         };
-        return (((usage.Input * input) + (usage.Output * output) + (usage.CacheRead * cacheRead) + (usage.CacheWrite * cacheWrite)) / 1_000_000)
+        // Five-minute cache writes cost 1.25 times the input price; one-hour ones twice it.
+        long write1h = Math.Min(usage.CacheWrite1h, usage.CacheWrite);
+        double writes = ((usage.CacheWrite - write1h) * cacheWrite) + (write1h * input * 2);
+        return (((usage.Input * input) + (usage.Output * output) + (usage.CacheRead * cacheRead) + writes) / 1_000_000)
             + (usage.WebSearches * PerWebSearch);
     }
 }

@@ -12,7 +12,7 @@ namespace ClaudeForVS.Git;
 /// <summary>Runs git.exe against a repository. Uses git on PATH, falling back to the copy bundled with Visual Studio.</summary>
 internal sealed class GitRunner
 {
-    private const int MaxOutputChars = 60_000;
+    private const int MaxOutputChars = 30_000;
 
     // Subcommands Claude may run without asking. Everything else needs user approval.
     private static readonly HashSet<string> ReadOnlySubcommands = new(StringComparer.OrdinalIgnoreCase)

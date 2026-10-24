@@ -113,14 +113,7 @@ internal sealed partial class ClaudeCodeEngine
             "--mcp-config", this.mcpConfigPath,
             "--permission-prompt-tool", ApprovalServer.QualifiedToolName,
             "--append-system-prompt", ExtraSystemPrompt + " " + AgentSettings.ModeInstructions(this.Mode),
-            "--effort", this.Effort switch
-            {
-                EffortLevel.Low => "low",
-                EffortLevel.Medium => "medium",
-                EffortLevel.XHigh => "xhigh",
-                EffortLevel.Max => "max",
-                _ => "high",
-            },
+            "--effort", AgentSettings.EffortApiName(this.Effort),
         };
 
         if (this.SessionId != null)

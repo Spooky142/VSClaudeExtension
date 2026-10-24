@@ -208,8 +208,46 @@ internal sealed partial class ClaudeAgent
                 break;
         }
 
-        return this.ReadFile(path, input, sink);
+        string result = this.ReadFile(path, input, sink);
+        return this.inSubagent.Value ? result : this.UnlessReadBefore(full, input, result);
     }
+
+    // What the chat's conversation already holds of each file: which lines were read, a hash of what came back, and where
+    // in the history (generation and message index) that result is.
+    private readonly Dictionary<string, (int? Start, int? End, int Hash, int Length, int Generation, int Index)> reads = new(StringComparer.OrdinalIgnoreCase);
+
+    // True while a subagent is running tools: its reads are in its own conversation, not the chat's.
+    private readonly AsyncLocal<bool> inSubagent = new();
+
+    /// <summary>
+    /// The read's result, or if the same lines were read earlier in this conversation and haven't changed since, a note
+    /// saying so instead of the same text again. The earlier result has to still be in the history: not summarized
+    /// away or rewound.
+    /// </summary>
+    private string UnlessReadBefore(string full, IReadOnlyDictionary<string, JsonElement> input, string result)
+    {
+        int? start = OptionalInt(input, "start_line");
+        int? end = OptionalInt(input, "end_line");
+        int hash = StringComparer.Ordinal.GetHashCode(result);
+        lock (this.reads)
+        {
+            // The result will go into the user message that follows the assistant message now at the end.
+            int index = this.history.Count;
+            if (this.reads.TryGetValue(full, out var before)
+                && before.Start == start && before.End == end && before.Hash == hash && before.Length == result.Length
+                && before.Generation == this.generation && before.Index < index && result.Length > UnchangedNoteMinChars)
+            {
+                return $"{this.files.Relative(full)} hasn't changed since you read {(start is null && end is null ? "it" : "these lines")} earlier in this conversation, "
+                    + "so that earlier result is still current.";
+            }
+
+            this.reads[full] = (start, end, hash, result.Length, this.generation, index);
+            return result;
+        }
+    }
+
+    // Short files are cheaper to send again than to point back to.
+    private const int UnchangedNoteMinChars = 1_000;
 
     private string ReadFile(string path, IReadOnlyDictionary<string, JsonElement> input, IChatSink sink)
     {
@@ -239,7 +277,7 @@ internal sealed partial class ClaudeAgent
             sb.Append(i).Append('\t').Append(lines[i - 1]).Append('\n');
             if (sb.Length > MaxFileChars)
             {
-                sb.Append($"[truncated at line {i} of {lines.Length}; use start_line/end_line to read more]\n");
+                sb.Append($"[truncated at line {i} of {lines.Length}; use start_line/end_line to read more, or grep for what you need]\n");
                 break;
             }
         }

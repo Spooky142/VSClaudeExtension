@@ -18,8 +18,11 @@ namespace ClaudeForVS.Agent;
 /// <summary>The built-in tool definitions sent to the API.</summary>
 internal sealed partial class ClaudeAgent
 {
-    /// <summary>The built-in tools, less the web tools any permission rule denies.</summary>
-    private static List<ToolUnion> BuiltInTools(PermissionRules permissions)
+    // The most of a fetched page that goes into the conversation.
+    private const long MaxFetchTokens = 25_000;
+
+    /// <summary>The built-in tools, less the ones any permission rule denies.</summary>
+    private static List<ToolUnion> BuiltInTools(PermissionRules permissions, ClaudeModel model)
     {
         var list = new List<ToolUnion>(CoreTools);
         if (permissions.ForTool("Task") == PermissionVerdict.Deny)
@@ -27,17 +30,34 @@ internal sealed partial class ClaudeAgent
             list.RemoveAll(t => ToolName(t) == "task");
         }
 
+        list.AddRange(WebTools(permissions, model));
+        return list;
+    }
+
+    /// <summary>
+    /// Web search and fetch, less any a permission rule denies. Opus and Sonnet get the versions that filter results
+    /// with code before they reach the context; Haiku doesn't support those, so it gets the basic ones.
+    /// </summary>
+    internal static List<ToolUnion> WebTools(PermissionRules permissions, ClaudeModel model)
+    {
+        bool filtered = model != ClaudeModel.Haiku;
+        var list = new List<ToolUnion>();
         if (permissions.ForTool("WebSearch") != PermissionVerdict.Deny)
         {
-            list.Add(new WebSearchTool20250305 { MaxUses = MaxWebUses });
+            list.Add(filtered ? new WebSearchTool20260209 { MaxUses = MaxWebUses } : new WebSearchTool20250305 { MaxUses = MaxWebUses });
         }
 
         if (permissions.ForTool("WebFetch") != PermissionVerdict.Deny)
         {
+            // Only set when there are some: an empty or null list isn't accepted.
             IReadOnlyList<string> blocked = permissions.DeniedWebDomains();
-            list.Add(blocked.Count == 0
-                ? new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = 50_000 }
-                : new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = 50_000, BlockedDomains = blocked.ToList() });
+            list.Add((filtered, blocked.Count > 0) switch
+            {
+                (true, false) => new WebFetchTool20260209 { MaxUses = MaxWebUses, MaxContentTokens = MaxFetchTokens },
+                (true, true) => new WebFetchTool20260209 { MaxUses = MaxWebUses, MaxContentTokens = MaxFetchTokens, BlockedDomains = blocked.ToList() },
+                (false, false) => new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = MaxFetchTokens },
+                (false, true) => new WebFetchTool20250910 { MaxUses = MaxWebUses, MaxContentTokens = MaxFetchTokens, BlockedDomains = blocked.ToList() },
+            });
         }
 
         return list;

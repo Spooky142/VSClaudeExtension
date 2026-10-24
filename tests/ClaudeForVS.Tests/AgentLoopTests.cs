@@ -221,29 +221,29 @@ public sealed class AgentLoopTests : IDisposable
     [Fact]
     public async Task StopsAtTheSpendingLimitWhenTheUserSaysNo()
     {
-        // 500K input tokens is $2 at Opus prices, past a $1 limit but short of compacting.
-        this.api.Reply(Sse.Turn(Sse.ToolUse("toolu_1", "read_file", new { path = "hello.txt" }), stopReason: "tool_use", inputTokens: 500_000))
+        // 200K input tokens is $0.80 at Opus prices, past a $0.50 limit but short of compacting.
+        this.api.Reply(Sse.Turn(Sse.ToolUse("toolu_1", "read_file", new { path = "hello.txt" }), stopReason: "tool_use", inputTokens: 200_000))
             .Reply(Sse.Turn(Sse.Text("never sent")));
         this.sink.Decide = _ => Approval.Deny;
         using ClaudeAgent agent = this.NewAgent();
-        agent.SpendLimitUsd = 1;
+        agent.SpendLimitUsd = 0.5;
 
         await this.SendAsync(agent, "Read it");
 
         Assert.Single(this.api.Requests);
         Assert.Single(this.sink.Approvals);
         Assert.StartsWith("Spending limit reached", this.sink.Approvals[0]);
-        Assert.True(agent.Spent > 1.9);
+        Assert.True(agent.Spent > 0.79);
         Assert.Contains("spending limit", this.sink.Text.ToString());
     }
 
     [Fact]
     public async Task CarriesOnPastTheLimitWhenTheUserSaysYes()
     {
-        this.api.Reply(Sse.Turn(Sse.ToolUse("toolu_1", "read_file", new { path = "hello.txt" }), stopReason: "tool_use", inputTokens: 500_000))
+        this.api.Reply(Sse.Turn(Sse.ToolUse("toolu_1", "read_file", new { path = "hello.txt" }), stopReason: "tool_use", inputTokens: 200_000))
             .Reply(Sse.Turn(Sse.Text("Finished.")));
         using ClaudeAgent agent = this.NewAgent();
-        agent.SpendLimitUsd = 1;
+        agent.SpendLimitUsd = 0.5;
 
         await this.SendAsync(agent, "Read it");
 
@@ -266,15 +266,25 @@ public sealed class AgentLoopTests : IDisposable
 
         Assert.Equal(4, this.api.Requests.Count);
 
-        // The subagent starts from the brief alone, with read-only tools.
+        // The subagent starts from the brief alone, with read-only tools, on Haiku at low effort.
         JsonElement first = this.api.Requests[1].RootElement;
         Assert.Equal(1, first.GetProperty("messages").GetArrayLength());
         Assert.Contains("research subagent", first.GetProperty("system").GetString());
+        Assert.Equal("claude-haiku-5-5", first.GetProperty("model").GetString());
+        Assert.Equal("low", first.GetProperty("output_config").GetProperty("effort").GetString());
         string[] names = first.GetProperty("tools").EnumerateArray().Select(t => t.GetProperty("name").GetString()!).ToArray();
         Assert.Contains("read_file", names);
         Assert.DoesNotContain("edit_file", names);
         Assert.DoesNotContain("run_command", names);
         Assert.DoesNotContain("task", names);
+
+        // Haiku gets the basic web tools; the Opus chat gets the ones that filter results.
+        static string[] Types(JsonElement request) => request.GetProperty("tools").EnumerateArray()
+            .Select(t => t.TryGetProperty("type", out JsonElement type) ? type.GetString()! : string.Empty).ToArray();
+        Assert.Contains("web_search_20250305", Types(first));
+        Assert.Contains("web_fetch_20250910", Types(first));
+        Assert.Contains("web_search_20260209", Types(this.api.Requests[0].RootElement));
+        Assert.Contains("web_fetch_20260209", Types(this.api.Requests[0].RootElement));
 
         // Only its report comes back to the main conversation, not the file it read.
         Assert.Equal("Report: hello.txt has two lines.", this.ToolResult(3));
@@ -317,7 +327,7 @@ public sealed class AgentLoopTests : IDisposable
             .Reply(Sse.Turn(Sse.ToolUse("toolu_sub", "read_file", new { path = "hello.txt" }), stopReason: "tool_use", inputTokens: 500_000))
             .Reply(Sse.Turn(Sse.Text("Carrying on.")));
         using ClaudeAgent agent = this.NewAgent();
-        agent.SpendLimitUsd = 1;
+        agent.SpendLimitUsd = 0.1; // the subagent runs on Haiku: 500K tokens is $0.25
 
         await this.SendAsync(agent, "Dig around");
 
@@ -334,12 +344,176 @@ public sealed class AgentLoopTests : IDisposable
     [Fact]
     public async Task NoLimitNeverAsks()
     {
-        this.api.Reply(Sse.Turn(Sse.Text("Fine."), inputTokens: 500_000));
+        this.api.Reply(Sse.Turn(Sse.Text("Fine."), inputTokens: 200_000));
         using ClaudeAgent agent = this.NewAgent();
 
         await this.SendAsync(agent, "Hi");
         await this.SendAsync(agent, "Hi again");
 
         Assert.Empty(this.sink.Approvals);
+    }
+
+    [Fact]
+    public async Task ChangingEffortAddsAMessageInsteadOfChangingTheRequest()
+    {
+        this.api.Reply(Sse.Turn(Sse.Text("One."))).Reply(Sse.Turn(Sse.Text("Two."))).Reply(Sse.Turn(Sse.Text("Three.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        await this.SendAsync(agent, "First");
+        agent.Effort = EffortLevel.XHigh;
+        await this.SendAsync(agent, "Second");
+        await this.SendAsync(agent, "Third");
+
+        // The first request has no beta and nothing extra.
+        Assert.Null(this.api.Betas[0]);
+        Assert.Equal(1, this.api.Requests[0].RootElement.GetProperty("messages").GetArrayLength());
+
+        // The request stays at the effort the chat started at, so the cache holds; the change is a system message
+        // just before the next user message.
+        JsonElement second = this.api.Requests[1].RootElement;
+        Assert.Equal("low", second.GetProperty("output_config").GetProperty("effort").GetString());
+        Assert.Equal("mid-conversation-output-config-2026-07-01", this.api.Betas[1]);
+        JsonElement messages = second.GetProperty("messages");
+        Assert.Equal(4, messages.GetArrayLength());
+        JsonElement change = messages[2];
+        Assert.Equal("system", change.GetProperty("role").GetString());
+        Assert.Equal(0, change.GetProperty("content").GetArrayLength());
+        Assert.Equal("xhigh", change.GetProperty("output_config").GetProperty("effort").GetString());
+        Assert.Equal("user", messages[3].GetProperty("role").GetString());
+
+        // It's only added once.
+        Assert.Equal(6, this.api.Requests[2].RootElement.GetProperty("messages").GetArrayLength());
+        Assert.Equal("low", this.api.Requests[2].RootElement.GetProperty("output_config").GetProperty("effort").GetString());
+    }
+
+    [Fact]
+    public async Task ANewChatStartsAtTheCurrentEffort()
+    {
+        this.api.Reply(Sse.Turn(Sse.Text("One.")));
+        using ClaudeAgent agent = this.NewAgent();
+        agent.Effort = EffortLevel.High;
+
+        await this.SendAsync(agent, "First");
+
+        Assert.Equal("high", this.api.Requests[0].RootElement.GetProperty("output_config").GetProperty("effort").GetString());
+        Assert.Null(this.api.Betas[0]);
+    }
+
+    [Fact]
+    public async Task SummarizesAtTheChosenContextSize()
+    {
+        this.api.Reply(Sse.Turn(Sse.Text("Long answer."), inputTokens: 5_000))
+            .Reply(Sse.Turn(Sse.Text("Summary of it all.")))
+            .Reply(Sse.Turn(Sse.Text("Short answer.")));
+        using ClaudeAgent agent = this.NewAgent();
+        agent.CompactAtTokens = 4_000;
+
+        await this.SendAsync(agent, "First");
+        await this.SendAsync(agent, "Second");
+
+        Assert.Equal(3, this.api.Requests.Count);
+        JsonElement compact = this.api.Requests[1].RootElement.GetProperty("messages");
+        Assert.Contains("replaced by a summary", compact[compact.GetArrayLength() - 1].GetProperty("content").GetString());
+
+        // The next request starts from the summary.
+        JsonElement after = this.api.Requests[2].RootElement.GetProperty("messages");
+        Assert.Equal(2, after.GetArrayLength());
+        Assert.Contains("Summary of it all.", after[0].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task TheChatIsCachedForAnHourAndASubagentForFiveMinutes()
+    {
+        this.api
+            .Reply(ToolTurn("toolu_main", "task", new { description = "Look", prompt = "Look around." }))
+            .Reply(Sse.Turn(Sse.Text("Report.")))
+            .Reply(Sse.Turn(Sse.Text("Done.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        await this.SendAsync(agent, "Go");
+
+        JsonElement chat = this.api.Requests[0].RootElement.GetProperty("cache_control");
+        Assert.Equal("1h", chat.GetProperty("ttl").GetString());
+        JsonElement subagent = this.api.Requests[1].RootElement.GetProperty("cache_control");
+        Assert.False(subagent.TryGetProperty("ttl", out _));
+    }
+
+    [Fact]
+    public async Task RereadingAnUnchangedFileGetsANoteInsteadOfTheTextAgain()
+    {
+        string big = string.Join("\n", Enumerable.Range(1, 200).Select(i => $"line {i} of a longer file"));
+        File.WriteAllText(Path.Combine(this.repo, "big.txt"), big);
+        this.api
+            .Reply(ToolTurn("toolu_1", "read_file", new { path = "big.txt" }))
+            .Reply(ToolTurn("toolu_2", "read_file", new { path = "big.txt" }))
+            .Reply(ToolTurn("toolu_3", "read_file", new { path = "big.txt", start_line = 1, end_line = 50 }))
+            .Reply(Sse.Turn(Sse.Text("Read it.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        await this.SendAsync(agent, "Read big.txt twice");
+
+        Assert.Contains("line 200 of a longer file", this.ToolResult(1));
+        Assert.Contains("hasn't changed", this.ToolResult(2));
+        Assert.Contains("line 50 of a longer file", this.ToolResult(3)); // other lines are a different read
+    }
+
+    [Fact]
+    public async Task RereadingAChangedFileGetsTheNewText()
+    {
+        string path = Path.Combine(this.repo, "big.txt");
+        File.WriteAllText(path, string.Join("\n", Enumerable.Range(1, 200).Select(i => $"line {i} of a longer file")));
+        this.api
+            .Reply(ToolTurn("toolu_1", "read_file", new { path = "big.txt" }))
+            .Reply(request =>
+            {
+                File.AppendAllText(path, "\na new last line");
+                return ToolTurn("toolu_2", "read_file", new { path = "big.txt" });
+            })
+            .Reply(Sse.Turn(Sse.Text("Read it.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        await this.SendAsync(agent, "Read big.txt twice");
+
+        Assert.Contains("a new last line", this.ToolResult(2));
+    }
+
+    [Fact]
+    public async Task AReadThatWasRewoundIsSentAgain()
+    {
+        File.WriteAllText(Path.Combine(this.repo, "big.txt"), string.Join("\n", Enumerable.Range(1, 200).Select(i => $"line {i} of a longer file")));
+        this.api
+            .Reply(ToolTurn("toolu_1", "read_file", new { path = "big.txt" }))
+            .Reply(Sse.Turn(Sse.Text("Read it.")))
+            .Reply(ToolTurn("toolu_2", "read_file", new { path = "big.txt" }))
+            .Reply(Sse.Turn(Sse.Text("Read it again.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        string checkpoint = agent.Checkpoint!;
+        await this.SendAsync(agent, "Read big.txt");
+        Assert.True(agent.Rewind(checkpoint));
+        await this.SendAsync(agent, "Read big.txt");
+
+        Assert.Contains("line 200 of a longer file", this.ToolResult(3));
+    }
+
+    [Fact]
+    public async Task CodeTheWebToolsRanGoesBackWithTheTurn()
+    {
+        this.api.Reply(Sse.Turn(
+                Sse.Whole(new { type = "server_tool_use", id = "srvtoolu_1", name = "bash_code_execution", input = new { command = "python filter.py" } }, 0)
+                + Sse.Whole(new { type = "bash_code_execution_tool_result", tool_use_id = "srvtoolu_1", content = new { type = "bash_code_execution_result", stdout = "3 hits", stderr = "", return_code = 0, content = Array.Empty<object>() } }, 1)
+                + Sse.Text("Found three.", 2)))
+            .Reply(Sse.Turn(Sse.Text("Sure.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        await this.SendAsync(agent, "Search for it");
+        await this.SendAsync(agent, "Thanks");
+
+        JsonElement assistant = this.api.Requests[1].RootElement.GetProperty("messages")[1];
+        string[] types = assistant.GetProperty("content").EnumerateArray().Select(b => b.GetProperty("type").GetString()!).ToArray();
+        Assert.Equal(["server_tool_use", "bash_code_execution_tool_result", "text"], types);
+        JsonElement result = assistant.GetProperty("content")[1];
+        Assert.Equal("srvtoolu_1", result.GetProperty("tool_use_id").GetString());
+        Assert.Equal("3 hits", result.GetProperty("content").GetProperty("stdout").GetString());
     }
 }

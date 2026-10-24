@@ -31,10 +31,17 @@ internal sealed partial class ClaudeAgent
         something, say so. Be concise; your report is all that comes back.
         """;
 
+    // Subagents only read and search, which Haiku does well for a fraction of the cost, and at low effort.
+    private const ClaudeModel SubagentModel = ClaudeModel.Haiku;
+    private const EffortLevel SubagentEffort = EffortLevel.Low;
+
+    /// <summary>The API model ID subagents use; the built-in Haiku version unless set to a newer one.</summary>
+    public string SubagentModelId { get; init; } = AgentSettings.ModelId(SubagentModel);
+
     private static string? ToolName(ToolUnion tool) =>
         tool.TryPickTool(out Tool? plain) ? plain.Name
-        : tool.TryPickWebSearchTool20250305(out _) ? "web_search"
-        : tool.TryPickWebFetchTool20250910(out _) ? "web_fetch"
+        : tool.TryPickWebSearchTool20250305(out _) || tool.TryPickWebSearchTool20260209(out _) ? "web_search"
+        : tool.TryPickWebFetchTool20250910(out _) || tool.TryPickWebFetchTool20260209(out _) ? "web_fetch"
         : null;
 
     private async Task<string> RunSubagentAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
@@ -42,12 +49,17 @@ internal sealed partial class ClaudeAgent
         string description = RequireString(input, "description").Trim();
         string prompt = RequireString(input, "prompt");
         string title = $"Subagent: {description}";
+        this.inSubagent.Value = true; // only for this call and the tools it runs: an async method's changes don't reach its caller
 
         // Its row in the chat lists what it does as it goes, and its Stop button stops just this subagent.
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using var progress = new SubagentProgress(sink.StartLiveActivity(ActivityKind.Other, title, stop.Cancel, expanded: true));
         IChatSink inner = new SubagentSink(sink, progress);
-        List<ToolUnion> tools = (this.tools ?? BuiltInTools(this.permissions)).Where(t => ToolName(t) is string name && SubagentTools.Contains(name)).ToList();
+        // Its own model may need other versions of the web tools than the chat's.
+        List<ToolUnion> tools = (this.tools ?? BuiltInTools(this.permissions, this.Model))
+            .Where(t => ToolName(t) is string name && SubagentTools.Contains(name) && name is not ("web_search" or "web_fetch"))
+            .Concat(WebTools(this.permissions, SubagentModel))
+            .ToList();
         string system = this.systemPrompt + SubagentInstructions;
         var conversation = new List<MessageParam> { new() { Role = Role.User, Content = prompt } };
 
@@ -70,8 +82,8 @@ internal sealed partial class ClaudeAgent
                     break;
                 }
 
-                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools));
-                this.ReportUsage(sink, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens, turn.WebSearches));
+                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools, this.SubagentModelId, SubagentEffort));
+                this.ReportUsage(sink, turn.Usage, SubagentModel);
                 if (paused != null)
                 {
                     // A response the API paused (during long web searches) continues as the same assistant message.

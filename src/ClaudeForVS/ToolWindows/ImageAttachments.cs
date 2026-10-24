@@ -9,8 +9,9 @@ namespace ClaudeForVS.ToolWindows;
 /// <summary>Turns pasted bitmaps and dropped image files into attachments small enough to send.</summary>
 internal static class ImageAttachments
 {
-    // The API scales images down to about this size anyway, so sending more only costs upload time.
-    private const int MaxEdge = 2000;
+    // An image costs about width × height / 750 tokens, and newer models take larger ones without scaling them down.
+    // At this size a full-screen screenshot is about 2-3K tokens and still readable.
+    private const int MaxEdge = 1568;
 
     public static Attachment FromBitmap(BitmapSource bitmap, string name)
     {

@@ -19,6 +19,9 @@ namespace ClaudeForVS.Agent;
 internal static class CommitMessageWriter
 {
     private const int MaxDiffChars = 80_000;
+
+    // Summarizing a diff doesn't need the chat's model: Haiku at low effort does it for a fraction of the cost.
+    private const ClaudeModel Model = ClaudeModel.Haiku;
     private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(3);
 
     public static async Task<string> GenerateAsync(AgentSettings settings, string repoRoot, CancellationToken cancellationToken)
@@ -116,8 +119,9 @@ internal static class CommitMessageWriter
         using var client = new AnthropicClient { ApiKey = apiKey };
         Message message = await client.Messages.Create(new MessageCreateParams
         {
-            Model = settings.ApiModelId(settings.Model),
-            MaxTokens = 2000,
+            Model = settings.ApiModelId(Model),
+            OutputConfig = new OutputConfig { Effort = Effort.Low },
+            MaxTokens = 4000,
             Messages = [new() { Role = Role.User, Content = prompt }],
         }, cancellationToken).ConfigureAwait(false);
 
@@ -137,7 +141,7 @@ internal static class CommitMessageWriter
     private static async Task<string> AskClaudeCodeAsync(AgentSettings settings, string repoRoot, string prompt, CancellationToken cancellationToken)
     {
         string exe = ClaudeCodeCli.FindExecutable() ?? throw new InvalidOperationException("Claude Code isn't installed. Install it from Claude's Settings.");
-        var args = new List<string> { "-p", "--output-format", "text", "--max-turns", "1", "--model", AgentSettings.ClaudeCodeAlias(settings.Model) };
+        var args = new List<string> { "-p", "--output-format", "text", "--max-turns", "1", "--model", AgentSettings.ClaudeCodeAlias(Model), "--effort", "low" };
         var psi = new ProcessStartInfo(exe, string.Join(" ", args.Select(GitRunner.QuoteArgument)))
         {
             WorkingDirectory = repoRoot,

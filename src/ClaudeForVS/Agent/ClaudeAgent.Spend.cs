@@ -24,14 +24,16 @@ internal sealed partial class ClaudeAgent
     /// <summary>True once the chat has used up its limit (and whatever the user has allowed beyond it).</summary>
     private bool OverSpendLimit => this.SpendLimitUsd > 0 && this.spent >= this.SpendLimitUsd * (1 + this.limitRaises);
 
-    private void ReportUsage(IChatSink sink, TokenUsage usage)
+    /// <param name="model">The model that used the tokens, if not the chat's own (a subagent's).</param>
+    private void ReportUsage(IChatSink sink, TokenUsage usage, ClaudeModel? model = null)
     {
+        ClaudeModel by = model ?? this.Model;
         lock (this.spendGate)
         {
-            this.spent += ModelPricing.EstimateCost(this.Model, usage);
+            this.spent += ModelPricing.EstimateCost(by, usage);
         }
 
-        sink.ReportTokenUsage(this.Model, usage);
+        sink.ReportTokenUsage(by, usage);
     }
 
     /// <summary>

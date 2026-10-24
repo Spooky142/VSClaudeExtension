@@ -429,6 +429,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         var agent = new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode)
         {
             ModelId = this.settings.ApiModelId(this.settings.Model),
+            SubagentModelId = this.settings.ApiModelId(ClaudeModel.Haiku),
         };
         ApplyApiSettings(agent, this.settings);
         return agent;
@@ -439,6 +440,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     {
         agent.HooksEnabled = settings.RunHooks;
         agent.SpendLimitUsd = settings.SpendLimitUsd;
+        agent.CompactAtTokens = settings.CompactAtTokens;
     }
 
     /// <param name="prompt">The prompt being answered; a restore point is taken around it so its changes can be undone. Null for commands.</param>

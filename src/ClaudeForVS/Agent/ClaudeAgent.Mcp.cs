@@ -30,7 +30,8 @@ internal sealed partial class ClaudeAgent
             return;
         }
 
-        var list = BuiltInTools(this.permissions);
+        var list = BuiltInTools(this.permissions, this.Model);
+        var mcpList = new List<(string Name, string Description, IReadOnlyDictionary<string, JsonElement> Schema)>();
         McpConfiguration config = McpConfig.Load(this.RepoRoot);
         List<McpServerConfig> needApproval = config.Servers.Where(s => !config.IsPreApproved(s) && !McpApprovals.IsApproved(this.RepoRoot, s)).ToList();
         List<McpServerConfig> toStart = config.Servers.Except(needApproval).ToList();
@@ -97,12 +98,7 @@ internal sealed partial class ClaudeAgent
                     }
 
                     this.mcpTools[name] = (mcp, tool);
-                    list.Add(new Tool
-                    {
-                        Name = name,
-                        Description = tool.Description.Length > 4000 ? tool.Description.Substring(0, 4000) : tool.Description,
-                        InputSchema = InputSchema.FromRawUnchecked(tool.InputSchema),
-                    });
+                    mcpList.Add((name, tool.Description.Length > 4000 ? tool.Description.Substring(0, 4000) : tool.Description, tool.InputSchema));
                     count++;
                 }
 
@@ -115,8 +111,27 @@ internal sealed partial class ClaudeAgent
             }
         }
 
+        // Every request carries every tool's definition. When the MCP servers' add up to a lot, they're left out until
+        // Claude searches for one it needs. (Haiku doesn't take the search tool, so it always gets them all.)
+        bool defer = this.Model != ClaudeModel.Haiku
+            && mcpList.Sum(t => t.Description.Length + JsonSerializer.Serialize(t.Schema).Length) > DeferMcpToolsAtChars;
+        foreach ((string name, string description, IReadOnlyDictionary<string, JsonElement> schema) in mcpList)
+        {
+            list.Add(defer
+                ? new Tool { Name = name, Description = description, InputSchema = InputSchema.FromRawUnchecked(schema), DeferLoading = true }
+                : new Tool { Name = name, Description = description, InputSchema = InputSchema.FromRawUnchecked(schema) });
+        }
+
+        if (defer)
+        {
+            list.Add(new ToolSearchToolBm25_20251119 { Type = ToolSearchToolBm25_20251119Type.ToolSearchToolBm25_20251119 });
+        }
+
         this.tools = list;
     }
+
+    // About 10K tokens of MCP tool definitions; below that, searching for tools costs more than it saves.
+    private const int DeferMcpToolsAtChars = 40_000;
 
     /// <summary>"mcp__server__tool", with characters tool names can't contain replaced, and kept unique.</summary>
     private string UniqueToolName(string server, string tool)

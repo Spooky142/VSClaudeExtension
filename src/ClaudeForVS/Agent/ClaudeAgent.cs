@@ -23,7 +23,8 @@ namespace ClaudeForVS.Agent;
 internal sealed partial class ClaudeAgent : IChatEngine
 {
     private const int MaxToolRounds = 40;
-    private const int MaxFileChars = 100_000;
+    // The most of a file one read_file returns (about 10K tokens); beyond it Claude reads by line range or greps.
+    private const int MaxFileChars = 40_000;
     private const int PreviewLines = 60;
     private const int DefaultCommandSeconds = 300;
     private const int MaxCommandSeconds = 1800;
@@ -37,7 +38,8 @@ internal sealed partial class ClaudeAgent : IChatEngine
 
     private const long MaxOutputTokens = 64000;
 
-    // At this share of the context window the conversation is summarized and restarted from the summary.
+    // At this share of the context window the conversation is summarized and restarted from the summary, whatever
+    // CompactAtTokens says.
     private const double CompactAt = 0.95;
 
     // Input plus max_tokens has to fit in the window, so compact earlier if a full-length reply (plus this much
@@ -83,6 +85,10 @@ internal sealed partial class ClaudeAgent : IChatEngine
 
     // The mode Claude was last told about in the conversation; null when it needs telling again.
     private AgentMode? announcedMode;
+
+    // The effort the conversation's requests are sent at, fixed so the cache stays valid; changes after the first
+    // message go into the conversation (see NoteEffortChange). Null until a conversation starts.
+    private EffortLevel? conversationEffort;
 
     private readonly string instanceId = Guid.NewGuid().ToString("N").Substring(0, 8);
 
@@ -178,11 +184,14 @@ internal sealed partial class ClaudeAgent : IChatEngine
     /// <summary>The API model ID sent for <see cref="Model"/>; the built-in version unless set to a newer one.</summary>
     public string ModelId { get; init; }
 
-    /// <summary>Can change between turns; takes effect on the next request.</summary>
+    /// <summary>Can change between turns; takes effect from the next message.</summary>
     public EffortLevel Effort { get; set; }
 
     /// <summary>Can change between turns; takes effect on the next request.</summary>
     public AgentMode Mode { get; set; }
+
+    /// <summary>The context size, in tokens, at which the conversation is summarized; 0 for only when it's nearly full. Can change between messages.</summary>
+    public long CompactAtTokens { get; set; } = AgentSettings.DefaultCompactAtTokens;
 
     /// <summary>
     /// Seeds an empty conversation from a saved transcript. Only the text of each turn comes back: thinking and
@@ -193,6 +202,7 @@ internal sealed partial class ClaudeAgent : IChatEngine
         this.history.Clear();
         this.generation++;
         this.announcedMode = null;
+        this.conversationEffort = null;
         Role? last = null;
         var text = new StringBuilder();
 
@@ -249,6 +259,14 @@ internal sealed partial class ClaudeAgent : IChatEngine
 
         this.history.RemoveRange(count, this.history.Count - count);
         this.announcedMode = null; // the note may have been in what was removed; repeating it is harmless
+        lock (this.reads)
+        {
+            foreach (string file in this.reads.Where(r => r.Value.Index >= count).Select(r => r.Key).ToList())
+            {
+                this.reads.Remove(file); // what it read is gone from the conversation
+            }
+        }
+
         return true;
     }
 
@@ -279,6 +297,7 @@ internal sealed partial class ClaudeAgent : IChatEngine
 
         // Finished responses so far; the one streaming is added on top, live.
         long promptTokens = await this.CompactIfNeededAsync(sink, midTask: false, cancellationToken);
+        this.NoteEffortChange();
         string? modeNote = this.ModeNote();
         if (prompt.Images.Count == 0 && modeNote is null && hookContext is null)
         {
@@ -335,7 +354,7 @@ internal sealed partial class ClaudeAgent : IChatEngine
             promptTokens += turn.InputTokens + turn.OutputTokens;
             sink.ReportLiveTokens(promptTokens);
             sink.SetStatus(null); // token counts are shown below the reply, not in the footer
-            this.ReportUsage(sink, new TokenUsage(turn.UncachedInputTokens, turn.CacheWriteTokens, turn.CacheReadTokens, turn.OutputTokens, turn.WebSearches));
+            this.ReportUsage(sink, turn.Usage);
             this.contextTokens = turn.UncachedInputTokens + turn.CacheWriteTokens + turn.CacheReadTokens + turn.OutputTokens;
             sink.ReportContext(this.contextTokens);
             if (this.rateLimits.Latest is ApiRateLimits limits)

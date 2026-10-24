@@ -107,6 +107,33 @@ public class ShellRunnerTests
         Assert.Equal("started", output);
         Assert.Contains("started", seen);
     }
+
+    [Fact]
+    public void ShortCommandOutputGoesBackWhole()
+    {
+        string output = string.Join("\n", Enumerable.Range(1, 100).Select(i => $"line {i}"));
+        Assert.Equal(output, ClaudeAgent.CapCommandOutput(output));
+    }
+
+    [Fact]
+    public void LongCommandOutputKeepsItsStartAndEnd()
+    {
+        string output = string.Join("\n", Enumerable.Range(1, 10_000).Select(i => $"line {i}"));
+
+        string capped = ClaudeAgent.CapCommandOutput(output);
+
+        Assert.True(capped.Length < 31_000);
+        Assert.StartsWith("line 1\n", capped);
+        Assert.EndsWith("line 10000", capped);
+        Assert.Contains("lines (", capped);
+        Assert.Contains("omitted", capped);
+
+        // Whole lines either side of the note.
+        string[] lines = capped.Split('\n');
+        int note = Array.FindIndex(lines, l => l.Contains("omitted"));
+        Assert.Matches(@"^line \d+$", lines[note - 1]);
+        Assert.Matches(@"^line \d+$", lines[note + 1]);
+    }
 }
 
 public class UnifiedDiffTests

@@ -404,7 +404,7 @@ internal sealed partial class ClaudeChatViewModel
     }
 
     // Longer diffs are cut; Claude can run git diff itself for the rest.
-    private const int MaxAttachedDiffChars = 60_000;
+    private const int MaxAttachedDiffChars = 40_000;
 
     /// <summary>/diff: attaches the repository's uncommitted changes (against HEAD) and the names of untracked files.</summary>
     private async Task AttachDiffAsync()
@@ -528,7 +528,9 @@ internal sealed partial class ClaudeChatViewModel
         }
 
         sb.Append(api
-            ? "\nWhen the context is nearly full, the conversation is summarized automatically. `/compact` does it now."
+            ? (this.settings.CompactAtTokens > 0
+                ? $"\nAt {FormatTokens(this.settings.CompactAtTokens)} tokens the conversation is summarized automatically (set in Settings). `/compact` does it now."
+                : "\nWhen the context is nearly full, the conversation is summarized automatically. `/compact` does it now.")
             : "\nClaude Code compacts the conversation automatically when it's nearly full. `/compact` does it now.");
         return sb.ToString();
     }

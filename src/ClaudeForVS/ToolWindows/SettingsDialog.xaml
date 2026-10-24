@@ -190,6 +190,13 @@
       </DockPanel>
       <TextBlock Style="{StaticResource CardNote}" Margin="2,6,0,0"
                  Text="Claude stops and asks before going past this estimated cost in one chat. Leave it empty for no limit." />
+      <DockPanel Margin="0,12,0,0">
+        <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" Margin="0,0,8,0" Text="Summarize chats at (thousand tokens)" />
+        <TextBox x:Name="CompactAtBox" Style="{StaticResource Field}" Width="90" HorizontalAlignment="Left"
+                 AutomationProperties.Name="Summarize chats at this many thousand tokens" />
+      </DockPanel>
+      <TextBlock Style="{StaticResource CardNote}" Margin="2,6,0,0"
+                 Text="Every request re-reads the whole conversation, so summarizing it earlier keeps long chats cheaper. Leave it empty to summarize only when the 1M-token window is nearly full." />
     </StackPanel>
 
     <!-- API key (Claude API engine only) -->

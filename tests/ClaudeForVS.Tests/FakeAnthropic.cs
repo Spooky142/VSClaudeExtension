@@ -53,6 +53,9 @@ internal sealed class FakeAnthropic : IDisposable
     /// <summary>The JSON body of every request received, in order.</summary>
     public List<JsonDocument> Requests { get; } = [];
 
+    /// <summary>The anthropic-beta header of every request received (null if it had none), in order.</summary>
+    public List<string?> Betas { get; } = [];
+
     /// <summary>Queues the next response: a function of the request, returning the response's server-sent events.</summary>
     public FakeAnthropic Reply(Func<JsonElement, string> response)
     {
@@ -100,6 +103,7 @@ internal sealed class FakeAnthropic : IDisposable
             lock (this.Requests)
             {
                 this.Requests.Add(request);
+                this.Betas.Add(context.Request.Headers["anthropic-beta"]);
                 events = this.script.Count > 0
                     ? this.script.Dequeue()(request.RootElement)
                     : Sse.Turn(Sse.Text("(the fake API had nothing more scripted)"));
@@ -126,6 +130,11 @@ internal static class Sse
     public static string ToolUse(string id, string name, object input, int index = 0) =>
         Event("content_block_start", new { type = "content_block_start", index, content_block = new { type = "tool_use", id, name, input = new { } } })
         + Event("content_block_delta", new { type = "content_block_delta", index, delta = new { type = "input_json_delta", partial_json = JsonSerializer.Serialize(input) } })
+        + Event("content_block_stop", new { type = "content_block_stop", index });
+
+    /// <summary>A block that arrives whole when it starts, like a server tool's result.</summary>
+    public static string Whole(object contentBlock, int index) =>
+        Event("content_block_start", new { type = "content_block_start", index, content_block = contentBlock })
         + Event("content_block_stop", new { type = "content_block_stop", index });
 
     /// <summary>A whole response around its blocks.</summary>

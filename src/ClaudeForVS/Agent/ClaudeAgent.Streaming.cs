@@ -34,6 +34,7 @@ internal sealed partial class ClaudeAgent
                     + (start.Message.Usage.CacheCreationInputTokens ?? 0);
                 turn.CacheReadTokens = start.Message.Usage.CacheReadInputTokens ?? 0;
                 turn.CacheWriteTokens = start.Message.Usage.CacheCreationInputTokens ?? 0;
+                turn.CacheWrite1hTokens = start.Message.Usage.CacheCreation?.Ephemeral1hInputTokens ?? 0;
                 turn.UncachedInputTokens = start.Message.Usage.InputTokens;
                 sink.ReportLiveTokens(tokensBefore + turn.InputTokens);
 
@@ -70,12 +71,19 @@ internal sealed partial class ClaudeAgent
                 }
                 else if (blockStart.ContentBlock.TryPickServerToolUse(out ServerToolUseBlock? serverTool))
                 {
-                    // Web search and fetch run on Anthropic's side; their results arrive as the next block.
+                    // Web search and fetch run on Anthropic's side; their results arrive as the next block. The newer
+                    // versions also run code there to filter what they found.
                     b.Kind = BlockKind.ServerToolUse;
                     b.Raw = serverTool.RawData;
                     b.ToolId = RawString(serverTool.RawData, "id");
                     b.ToolName = RawString(serverTool.RawData, "name");
-                    sink.SetStatus(b.ToolName == "web_fetch" ? "Fetching a web page…" : "Searching the web…");
+                    sink.SetStatus(b.ToolName switch
+                    {
+                        "web_fetch" => "Fetching a web page…",
+                        "web_search" => "Searching the web…",
+                        "tool_search_tool_bm25" => "Looking for a tool…",
+                        _ => "Going through what it found…",
+                    });
                 }
                 else if (blockStart.ContentBlock.TryPickWebSearchToolResult(out WebSearchToolResultBlock? searchResult))
                 {
@@ -88,6 +96,28 @@ internal sealed partial class ClaudeAgent
                     b.Kind = BlockKind.ServerToolResult;
                     b.Raw = fetchResult.RawData;
                     this.ReportWebResult(fetchResult.RawData, blocks.Values, sink);
+                }
+                else if (blockStart.ContentBlock.TryPickCodeExecutionToolResult(out CodeExecutionToolResultBlock? codeResult))
+                {
+                    // The code the web tools ran to filter their results; nothing to show, but it goes back with the turn.
+                    b.Kind = BlockKind.ServerToolResult;
+                    b.Raw = codeResult.RawData;
+                }
+                else if (blockStart.ContentBlock.TryPickBashCodeExecutionToolResult(out BashCodeExecutionToolResultBlock? bashResult))
+                {
+                    b.Kind = BlockKind.ServerToolResult;
+                    b.Raw = bashResult.RawData;
+                }
+                else if (blockStart.ContentBlock.TryPickTextEditorCodeExecutionToolResult(out TextEditorCodeExecutionToolResultBlock? editorResult))
+                {
+                    b.Kind = BlockKind.ServerToolResult;
+                    b.Raw = editorResult.RawData;
+                }
+                else if (blockStart.ContentBlock.TryPickToolSearchToolResult(out ToolSearchToolResultBlock? searchToolResult))
+                {
+                    // The MCP tools a search turned up; it goes back with the turn so Claude can call them.
+                    b.Kind = BlockKind.ServerToolResult;
+                    b.Raw = searchToolResult.RawData;
                 }
 
                 blocks[blockStart.Index] = b;
@@ -152,13 +182,15 @@ internal sealed partial class ClaudeAgent
                     JsonElement serverInput = b.Text.Length > 0
                         ? JsonSerializer.SerializeToElement(ParseToolInput(b.Text.ToString()))
                         : b.Raw.TryGetValue("input", out JsonElement given) ? given : JsonSerializer.SerializeToElement(new { });
-                    turn.Content.Add(ServerToolUseBlockParam.FromRawUnchecked(new Dictionary<string, JsonElement>
+                    var serverUse = new Dictionary<string, JsonElement>
                     {
                         ["type"] = JsonSerializer.SerializeToElement("server_tool_use"),
                         ["id"] = JsonSerializer.SerializeToElement(b.ToolId),
                         ["name"] = JsonSerializer.SerializeToElement(b.ToolName),
                         ["input"] = serverInput,
-                    }));
+                    };
+                    CopyCaller(b.Raw, serverUse);
+                    turn.Content.Add(ServerToolUseBlockParam.FromRawUnchecked(serverUse));
                     break;
                 case BlockKind.ServerToolResult:
                     // Sent back as received (encrypted content included) so Claude can cite the results in later turns.
@@ -171,9 +203,13 @@ internal sealed partial class ClaudeAgent
                         }
                     }
 
-                    turn.Content.Add(RawString(b.Raw, "type") == "web_fetch_tool_result"
-                        ? WebFetchToolResultBlockParam.FromRawUnchecked(result)
-                        : WebSearchToolResultBlockParam.FromRawUnchecked(result));
+                    CopyCaller(b.Raw, result);
+                    turn.Content.Add(RawString(b.Raw, "type") switch
+                    {
+                        "web_fetch_tool_result" => WebFetchToolResultBlockParam.FromRawUnchecked(result),
+                        "web_search_tool_result" => WebSearchToolResultBlockParam.FromRawUnchecked(result),
+                        _ => new ContentBlockParam(JsonSerializer.SerializeToElement(result)),
+                    });
                     break;
             }
         }
@@ -232,6 +268,18 @@ internal sealed partial class ClaudeAgent
         return (ActivityKind.Web, title, lines.Count == 0 ? "No results." : string.Join("\n", lines));
     }
 
+    /// <summary>
+    /// Keeps which tool made a server tool call, when one did: the filtering web tools call search and fetch from the
+    /// code they run, and the call has to go back the same way.
+    /// </summary>
+    private static void CopyCaller(IReadOnlyDictionary<string, JsonElement> raw, Dictionary<string, JsonElement> block)
+    {
+        if (raw.TryGetValue("caller", out JsonElement caller) && caller.ValueKind == JsonValueKind.Object)
+        {
+            block["caller"] = caller;
+        }
+    }
+
     private static string RawString(IReadOnlyDictionary<string, JsonElement> raw, string name) =>
         raw.TryGetValue(name, out JsonElement v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : string.Empty;
 
@@ -279,8 +327,11 @@ internal sealed partial class ClaudeAgent
         public long InputTokens;
         public long CacheReadTokens;
         public long CacheWriteTokens;
+        public long CacheWrite1hTokens;
         public long UncachedInputTokens;
         public long OutputTokens;
         public long WebSearches;
+
+        public TokenUsage Usage => new(this.UncachedInputTokens, this.CacheWriteTokens, this.CacheReadTokens, this.OutputTokens, this.WebSearches, this.CacheWrite1hTokens);
     }
 }

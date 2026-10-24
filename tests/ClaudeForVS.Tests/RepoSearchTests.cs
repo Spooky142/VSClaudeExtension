@@ -148,6 +148,25 @@ public class WebResultTests
         Assert.Equal("web_search", search["name"].GetString());
         Assert.Equal("web_fetch_20250910", fetch["type"].GetString());
         Assert.Equal("web_fetch", fetch["name"].GetString());
+
+        IReadOnlyDictionary<string, JsonElement> filteredSearch = new WebSearchTool20260209 { MaxUses = 8 }.RawData;
+        IReadOnlyDictionary<string, JsonElement> filteredFetch = new WebFetchTool20260209 { MaxUses = 8 }.RawData;
+        Assert.Equal("web_search_20260209", filteredSearch["type"].GetString());
+        Assert.Equal("web_search", filteredSearch["name"].GetString());
+        Assert.Equal("web_fetch_20260209", filteredFetch["type"].GetString());
+        Assert.Equal("web_fetch", filteredFetch["name"].GetString());
+    }
+
+    [Fact]
+    public void HourLongCacheWritesCostTwiceTheInputPrice()
+    {
+        // Sonnet: $2 input, so $2.50 per million for five-minute writes and $4 for one-hour ones.
+        double fiveMinutes = ModelPricing.EstimateCost(ClaudeModel.Sonnet, new TokenUsage(0, 1_000_000, 0, 0));
+        double oneHour = ModelPricing.EstimateCost(ClaudeModel.Sonnet, new TokenUsage(0, 1_000_000, 0, 0, CacheWrite1h: 1_000_000));
+        double mixed = ModelPricing.EstimateCost(ClaudeModel.Sonnet, new TokenUsage(0, 1_000_000, 0, 0, CacheWrite1h: 500_000));
+        Assert.Equal(2.5, fiveMinutes, 6);
+        Assert.Equal(4.0, oneHour, 6);
+        Assert.Equal(3.25, mixed, 6);
     }
 
     [Fact]
