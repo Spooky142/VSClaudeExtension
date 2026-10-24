@@ -739,7 +739,7 @@ public partial class ClaudeChatControl : UserControl
         _ => "Deepest reasoning when correctness matters most. Slowest and most expensive.",
     };
 
-    /// <summary>The Subagents chip's menu: the model and effort of the subagents Claude starts, from the next one on.</summary>
+    /// <summary>The Subagents chip's menu: the model (and on the Claude API, effort) of the subagents Claude starts, from the next one on.</summary>
     private void OnSubagentMenu(object sender, RoutedEventArgs e)
     {
         AgentSettings current = this.viewModel.Settings;
@@ -770,14 +770,11 @@ public partial class ClaudeChatControl : UserControl
             Item(current.NameOf(model), current.SubagentModel == model, () => this.viewModel.QuickSetSubagent(model, current.SubagentEffort), description);
         }
 
-        menu.Items.Add(new Separator());
-        Header("Subagent effort");
-        if (code)
+        // Claude Code has no setting for its subagents' effort, so the section is left out there.
+        if (!code)
         {
-            menu.Items.Add(new MenuItem { Header = "Claude Code has no setting for its subagents' effort", IsEnabled = false });
-        }
-        else
-        {
+            menu.Items.Add(new Separator());
+            Header("Subagent effort");
             foreach (EffortLevel effort in new[] { EffortLevel.Low, EffortLevel.Medium, EffortLevel.High, EffortLevel.XHigh, EffortLevel.Max })
             {
                 Item(AgentSettings.EffortName(effort), effort == current.SubagentEffort, () => this.viewModel.QuickSetSubagent(current.SubagentModel, effort));
