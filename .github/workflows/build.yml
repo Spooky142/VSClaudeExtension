@@ -2,7 +2,7 @@ name: Build
 
 # Every push and pull request builds and tests the extension and keeps the .vsix as an artifact of the run.
 # Pushing a tag named after the version (e.g. v0.17.0) also publishes a GitHub release with the .vsix attached, and
-# removes the older releases (keeping their tags).
+# removes the older releases and their tags.
 on:
   push:
     branches: ['**']
@@ -92,16 +92,22 @@ jobs:
           gh release create "${{ github.ref_name }}" "ClaudeForVS-${{ needs.build.outputs.version }}.vsix" \
             --repo "${{ github.repository }}" --title "Claude for VS ${{ needs.build.outputs.version }}" --generate-notes
 
-      # Only the newest release is shown; older ones are deleted, but their tags stay, so every version can still be found
-      # (and rebuilt) under Tags.
-      - name: Remove older releases
+      # Only the newest release and its tag are kept: older releases are deleted, then every other version tag.
+      - name: Remove older releases and tags
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release list --repo "${{ github.repository }}" --limit 1000 --json tagName --jq '.[].tagName' |
             while read -r tag; do
               if [ "$tag" != "${{ github.ref_name }}" ]; then
-                echo "Removing the release for $tag (the tag stays)"
+                echo "Removing the release for $tag"
                 gh release delete "$tag" --repo "${{ github.repository }}" --yes
+              fi
+            done
+          gh api "repos/${{ github.repository }}/git/matching-refs/tags/v" --paginate --jq '.[].ref' |
+            while read -r ref; do
+              if [ "$ref" != "refs/tags/${{ github.ref_name }}" ]; then
+                echo "Removing the tag ${ref#refs/tags/}"
+                gh api -X DELETE "repos/${{ github.repository }}/git/$ref"
               fi
             done

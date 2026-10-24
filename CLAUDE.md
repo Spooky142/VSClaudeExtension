@@ -48,6 +48,6 @@ If they say yes:
    git push origin v0.4.0
    ```
 
-   The GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and keeps the .vsix as an artifact of the run. For a `v*` tag it also checks the tag matches the manifest's version and publishes a GitHub release with `ClaudeForVS-<version>.vsix` attached, then deletes the older releases (keeping their tags), so only the newest is listed. The extension's self-update (`Agent/ExtensionUpdates.cs`) reads that latest release.
+   The GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and keeps the .vsix as an artifact of the run. For a `v*` tag it also checks the tag matches the manifest's version and publishes a GitHub release with `ClaudeForVS-<version>.vsix` attached, then deletes the older releases and their tags, so only the newest is listed. After pushing a tag, also delete older `v*` tags from the local clone (`git tag -d`), since the workflow only removes them on GitHub. The extension's self-update (`Agent/ExtensionUpdates.cs`) reads that latest release.
 
 If they say no, leave the working tree as it is.
