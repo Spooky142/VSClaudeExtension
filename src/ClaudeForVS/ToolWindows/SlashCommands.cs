@@ -25,6 +25,9 @@ internal static class SlashCommands
         ("/effort", "/effort low|medium|high|xhigh|max", "Change how hard Claude thinks"),
         ("/mode", "/mode auto|plan|coding", "Change what Claude may do without asking"),
         ("/review", "/review [focus]", "Review your uncommitted changes"),
+        ("/review-staged", "/review-staged [focus]", "Review the changes staged in git"),
+        ("/conflicts", "/conflicts", "Resolve the current git merge conflicts"),
+        ("/commit-message", "/commit-message", "Write a short commit message for your changes"),
         ("/init", "/init", "Create or update CLAUDE.md for this repository"),
         ("/retry", "/retry", "Send your last message again"),
         ("/undo", "/undo", "Undo the file changes made by your last message"),
@@ -54,7 +57,7 @@ internal static class SlashCommands
     };
 
     // Commands whose argument is free text, so completion leaves a space after them.
-    private static readonly HashSet<string> TakesText = new(StringComparer.OrdinalIgnoreCase) { "/review", "/checkpoint", "/restore" };
+    private static readonly HashSet<string> TakesText = new(StringComparer.OrdinalIgnoreCase) { "/review", "/review-staged", "/checkpoint", "/restore" };
 
     /// <summary>The command a prompt is, or null if it's an ordinary prompt (or a command for Claude Code).</summary>
     public static SlashCommand? Parse(string text)
@@ -136,6 +139,31 @@ internal static class SlashCommands
         + "anything inconsistent with the surrounding code. List your findings most serious first, each with the file and "
         + "line and a suggested fix. Don't change any files. If there are no uncommitted changes, say so."
         + (focus.Length > 0 ? $"\n\nFocus on: {focus}" : string.Empty);
+
+    /// <summary>What <c>/review-staged</c> asks Claude to do.</summary>
+    public static string ReviewStagedPrompt(string focus) =>
+        "Review the changes staged in git in this repository (use `git diff --cached`, and read any newly added files in "
+        + "full). Ignore unstaged and untracked changes. Look for bugs, unhandled edge cases, security problems, and "
+        + "anything inconsistent with the surrounding code. List your findings most serious first, each with the file and "
+        + "line and a suggested fix. Don't change any files. If nothing is staged, say so."
+        + (focus.Length > 0 ? $"\n\nFocus on: {focus}" : string.Empty);
+
+    /// <summary>What <c>/conflicts</c> asks Claude to do.</summary>
+    public const string ConflictsPrompt =
+        "Resolve the current git merge conflicts in this repository. Use `git status` to find the conflicted files (from a "
+        + "merge, rebase, cherry-pick or stash), and `git log` on both sides if it helps to understand what each change was "
+        + "for. In each file, resolve every conflict so the result keeps the intent of both sides where possible, and "
+        + "remove all the conflict markers. Don't stage, commit or continue the merge or rebase; leave that to me. Finish "
+        + "with a short summary of how you resolved each file, calling out any conflict where you had to choose one side "
+        + "over the other. If there are no conflicts, say so.";
+
+    /// <summary>What <c>/commit-message</c> asks Claude to do.</summary>
+    public const string CommitMessagePrompt =
+        "Write a very short, concise commit message for the current changes on this branch. Use the uncommitted changes "
+        + "(`git status` and `git diff HEAD`, including new files); if there are none, use the commits on this branch that "
+        + "aren't on the branch it was made from. Match the style of the recent history in `git log`. Reply with just the "
+        + "message, formatted in Markdown: a one-line summary, then a few short bullet points only if the changes need "
+        + "them. Don't change any files, and don't stage or commit anything.";
 
     /// <summary>What <c>/init</c> asks Claude to do.</summary>
     public const string InitPrompt =

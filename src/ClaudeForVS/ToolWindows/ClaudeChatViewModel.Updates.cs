@@ -238,6 +238,11 @@ internal sealed partial class ClaudeChatViewModel
                 () => this.UseNewestApiModels()));
         }
 
+        if (this.LowPriorityBanner() is NoticeBanner lowPriority)
+        {
+            banners.Insert(0, lowPriority);
+        }
+
         this.Banners.Clear();
         foreach (NoticeBanner banner in banners.Where(b => !DismissedBanners.Contains(b.Key)))
         {

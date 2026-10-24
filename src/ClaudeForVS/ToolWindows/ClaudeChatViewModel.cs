@@ -453,6 +453,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.promptCost = 0;
         this.promptHasCost = false;
         string outcome = "Claude has finished";
+        bool failed = false;
         using var cts = new CancellationTokenSource();
         this.runCts = cts;
         try
@@ -480,6 +481,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         {
             this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "Something went wrong", ex.Message));
             outcome = "Claude stopped with an error";
+            failed = true;
             if (runEngine.Kind == ChatEngineKind.ClaudeCode)
             {
                 await this.RefreshClaudeCodeStatusAsync(); // e.g. the sign-in expired
@@ -540,6 +542,12 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             }
 
             this.AttentionNeeded?.Invoke(this, outcome);
+        }
+
+        // Claude Code stops at the 5-hour limit; if there's weekly limit left, offer to carry on at lower priority.
+        if (failed && runEngine.Kind == ChatEngineKind.ClaudeCode)
+        {
+            await this.OfferLowPriorityAsync();
         }
     }
 

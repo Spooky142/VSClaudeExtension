@@ -187,9 +187,18 @@ internal sealed partial class ClaudeChatViewModel
         if (SlashCommands.Parse(text) is SlashCommand command)
         {
             // Commands that are really prompts go to Claude in full; the transcript shows what was typed.
-            if (command.Name is "/review" or "/init")
+            string? prompt = command.Name switch
             {
-                return this.SendWithAttachments(text, command.Name == "/init" ? SlashCommands.InitPrompt : SlashCommands.ReviewPrompt(command.Argument), out run);
+                "/review" => SlashCommands.ReviewPrompt(command.Argument),
+                "/review-staged" => SlashCommands.ReviewStagedPrompt(command.Argument),
+                "/conflicts" => SlashCommands.ConflictsPrompt,
+                "/commit-message" => SlashCommands.CommitMessagePrompt,
+                "/init" => SlashCommands.InitPrompt,
+                _ => null,
+            };
+            if (prompt != null)
+            {
+                return this.SendWithAttachments(text, prompt, out run);
             }
 
             bool handled = this.RunCommand(command, out run);

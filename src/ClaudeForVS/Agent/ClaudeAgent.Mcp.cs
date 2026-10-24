@@ -20,8 +20,8 @@ internal sealed partial class ClaudeAgent
 {
     /// <summary>
     /// Works out the tools for this chat before its first message: the built-in ones (less any the user's permission
-    /// settings deny) plus the tools of the MCP servers configured for the repository. Servers from the repository's
-    /// .mcp.json run only after the user approves them.
+    /// settings deny) plus the tools of the MCP servers configured for the repository, less any the user turned off.
+    /// Servers from the repository's .mcp.json run only after the user approves them.
     /// </summary>
     private async Task EnsureToolsAsync(IChatSink sink, CancellationToken cancellationToken)
     {
@@ -33,8 +33,10 @@ internal sealed partial class ClaudeAgent
         var list = BuiltInTools(this.permissions, this.Model);
         var mcpList = new List<(string Name, string Description, IReadOnlyDictionary<string, JsonElement> Schema)>();
         McpConfiguration config = McpConfig.Load(this.RepoRoot);
-        List<McpServerConfig> needApproval = config.Servers.Where(s => !config.IsPreApproved(s) && !McpApprovals.IsApproved(this.RepoRoot, s)).ToList();
-        List<McpServerConfig> toStart = config.Servers.Except(needApproval).ToList();
+        IReadOnlyCollection<string> disabled = McpDisabledServers.Default.For(this.RepoRoot);
+        List<McpServerConfig> servers = config.Servers.Where(s => !disabled.Contains(s.Name)).ToList();
+        List<McpServerConfig> needApproval = servers.Where(s => !config.IsPreApproved(s) && !McpApprovals.IsApproved(this.RepoRoot, s)).ToList();
+        List<McpServerConfig> toStart = servers.Except(needApproval).ToList();
         if (needApproval.Count > 0)
         {
             sink.SetStatus("Waiting for your approval…");

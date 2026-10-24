@@ -91,6 +91,48 @@ public sealed class McpConfigTests : IDisposable
     }
 
     [Fact]
+    public void TurnedOffServersAreRememberedPerRepository()
+    {
+        var store = new McpDisabledServers(Path.Combine(this.root, "mcp-servers.json"));
+        string other = Path.Combine(this.root, "other");
+        store.Set(this.Repo, "github", enabled: false);
+        store.Set(this.Repo, "files", enabled: false);
+        store.Set(this.Repo, "files", enabled: true);
+
+        Assert.Equal(["github"], store.For(this.Repo));
+        Assert.True(new McpDisabledServers(Path.Combine(this.root, "mcp-servers.json")).IsDisabled(this.Repo.ToUpperInvariant() + "\\", "github"));
+        Assert.Empty(store.For(other));
+
+        store.Set(this.Repo, "github", enabled: true);
+        Assert.Empty(store.For(this.Repo));
+    }
+
+    [Fact]
+    public void TurnedOffServersBecomeClaudeCodeDenyRules()
+    {
+        Assert.Equal("mcp__github", McpDisabledServers.ToolRule("github"));
+        Assert.Equal("mcp__my_server_v2", McpDisabledServers.ToolRule("my server.v2"));
+    }
+
+    [Fact]
+    public void ServerRowsShowWhetherTheyreOnAndApproved()
+    {
+        McpServerConfig stdio = McpConfig.Parse("s", JsonDocument.Parse("""{"command":"x"}""").RootElement, McpScope.Project, Env)!;
+        McpServerConfig sse = McpConfig.Parse("e", JsonDocument.Parse("""{"type":"sse","url":"https://example.com/sse"}""").RootElement, McpScope.User, Env)!;
+
+        var row = new McpServerRow(stdio, isEnabled: true, isApproved: false);
+        Assert.Equal(McpServerState.NeedsApproval, row.State);
+        int changes = 0;
+        row.EnabledChanged += (_, _) => changes++;
+        row.IsEnabled = false;
+        Assert.Equal((McpServerState.Off, "Off", 1), (row.State, row.StatusText, changes));
+
+        row.SetStatus(McpServerState.Checking, "Checking…");
+        Assert.False(row.CanCheck);
+        Assert.False(new McpServerRow(sse, isEnabled: true, isApproved: true).CanCheck);
+    }
+
+    [Fact]
     public void ToolResultsBecomeText()
     {
         McpCallResult result = McpClient.ToResult(JsonNode.Parse("""

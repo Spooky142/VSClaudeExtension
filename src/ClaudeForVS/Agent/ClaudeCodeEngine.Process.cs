@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using ClaudeForVS.Agent.Mcp;
 using ClaudeForVS.Git;
 using Microsoft.VisualStudio.Shell;
 
@@ -91,7 +92,9 @@ internal sealed partial class ClaudeCodeEngine
     /// <summary>The Claude Code process for the next message: the running one if it still fits the chat's settings, otherwise a new one.</summary>
     private async Task<Process> EnsureProcessAsync(IChatSink chatSink)
     {
-        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort))
+        // MCP servers turned off in the MCP servers window: Claude Code still loads them, but can't use their tools.
+        string disabledMcp = string.Join(",", McpDisabledServers.Default.For(this.RepoRoot).Select(McpDisabledServers.ToolRule));
+        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort, disabledMcp, LowPriorityMode.IsActive))
         {
             chatSink.SetStatus("Claude Code is working…");
             return running;
@@ -99,7 +102,7 @@ internal sealed partial class ClaudeCodeEngine
 
         await this.StopProcessAsync();
         this.restartNeeded = false;
-        this.processSettings = (this.Mode, this.Effort);
+        this.processSettings = (this.Mode, this.Effort, disabledMcp, LowPriorityMode.IsActive);
 
         var args = new List<string>
         {
@@ -115,6 +118,12 @@ internal sealed partial class ClaudeCodeEngine
             "--append-system-prompt", ExtraSystemPrompt + " " + AgentSettings.ModeInstructions(this.Mode),
             "--effort", AgentSettings.EffortApiName(this.Effort),
         };
+
+        if (disabledMcp.Length > 0)
+        {
+            args.Add("--disallowedTools");
+            args.Add(disabledMcp);
+        }
 
         if (this.SessionId != null)
         {
@@ -141,6 +150,7 @@ internal sealed partial class ClaudeCodeEngine
             StandardErrorEncoding = Encoding.UTF8,
         };
         ClaudeCodeCli.RemoveApiKeyVariables(psi); // use the subscription login, not a stray API key
+        LowPriorityMode.Apply(psi); // past the 5-hour limit, carry on against the weekly one
 
         // The approval tool's reply echoes the tool's whole input back (e.g. a file being written), JSON-escaped inside a
         // text block. Past Claude Code's default MCP output limit (25k tokens) the reply gets truncated, which Claude Code

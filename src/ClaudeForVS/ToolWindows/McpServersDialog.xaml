@@ -1,0 +1,95 @@
+<platform:DialogWindow x:Class="ClaudeForVS.ToolWindows.McpServersDialog"
+                       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                       xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+                       xmlns:platform="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
+                       Title="MCP Servers"
+                       Width="560" SizeToContent="Height" ResizeMode="NoResize" ShowInTaskbar="False"
+                       WindowStartupLocation="CenterOwner"
+                       Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                       FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
+                       FontSize="12">
+  <platform:DialogWindow.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Theme.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+      <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    </ResourceDictionary>
+  </platform:DialogWindow.Resources>
+
+  <StackPanel Margin="22,16,22,18">
+    <TextBlock Text="MCP servers" FontSize="20" FontWeight="SemiBold" />
+    <TextBlock x:Name="RepoText" Style="{StaticResource Muted}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+    <TextBlock x:Name="EngineNote" Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,10,0,12" />
+
+    <!-- One card per configured server: status dot, name, where it's configured, what it runs; Check and the on/off box. -->
+    <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <ItemsControl x:Name="ServerList">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border Margin="0,0,0,6" Padding="10,8" CornerRadius="8" BorderThickness="1"
+                    BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+              <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                  <Button Style="{StaticResource MiniButton}" Content="Check" Click="OnCheck" Margin="0,0,8,0"
+                          IsEnabled="{Binding CanCheck}" ToolTip="Start the server (or connect to it) and list its tools, to see whether it works" />
+                  <CheckBox Content="On" IsChecked="{Binding IsEnabled, Mode=TwoWay}" VerticalAlignment="Center"
+                            Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                            AutomationProperties.Name="{Binding Name, StringFormat=Use the {0} server}"
+                            ToolTip="Whether Claude can use this server's tools in this repository" />
+                </StackPanel>
+                <StackPanel>
+                  <DockPanel>
+                    <Ellipse x:Name="Dot" DockPanel.Dock="Left" Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center"
+                             Fill="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding TypeText}" Style="{StaticResource Muted}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                  </DockPanel>
+                  <TextBlock Text="{Binding ScopeText}" Style="{StaticResource Muted}" FontSize="11" Margin="16,2,0,0" />
+                  <TextBlock Text="{Binding Target}" ToolTip="{Binding Target}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                             TextTrimming="CharacterEllipsis" Margin="16,3,0,0" />
+                  <TextBlock x:Name="Status" Text="{Binding StatusText}" ToolTip="{Binding StatusText}" Style="{StaticResource Muted}" FontSize="11.5"
+                             TextWrapping="Wrap" MaxHeight="48" Margin="16,4,0,0" />
+                </StackPanel>
+              </DockPanel>
+            </Border>
+            <DataTemplate.Triggers>
+              <DataTrigger Binding="{Binding State}" Value="Connected">
+                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource AddedGreen}" />
+                <Setter TargetName="Status" Property="Foreground" Value="{StaticResource AddedGreen}" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding State}" Value="Failed">
+                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource ErrorRed}" />
+                <Setter TargetName="Status" Property="Foreground" Value="{StaticResource ErrorRed}" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding State}" Value="Checking">
+                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource Accent}" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding State}" Value="NeedsApproval">
+                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource Amber}" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding State}" Value="Off">
+                <Setter TargetName="Dot" Property="Opacity" Value="0.4" />
+              </DataTrigger>
+            </DataTemplate.Triggers>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <Border x:Name="EmptyNote" Padding="12,10" CornerRadius="8" BorderThickness="1" Visibility="Collapsed"
+            BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+      <TextBlock TextWrapping="Wrap" Style="{StaticResource Muted}"
+                 Text="No MCP servers are configured for this repository. Add them with “claude mcp add” in a terminal, or in a .mcp.json file at the root of the repository, then open this window again." />
+    </Border>
+
+    <DockPanel Margin="0,16,0,0">
+      <Button x:Name="CheckAllButton" DockPanel.Dock="Left" Style="{StaticResource OutlineButton}" Content="Check all" MinWidth="80"
+              Click="OnCheckAll" ToolTip="Check every server that's on" />
+      <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Close" IsCancel="True" IsDefault="True" MinWidth="80" Click="OnClose" />
+      <TextBlock x:Name="ApplyNote" Style="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" TextWrapping="Wrap" Margin="12,0" />
+    </DockPanel>
+  </StackPanel>
+</platform:DialogWindow>

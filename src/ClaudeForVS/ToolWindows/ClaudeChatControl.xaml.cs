@@ -50,6 +50,14 @@ public partial class ClaudeChatControl : UserControl
             ThreadHelper.ThrowIfNotOnUIThread();
             this.package.Vs.RequestAttention(message);
         };
+        this.viewModel.LowPriorityOffered += (_, offer) => this.package.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await this.package.JoinableTaskFactory.SwitchToMainThreadAsync(alwaysYield: true); // once the failed reply has finished
+            if (new LowPriorityDialog(offer).ShowModal() == true && this.viewModel.TryContinueAtLowPriority(offer, out Task run))
+            {
+                await run;
+            }
+        }).Task.FileAndForget("ClaudeForVS/LowPriority");
         this.viewModel.Confirm = message =>
             MessageBox.Show(message, "Claude", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
         this.viewModel.ChooseExportPath = ChooseExportPath;
@@ -105,6 +113,7 @@ public partial class ClaudeChatControl : UserControl
         this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
         {
             this.viewModel.RefreshUsage();
+            this.viewModel.RefreshLowPriority();
             if (this.IsVisible && this.viewModel.PlanUsageDue)
             {
                 this.viewModel.RefreshPlanUsageAsync().FileAndForget("ClaudeForVS/PlanUsage");
@@ -308,6 +317,21 @@ public partial class ClaudeChatControl : UserControl
         {
             this.SendPrompt();
         }
+    }
+
+    /// <summary>A developer action: sends its slash command, or leaves it in the box while Claude is busy.</summary>
+    private void RunDevAction(string command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        this.viewModel.ShowHistory = false;
+        if (this.PromptBox.Text.Trim().Length > 0)
+        {
+            this.viewModel.ShowStatus("Send or clear your message first.");
+            this.PromptBox.Focus();
+            return;
+        }
+
+        this.SendOrFill(command);
     }
 
     // Claude's work in this chat as a task in Visual Studio's status bar, from when it starts until it's done.
@@ -660,6 +684,28 @@ public partial class ClaudeChatControl : UserControl
         menu.IsOpen = true;
     }
 
+    /// <summary>The Developer actions chip's menu: git jobs that send a ready-made prompt to Claude.</summary>
+    private void OnDevActionsMenu(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu { PlacementTarget = this.DevActionsChip, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+
+        void Item(string header, string command, string toolTip)
+        {
+            var item = new MenuItem { Header = header, InputGestureText = command, ToolTip = toolTip };
+            item.Click += (_, _) =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                this.RunDevAction(command);
+            };
+            menu.Items.Add(item);
+        }
+
+        Item("Resolve merge conflicts", "/conflicts", "Resolve the conflicts from the current merge, rebase or cherry-pick, without staging or committing");
+        Item("Review staged changes", "/review-staged", "Review only what's staged in git, without changing any files");
+        Item("Write a commit message", "/commit-message", "A very short commit message for your changes, in Markdown");
+        menu.IsOpen = true;
+    }
+
     private void OnBannerAction(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is NoticeBanner banner)
@@ -703,6 +749,18 @@ public partial class ClaudeChatControl : UserControl
 
         // Install or sign-in may have happened inside the dialog, even if it was cancelled.
         this.viewModel.RefreshClaudeCodeStatusAsync().FileAndForget("ClaudeForVS/CodeStatus");
+    }
+
+    private void OnOpenMcpServers(object sender, RoutedEventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.viewModel.RepoRoot is not string repoRoot)
+        {
+            this.viewModel.ShowStatus("Choose a folder inside a git repository in Settings first.");
+            return;
+        }
+
+        new McpServersDialog(repoRoot, this.viewModel.Settings.Engine, this.package.JoinableTaskFactory).ShowModal();
     }
 
     // ===== History tab =====

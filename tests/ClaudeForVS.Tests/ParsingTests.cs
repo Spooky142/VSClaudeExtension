@@ -164,6 +164,17 @@ public class SlashCommandTests
     }
 
     [Fact]
+    public void GitJobCommandsAreRecognised()
+    {
+        Assert.Equal(new SlashCommand("/review-staged", "tests"), SlashCommands.Parse("/review-staged tests"));
+        Assert.Equal(new SlashCommand("/conflicts", string.Empty), SlashCommands.Parse("/Conflicts"));
+        Assert.Equal(new SlashCommand("/commit-message", string.Empty), SlashCommands.Parse("/commit-message"));
+        Assert.Contains("git diff --cached", SlashCommands.ReviewStagedPrompt(string.Empty));
+        Assert.EndsWith("Focus on: tests", SlashCommands.ReviewStagedPrompt("tests"));
+        Assert.Equal(["/review ", "/review-staged "], SlashCommands.Suggest("/rev").Select(s => s.Insert));
+    }
+
+    [Fact]
     public void CustomCommandsAreCompletedAfterBuiltIns()
     {
         CustomCommand[] custom =

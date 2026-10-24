@@ -154,6 +154,7 @@ internal static class CommitMessageWriter
             StandardErrorEncoding = Encoding.UTF8,
         };
         ClaudeCodeCli.RemoveApiKeyVariables(psi);
+        LowPriorityMode.Apply(psi);
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
