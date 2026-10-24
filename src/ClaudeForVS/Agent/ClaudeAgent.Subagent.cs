@@ -31,12 +31,14 @@ internal sealed partial class ClaudeAgent
         something, say so. Be concise; your report is all that comes back.
         """;
 
-    // Subagents only read and search, which Haiku does well for a fraction of the cost, and at low effort.
-    private const ClaudeModel SubagentModel = ClaudeModel.Haiku;
+    // Subagents only read and search, so they run at low effort whatever the model.
     private const EffortLevel SubagentEffort = EffortLevel.Low;
 
-    /// <summary>The API model ID subagents use; the built-in Haiku version unless set to a newer one.</summary>
-    public string SubagentModelId { get; init; } = AgentSettings.ModelId(SubagentModel);
+    /// <summary>The model subagents run on, for pricing and the web tools' versions; can change between messages.</summary>
+    public ClaudeModel SubagentModel { get; set; } = AgentSettings.DefaultApiSubagentModel;
+
+    /// <summary>The API model ID for <see cref="SubagentModel"/>: the built-in version unless set to a newer one.</summary>
+    public string SubagentModelId { get; set; } = AgentSettings.ModelId(AgentSettings.DefaultApiSubagentModel);
 
     private static string? ToolName(ToolUnion tool) =>
         tool.TryPickTool(out Tool? plain) ? plain.Name
@@ -56,9 +58,12 @@ internal sealed partial class ClaudeAgent
         using var progress = new SubagentProgress(sink.StartLiveActivity(ActivityKind.Other, title, stop.Cancel, expanded: true));
         IChatSink inner = new SubagentSink(sink, progress);
         // Its own model may need other versions of the web tools than the chat's.
+        // Read once, so a settings change mid-run doesn't mix models.
+        ClaudeModel model = this.SubagentModel;
+        string modelId = this.SubagentModelId;
         List<ToolUnion> tools = (this.tools ?? BuiltInTools(this.permissions, this.Model))
             .Where(t => ToolName(t) is string name && SubagentTools.Contains(name) && name is not ("web_search" or "web_fetch"))
-            .Concat(WebTools(this.permissions, SubagentModel))
+            .Concat(WebTools(this.permissions, model))
             .ToList();
         string system = this.systemPrompt + SubagentInstructions;
         var conversation = new List<MessageParam> { new() { Role = Role.User, Content = prompt } };
@@ -82,8 +87,8 @@ internal sealed partial class ClaudeAgent
                     break;
                 }
 
-                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools, this.SubagentModelId, SubagentEffort));
-                this.ReportUsage(sink, turn.Usage, SubagentModel);
+                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools, modelId, SubagentEffort));
+                this.ReportUsage(sink, turn.Usage, model);
                 if (paused != null)
                 {
                     // A response the API paused (during long web searches) continues as the same assistant message.

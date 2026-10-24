@@ -97,6 +97,42 @@ public class PromptHistoryTests
         history.Add(" a ");
         Assert.Equal(["b", "a"], history.Entries);
     }
+
+    [Fact]
+    public void TwoWindowsKeepEachOthersPrompts()
+    {
+        string file = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ClaudeForVS.Tests", Guid.NewGuid().ToString("N"), "prompt-history.json");
+        try
+        {
+            var a = new PromptHistory(file);
+            var b = new PromptHistory(file);
+            a.Add("from a");
+            b.Add("from b");
+            Assert.Equal(["from a", "from b"], new PromptHistory(file).Entries);
+            Assert.Equal("from b", a.Older(string.Empty)); // browsing picks up the other window's prompts
+        }
+        finally
+        {
+            System.IO.Directory.Delete(System.IO.Path.GetDirectoryName(file)!, recursive: true);
+        }
+    }
+}
+
+public class AgentSettingsTests
+{
+    [Fact]
+    public void SavingKeepsWhatAnotherWindowChanged()
+    {
+        var loaded = new AgentSettings(); // what this window started with
+        AgentSettings saved = loaded with { RunHooks = true }; // another window turned hooks on since
+        AgentSettings mine = loaded with { Effort = EffortLevel.Max, SubagentModel = ClaudeModel.Sonnet };
+
+        AgentSettings merged = mine.MergeInto(loaded, saved);
+        Assert.True(merged.RunHooks);
+        Assert.Equal(EffortLevel.Max, merged.Effort);
+        Assert.Equal(ClaudeModel.Sonnet, merged.SubagentModel);
+        Assert.Equal(loaded.Model, merged.Model);
+    }
 }
 
 public class ChatExporterTests

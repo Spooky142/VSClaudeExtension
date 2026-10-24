@@ -285,7 +285,8 @@ internal static class MarkdownRenderer
                     Margin = new Thickness(0, 0, 0, 8),
                     Padding = new Thickness(20, 0, 0, 0),
                 };
-                if (list.IsOrdered && int.TryParse(list.OrderedStart, out int start))
+                    // Markdown allows a list to start at 0, but WPF throws for anything below 1.
+                    if (list.IsOrdered && int.TryParse(list.OrderedStart, out int start) && start > 0)
                 {
                     l.StartIndex = start;
                 }
@@ -704,8 +705,16 @@ internal static class MarkdownRenderer
             hyperlink.ToolTip = uri.AbsoluteUri;
             hyperlink.RequestNavigate += (_, e) =>
             {
-                Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
                 e.Handled = true;
+                try
+                {
+                    Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+                }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+                {
+                    // No default browser, or a policy blocks it: an exception here would reach Visual Studio's dispatcher.
+                    hyperlink.ToolTip = $"Couldn't open a browser ({ex.Message}). {uri.AbsoluteUri}";
+                }
             };
         }
     }

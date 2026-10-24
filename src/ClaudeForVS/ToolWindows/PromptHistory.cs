@@ -48,6 +48,7 @@ internal sealed class PromptHistory
         prompt = prompt.Trim();
         if (prompt.Length > 0)
         {
+            this.Reload(); // other chat windows add to the same file; saving this window's older copy would drop theirs
             this.entries.Remove(prompt); // keep one copy, at the newest end
             this.entries.Add(prompt);
             if (this.entries.Count > MaxEntries)
@@ -65,6 +66,12 @@ internal sealed class PromptHistory
     /// <summary>The next older prompt, or null at the oldest. Remembers <paramref name="current"/> as the draft when browsing starts.</summary>
     public string? Older(string current)
     {
+        if (!this.IsBrowsing)
+        {
+            this.Reload(); // includes prompts sent from other chat windows
+            this.position = this.entries.Count;
+        }
+
         if (this.position == 0)
         {
             return null;
@@ -92,6 +99,16 @@ internal sealed class PromptHistory
 
     /// <summary>Stops browsing, e.g. once the recalled prompt has been edited.</summary>
     public void Reset() => this.position = this.entries.Count;
+
+    /// <summary>Replaces the entries with what's saved, if this history is saved at all.</summary>
+    private void Reload()
+    {
+        if (this.file != null)
+        {
+            this.entries.Clear();
+            this.entries.AddRange(Load(this.file));
+        }
+    }
 
     private static List<string> Load(string file)
     {

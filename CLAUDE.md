@@ -40,5 +40,14 @@ If they say yes:
    - `<FileVersion>` in `src/ClaudeForVS/ClaudeForVS.csproj` (same value as `<AssemblyVersion>`)
 2. Do a clean rebuild with the command above and confirm it succeeds. If it fails, fix the problem before going further.
 3. Stage the changes, including the version bump, and commit with a short message in the style of the existing history (e.g. "Added token usage to prompts.").
+4. Ask whether they'd like the commit pushed and released. Don't push or tag anything until they say yes. If they do, tag the commit with the new version and push both:
+
+   ```powershell
+   git tag v0.4.0
+   git push origin main
+   git push origin v0.4.0
+   ```
+
+   The GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and keeps the .vsix as an artifact of the run. For a `v*` tag it also checks the tag matches the manifest's version and publishes a GitHub release with `ClaudeForVS-<version>.vsix` attached.
 
 If they say no, leave the working tree as it is.

@@ -53,8 +53,16 @@ internal sealed class RepoFileIndex
         }
         finally
         {
-            this.loadedAt = DateTime.UtcNow;
             this.loading = null;
+            if (string.Equals(root, this.repoRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                this.loadedAt = DateTime.UtcNow;
+            }
+            else if (this.repoRoot is string current)
+            {
+                // The repository changed while this one was loading, and its files were thrown away: load the new one's.
+                this.loading = this.LoadAsync(current);
+            }
         }
     }
 

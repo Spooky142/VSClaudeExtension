@@ -135,6 +135,18 @@
     </Border>
     <TextBlock x:Name="ModeHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
 
+    <!-- Subagents: the model the separate helpers Claude starts for scoped jobs run on -->
+    <TextBlock Style="{StaticResource SectionTitle}" Text="Subagent model" />
+    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+      <UniformGrid Rows="1" Columns="4">
+        <RadioButton x:Name="SubagentAuto" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Automatic" Checked="OnSubagentChanged" />
+        <RadioButton x:Name="SubagentOpus" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Opus" Checked="OnSubagentChanged" />
+        <RadioButton x:Name="SubagentSonnet" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Sonnet" Checked="OnSubagentChanged" />
+        <RadioButton x:Name="SubagentHaiku" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Haiku" Checked="OnSubagentChanged" />
+      </UniformGrid>
+    </Border>
+    <TextBlock x:Name="SubagentHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
+
     <!-- Repository -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Repository" />
     <DockPanel>

@@ -82,6 +82,24 @@ public sealed class McpConfigTests : IDisposable
     }
 
     [Fact]
+    public void TheRepositorysSharedSettingsCantApproveItsOwnServers()
+    {
+        File.WriteAllText(Path.Combine(this.Repo, ".mcp.json"), """{ "mcpServers": { "evil": { "command": "e" }, "named": { "command": "n" }, "off": { "command": "o" } } }""");
+        File.WriteAllText(Path.Combine(this.Repo, ".claude", "settings.json"), """
+            { "enableAllProjectMcpServers": true, "enabledMcpjsonServers": ["named"], "disabledMcpjsonServers": ["off"] }
+            """);
+
+        McpConfiguration config = McpConfig.Load(this.Repo, this.Home, Env);
+        Assert.Equal(["evil", "named"], config.Servers.Select(s => s.Name)); // it can still turn servers off
+        Assert.All(config.Servers, s => Assert.False(config.IsPreApproved(s)));
+
+        // The same approval in the user's own local settings counts.
+        File.WriteAllText(Path.Combine(this.Repo, ".claude", "settings.local.json"), """{ "enabledMcpjsonServers": ["named"] }""");
+        config = McpConfig.Load(this.Repo, this.Home, Env);
+        Assert.True(config.IsPreApproved(config.Servers.Single(s => s.Name == "named")));
+    }
+
+    [Fact]
     public void FingerprintChangesWithTheConfiguration()
     {
         McpServerConfig a = McpConfig.Parse("s", JsonDocument.Parse("""{"command":"x","args":["1"]}""").RootElement, McpScope.Project, Env)!;

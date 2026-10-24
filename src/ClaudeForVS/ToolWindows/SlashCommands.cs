@@ -28,7 +28,6 @@ internal static class SlashCommands
         ("/review-staged", "/review-staged [focus]", "Review the changes staged in git"),
         ("/review-branch", "/review-branch [focus]", "Review everything on this branch"),
         ("/conflicts", "/conflicts", "Resolve the current git merge conflicts"),
-        ("/fix-build", "/fix-build", "Build, fix the errors, and repeat until it builds"),
         ("/commit-message", "/commit-message", "Write a short commit message for your changes"),
         ("/pr-message", "/pr-message", "Write a short pull request message for this branch"),
         ("/pulled", "/pulled", "Summarize what came in with your last pull"),
@@ -170,16 +169,6 @@ internal static class SlashCommands
         + "remove all the conflict markers. Don't stage, commit or continue the merge or rebase; leave that to me. Finish "
         + "with a short summary of how you resolved each file, calling out any conflict where you had to choose one side "
         + "over the other. If there are no conflicts, say so.";
-
-    /// <summary>What <c>/fix-build</c> asks Claude to do.</summary>
-    public const string FixBuildPrompt =
-        "Build the solution open in Visual Studio with the build_solution tool (or, if no solution in this repository is "
-        + "open, with the repository's usual build command) and fix every build error. Read the code around each error "
-        + "before changing it, and fix the cause rather than hiding it: don't delete code, comment it out or suppress "
-        + "errors just to make it build. Then build again, and repeat until the build succeeds. Stop and tell me if an "
-        + "error needs a decision from me, or if a round of fixes doesn't reduce the errors. Leave warnings alone unless "
-        + "they come from your own changes. Finish with a short summary of what was wrong and what you changed. If it "
-        + "already builds, say so.";
 
     /// <summary>What <c>/commit-message</c> asks Claude to do.</summary>
     public const string CommitMessagePrompt =

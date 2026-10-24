@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -111,6 +112,15 @@ internal sealed record AgentSettings
     /// </summary>
     public bool ShowNotifications { get; init; } = true;
 
+    /// <summary>
+    /// The model subagents run on. Null leaves it to the engine: <see cref="DefaultApiSubagentModel"/> on the Claude
+    /// API, and Claude Code's own choice (or its CLAUDE_CODE_SUBAGENT_MODEL setting) on Claude Code.
+    /// </summary>
+    public ClaudeModel? SubagentModel { get; init; }
+
+    /// <summary>What the Claude API engine's subagents use when <see cref="SubagentModel"/> isn't set: they only read and search, which Haiku does well for a fraction of the cost.</summary>
+    public const ClaudeModel DefaultApiSubagentModel = ClaudeModel.Haiku;
+
     public static AgentSettings Load()
     {
         try
@@ -128,6 +138,27 @@ internal sealed record AgentSettings
     }
 
     public void Save() => AtomicFile.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, JsonOptions));
+
+    /// <summary>
+    /// Saves only the settings that differ from <paramref name="before"/>, on top of what's saved now. Each chat window
+    /// keeps its own copy, so saving it whole would undo what another window changed since this one loaded.
+    /// </summary>
+    public void SaveChangesFrom(AgentSettings before) => this.MergeInto(before, Load()).Save();
+
+    /// <summary>The settings that differ from <paramref name="before"/>, applied to a copy of <paramref name="saved"/>.</summary>
+    internal AgentSettings MergeInto(AgentSettings before, AgentSettings saved)
+    {
+        AgentSettings merged = saved with { };
+        foreach (PropertyInfo property in typeof(AgentSettings).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.CanWrite && !Equals(property.GetValue(this), property.GetValue(before)))
+            {
+                property.SetValue(merged, property.GetValue(this));
+            }
+        }
+
+        return merged;
+    }
 
     /// <summary>The API model ID this extension was built and tested with.</summary>
     public static string ModelId(ClaudeModel model) => model switch

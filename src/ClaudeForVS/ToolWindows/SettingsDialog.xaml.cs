@@ -60,6 +60,13 @@ public partial class SettingsDialog : DialogWindow
         this.ModelRadio(settings.Model).IsChecked = true;
         this.EffortRadio(settings.Effort).IsChecked = true;
         (settings.Mode switch { AgentMode.Auto => this.ModeAuto, AgentMode.Plan => this.ModePlan, _ => this.ModeCoding }).IsChecked = true;
+        (settings.SubagentModel switch
+        {
+            ClaudeModel.Opus => this.SubagentOpus,
+            ClaudeModel.Sonnet => this.SubagentSonnet,
+            ClaudeModel.Haiku => this.SubagentHaiku,
+            _ => this.SubagentAuto,
+        }).IsChecked = true;
         this.RepoBox.Text = repoPath;
         this.RunHooksBox.IsChecked = settings.RunHooks;
         this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
@@ -106,6 +113,12 @@ public partial class SettingsDialog : DialogWindow
         this.ModeAuto.IsChecked == true ? AgentMode.Auto :
         this.ModePlan.IsChecked == true ? AgentMode.Plan :
         AgentMode.Coding;
+
+    private ClaudeModel? SelectedSubagentModel =>
+        this.SubagentOpus.IsChecked == true ? ClaudeModel.Opus :
+        this.SubagentSonnet.IsChecked == true ? ClaudeModel.Sonnet :
+        this.SubagentHaiku.IsChecked == true ? ClaudeModel.Haiku :
+        null;
 
     private RadioButton ModelRadio(ClaudeModel model) => model switch
     {
@@ -212,6 +225,28 @@ public partial class SettingsDialog : DialogWindow
     {
         this.UpdateHints();
         this.UpdateEngineUi();
+        this.UpdateSubagentHint();
+    }
+
+    private void OnSubagentChanged(object sender, RoutedEventArgs e) => this.UpdateSubagentHint();
+
+    private void UpdateSubagentHint()
+    {
+        // Radio buttons raise Checked during InitializeComponent, before every named element exists.
+        if (this.SubagentHint is null || this.SubagentHaiku is null)
+        {
+            return;
+        }
+
+        bool code = this.SelectedEngine == ChatEngineKind.ClaudeCode;
+        this.SubagentHint.Text = this.SelectedSubagentModel switch
+        {
+            null when code => "Claude Code decides, following its own settings (such as CLAUDE_CODE_SUBAGENT_MODEL in ~/.claude/settings.json).",
+            null => "Haiku. Subagents only read and search, which Haiku does well for a fraction of the cost.",
+            ClaudeModel.Opus => "Most thorough, and most expensive. Worth it when subagents review code or investigate tricky problems.",
+            ClaudeModel.Sonnet => "A good balance for scoped jobs: capable, and much cheaper than Opus.",
+            _ => "Cheapest and quickest. Fine for finding files and reading code.",
+        } + (code ? string.Empty : " Subagents always run at low effort here.");
     }
 
     private void OnModelChanged(object sender, RoutedEventArgs e) => this.UpdateHints();
@@ -393,6 +428,7 @@ public partial class SettingsDialog : DialogWindow
             Model = this.SelectedModel,
             Effort = this.SelectedEffort,
             Mode = this.SelectedMode,
+            SubagentModel = this.SelectedSubagentModel,
             PinnedRepoPath = follows ? null : root ?? text,
             RunHooks = this.RunHooksBox.IsChecked == true,
             FormatChangedFiles = this.FormatChangedBox.IsChecked == true,

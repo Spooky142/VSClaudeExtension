@@ -96,7 +96,7 @@ internal sealed partial class ClaudeChatViewModel
     /// Adds a row listing the files a prompt changed, with lines added and removed, under Claude's reply and above the
     /// prompt's token count. Nothing is added if no files changed.
     /// </summary>
-    private async Task ShowChangedFilesAsync(string root, ChatEntry prompt, ChatEntry? usageEntry)
+    private async Task ShowChangedFilesAsync(string root, ChatEntry prompt, ChatEntry? usageEntry, CancellationToken cancellationToken)
     {
         if (prompt.SnapshotBefore is not string before || prompt.SnapshotAfter is not string after || before == after || !this.Messages.Contains(prompt))
         {
@@ -106,7 +106,7 @@ internal sealed partial class ClaudeChatViewModel
         IReadOnlyList<FileStat> files;
         try
         {
-            files = await WorkingTreeSnapshot.StatsAsync(root, before, after, CancellationToken.None);
+            files = await WorkingTreeSnapshot.StatsAsync(root, before, after, cancellationToken);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {

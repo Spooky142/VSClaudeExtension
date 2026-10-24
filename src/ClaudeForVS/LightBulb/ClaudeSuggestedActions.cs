@@ -95,12 +95,22 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
     private readonly object lastLock = new();
     private (ITextSnapshot Snapshot, int Position, EnclosingMember? Member)? lastMember;
 
-    public Task<bool> HasSuggestedActionsAsync(ISuggestedActionCategorySet requestedActionCategories, SnapshotSpan range, CancellationToken cancellationToken) =>
-        Task.Run(() => this.Collect(range, cancellationToken) is not null, cancellationToken);
+    // On the UI thread, a member not found in this long is left out rather than holding up the editor.
+    private static readonly TimeSpan UiThreadMemberTimeout = TimeSpan.FromMilliseconds(250);
+
+    public async Task<bool> HasSuggestedActionsAsync(ISuggestedActionCategorySet requestedActionCategories, SnapshotSpan range, CancellationToken cancellationToken)
+    {
+        // Tag aggregators (and the taggers behind them) belong to the UI thread; only the Roslyn lookup goes to the background.
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        bool hasProblem = this.HasProblem(range);
+        return await Task.Run(() => this.Collect(range, hasProblem, null, cancellationToken) is not null, cancellationToken);
+    }
 
     public IEnumerable<SuggestedActionSet> GetSuggestedActions(ISuggestedActionCategorySet requestedActionCategories, SnapshotSpan range, CancellationToken cancellationToken)
     {
-        if (this.Collect(range, cancellationToken) is not LightBulbOffer offer)
+        // Called on the UI thread; the member is normally cached by HasSuggestedActionsAsync just before.
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.Collect(range, this.HasProblem(range), UiThreadMemberTimeout, cancellationToken) is not LightBulbOffer offer)
         {
             return [];
         }
@@ -141,11 +151,23 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
 
     public void Dispose() => this.errorTags.Dispose();
 
+    /// <summary>True if the range's lines have an error or warning squiggle. Call on the UI thread.</summary>
+    private bool HasProblem(SnapshotSpan range)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        ITextSnapshot snapshot = range.Snapshot;
+        ITextSnapshotLine firstLine = snapshot.GetLineFromPosition(range.Start);
+        ITextSnapshotLine lastLine = snapshot.GetLineFromPosition(range.End);
+        return this.errorTags.GetTags(new SnapshotSpan(snapshot, Span.FromBounds(firstLine.Start, lastLine.End)))
+            .Any(t => SquiggleErrorTypes.Contains(t.Tag.ErrorType));
+    }
+
     /// <summary>
     /// What to offer for <paramref name="range"/>: null if there's nothing (no file, or no selection, no member the caret
     /// is in and no problem on the line).
     /// </summary>
-    private LightBulbOffer? Collect(SnapshotSpan range, CancellationToken cancellationToken)
+    /// <param name="memberTimeout">How long to look for the member the caret is in, if it isn't cached; null for as long as it takes.</param>
+    private LightBulbOffer? Collect(SnapshotSpan range, bool hasProblem, TimeSpan? memberTimeout, CancellationToken cancellationToken)
     {
         if (!this.provider.TextDocuments.TryGetTextDocument(this.buffer, out ITextDocument document) || string.IsNullOrEmpty(document.FilePath))
         {
@@ -153,12 +175,8 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
         }
 
         ITextSnapshot snapshot = range.Snapshot;
-        ITextSnapshotLine firstLine = snapshot.GetLineFromPosition(range.Start);
-        ITextSnapshotLine lastLine = snapshot.GetLineFromPosition(range.End);
-        int caretStart = firstLine.LineNumber + 1;
-        int caretEnd = lastLine.LineNumber + 1;
-        bool hasProblem = this.errorTags.GetTags(new SnapshotSpan(snapshot, Span.FromBounds(firstLine.Start, lastLine.End)))
-            .Any(t => SquiggleErrorTypes.Contains(t.Tag.ErrorType));
+        int caretStart = snapshot.GetLineFromPosition(range.Start).LineNumber + 1;
+        int caretEnd = snapshot.GetLineFromPosition(range.End).LineNumber + 1;
 
         // A selection is what the user means; otherwise the member the caret is in.
         if (HasNonWhiteSpace(range))
@@ -166,7 +184,7 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
             return new LightBulbOffer(new LightBulbContext(document.FilePath, caretStart, caretEnd, range.GetText, caretStart, caretEnd), hasProblem, HasCode: true, CanDocument: false);
         }
 
-        if (this.FindMemberCached(snapshot, range.Start, cancellationToken) is EnclosingMember member)
+        if (this.FindMemberCached(snapshot, range.Start, memberTimeout, cancellationToken) is EnclosingMember member)
         {
             return new LightBulbOffer(
                 new LightBulbContext(document.FilePath, member.StartLine, member.EndLine, () => member.Text, caretStart, caretEnd), hasProblem, HasCode: true, CanDocument: !member.HasDocumentation);
@@ -190,7 +208,8 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
 
         return false;
     }
-    private EnclosingMember? FindMemberCached(ITextSnapshot snapshot, int position, CancellationToken cancellationToken)
+
+    private EnclosingMember? FindMemberCached(ITextSnapshot snapshot, int position, TimeSpan? timeout, CancellationToken cancellationToken)
     {
         lock (this.lastLock)
         {
@@ -200,8 +219,14 @@ internal sealed class ClaudeSuggestedActionsSource : ISuggestedActionsSource
             }
         }
 
-        EnclosingMember? member = FindMember(snapshot, position, cancellationToken);
-        if (!cancellationToken.IsCancellationRequested) // a cancelled lookup finds nothing, which isn't the answer
+        using var lookup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (timeout is TimeSpan limit)
+        {
+            lookup.CancelAfter(limit);
+        }
+
+        EnclosingMember? member = FindMember(snapshot, position, lookup.Token);
+        if (!lookup.IsCancellationRequested) // a cancelled or timed-out lookup finds nothing, which isn't the answer
         {
             lock (this.lastLock)
             {

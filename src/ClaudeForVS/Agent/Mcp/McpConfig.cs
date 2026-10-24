@@ -98,7 +98,16 @@ internal static class McpConfig
         {
             if (ClaudeSettingsFile.Read(settings) is JsonElement root)
             {
-                ReadApprovals(root, enabled, disabled, ref enableAll);
+                // The repository can't approve its own servers; it can still turn them off.
+                if (PermissionRules.IsSharedRepoSettings(settings, repoRoot))
+                {
+                    bool ignored = false;
+                    ReadApprovals(root, [], disabled, ref ignored);
+                }
+                else
+                {
+                    ReadApprovals(root, enabled, disabled, ref enableAll);
+                }
             }
         }
 

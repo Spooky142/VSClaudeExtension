@@ -94,7 +94,7 @@ internal sealed partial class ClaudeCodeEngine
     {
         // MCP servers turned off in the MCP servers window: Claude Code still loads them, but can't use their tools.
         string disabledMcp = string.Join(",", McpDisabledServers.Default.For(this.RepoRoot).Select(McpDisabledServers.ToolRule));
-        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort, disabledMcp, LowPriorityMode.IsActive))
+        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort, this.SubagentModel, disabledMcp, LowPriorityMode.IsActive))
         {
             chatSink.SetStatus("Claude Code is working…");
             return running;
@@ -102,7 +102,7 @@ internal sealed partial class ClaudeCodeEngine
 
         await this.StopProcessAsync();
         this.restartNeeded = false;
-        this.processSettings = (this.Mode, this.Effort, disabledMcp, LowPriorityMode.IsActive);
+        this.processSettings = (this.Mode, this.Effort, this.SubagentModel, disabledMcp, LowPriorityMode.IsActive);
 
         var args = new List<string>
         {
@@ -118,6 +118,14 @@ internal sealed partial class ClaudeCodeEngine
             "--append-system-prompt", ExtraSystemPrompt + " " + AgentSettings.ModeInstructions(this.Mode),
             "--effort", AgentSettings.EffortApiName(this.Effort),
         };
+
+        // Passed as command-line settings rather than an environment variable, which an env block in the user's
+        // ~/.claude/settings.json can replace; settings from the command line take precedence over the user's.
+        if (this.SubagentModel is ClaudeModel subagentModel)
+        {
+            args.Add("--settings");
+            args.Add(JsonSerializer.Serialize(new { env = new Dictionary<string, string> { ["CLAUDE_CODE_SUBAGENT_MODEL"] = AgentSettings.ClaudeCodeAlias(subagentModel) } }));
+        }
 
         if (disabledMcp.Length > 0)
         {

@@ -89,7 +89,11 @@ internal sealed partial class ClaudeCodeEngine
             }
         }
 
-        if (this.editsPreApproved && EditTools.Contains(toolName) && this.Mode != AgentMode.Plan)
+        // "Allow all edits" covers the repository's files only; files elsewhere (settings, profiles, startup scripts) and
+        // git's own folder (hooks are commands) still ask.
+        if (this.editsPreApproved && EditTools.Contains(toolName) && this.Mode != AgentMode.Plan
+            && this.FullPath(input) is string preApprovedPath && this.InsideRepo(preApprovedPath)
+            && !this.InsideRepo(preApprovedPath, ".git"))
         {
             return new PermissionDecision(true);
         }
@@ -257,6 +261,9 @@ internal sealed partial class ClaudeCodeEngine
             "Don't make the left-out changes again unless the user asks for them. Read the file again before editing it further.");
     }
 
-    private bool InsideRepo(string fullPath) =>
-        fullPath.StartsWith(this.RepoRoot.TrimEnd('\\', '/') + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    /// <summary>True if the path is inside the repository, or inside one of its folders if <paramref name="folder"/> is given.</summary>
+    private bool InsideRepo(string fullPath, string? folder = null) =>
+        fullPath.StartsWith(
+            (folder is null ? this.RepoRoot.TrimEnd('\\', '/') : Path.Combine(this.RepoRoot, folder)) + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
 }

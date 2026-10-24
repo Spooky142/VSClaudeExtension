@@ -731,7 +731,6 @@ public partial class ClaudeChatControl : UserControl
             menu.Items.Add(item);
         }
 
-        Item("Fix the build", "/fix-build", "Build the solution, fix the errors and build again until it succeeds");
         Item("Resolve merge conflicts", "/conflicts", "Resolve the conflicts from the current merge, rebase or cherry-pick, without staging or committing");
         Item("Review staged changes", "/review-staged", "Review only what's staged in git, without changing any files");
         Item("Review this branch", "/review-branch", "Review every change on this branch since it left its base branch, without changing any files");

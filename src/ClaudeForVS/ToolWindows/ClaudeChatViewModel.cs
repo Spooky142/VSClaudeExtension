@@ -123,10 +123,35 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         {
             this.Set(ref this.isBusy, value);
             this.OnPropertyChanged(nameof(this.IsIdle));
+            if (!value && this.afterBusy is Action next)
+            {
+                this.afterBusy = null;
+                next();
+            }
         }
     }
 
     public bool IsIdle => !this.isBusy;
+
+    // What was asked for while a reply (or an undo) was running, to carry out once it has finished; see WhenIdle.
+    private Action? afterBusy;
+
+    /// <summary>
+    /// Runs the action now, or stops the reply in progress and runs it once that has finished, so the reply's last rows
+    /// and its save land in its own chat rather than a new one (or bring back a chat that was just deleted).
+    /// </summary>
+    private void WhenIdle(Action action)
+    {
+        if (!this.IsBusy)
+        {
+            action();
+            return;
+        }
+
+        this.afterBusy += action;
+        this.Stop();
+        this.Status = "Stopping…";
+    }
 
     public bool NeedsApiKey
     {
@@ -252,7 +277,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         if (this.settings.PinnedRepoPath != null)
         {
             AgentSettings unpinned = this.settings with { PinnedRepoPath = null };
-            unpinned.Save();
+            unpinned.SaveChangesFrom(this.settings);
             this.Settings = unpinned;
         }
 
@@ -272,7 +297,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         bool modelChanged = newSettings.Model != this.settings.Model
             || (newSettings.UseNewestApiModels != this.settings.UseNewestApiModels
                 && newSettings.ApiModelId(newSettings.Model) != this.settings.ApiModelId(this.settings.Model));
-        newSettings.Save();
+        newSettings.SaveChangesFrom(this.settings);
         this.Settings = newSettings;
         this.RepoPath = repoPath;
 
@@ -291,14 +316,16 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         // Each engine keeps its own history; a new model can't read the old model's thinking; a new key needs a new client.
         if (engineChanged || modelChanged || (newApiKey != null && this.engine.Kind == ChatEngineKind.Api))
         {
-            this.Stop();
-            bool hadHistory = this.Messages.Count > 0;
-            this.DisposeEngine();
-            if (hadHistory)
+            this.WhenIdle(() =>
             {
-                string via = newSettings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty;
-                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {newSettings.NameOf(newSettings.Model)}{via}"));
-            }
+                bool hadHistory = this.Messages.Count > 0;
+                this.DisposeEngine();
+                if (hadHistory)
+                {
+                    string via = newSettings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty;
+                    this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {newSettings.NameOf(newSettings.Model)}{via}"));
+                }
+            });
         }
         else
         {
@@ -307,6 +334,10 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             if (this.engine is ClaudeAgent agent)
             {
                 ApplyApiSettings(agent, newSettings);
+            }
+            else if (this.engine is ClaudeCodeEngine code)
+            {
+                code.SubagentModel = newSettings.SubagentModel;
             }
         }
 
@@ -330,9 +361,10 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         }
     }
 
-    public void NewChat()
+    public void NewChat() => this.WhenIdle(this.ResetChat);
+
+    private void ResetChat()
     {
-        this.Stop();
         this.DisposeEngine();
         this.Messages.Clear();
         ChatChanges.Forget(this);
@@ -417,7 +449,10 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
                 return null;
             }
 
-            return new ClaudeCodeEngine(exe, root, this.settings.Model, this.settings.Effort, this.settings.Mode);
+            return new ClaudeCodeEngine(exe, root, this.settings.Model, this.settings.Effort, this.settings.Mode)
+            {
+                SubagentModel = this.settings.SubagentModel,
+            };
         }
 
         if (ApiKeyStore.Load() is not string apiKey)
@@ -430,7 +465,6 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         var agent = new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode)
         {
             ModelId = this.settings.ApiModelId(this.settings.Model),
-            SubagentModelId = this.settings.ApiModelId(ClaudeModel.Haiku),
         };
         ApplyApiSettings(agent, this.settings);
         return agent;
@@ -442,6 +476,8 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         agent.HooksEnabled = settings.RunHooks;
         agent.SpendLimitUsd = settings.SpendLimitUsd;
         agent.CompactAtTokens = settings.CompactAtTokens;
+        agent.SubagentModel = settings.SubagentModel ?? AgentSettings.DefaultApiSubagentModel;
+        agent.SubagentModelId = settings.ApiModelId(agent.SubagentModel);
     }
 
     /// <param name="prompt">The prompt being answered; a restore point is taken around it so its changes can be undone. Null for commands.</param>
@@ -455,6 +491,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.promptHasCost = false;
         string outcome = "Claude has finished";
         bool failed = false;
+        bool keyRejected = false;
         using var cts = new CancellationTokenSource();
         this.runCts = cts;
         try
@@ -475,7 +512,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         catch (AnthropicUnauthorizedException)
         {
             this.Messages.Add(new ChatEntry(ChatEntryKind.Error, "API key rejected", "Open settings and enter a valid Anthropic API key."));
-            this.DisposeEngine();
+            keyRejected = true; // the engine goes once the chat is saved; disposing it now would skip the save
             outcome = "Claude stopped with an error";
         }
         catch (Exception ex)
@@ -507,16 +544,22 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             this.liveUsageEntry = null;
             this.currentAssistant = null;
             this.currentThinking = null;
-            this.runCts = null;
             this.HasPendingApproval = false;
 
+            // Formatting and listing the changes can take a while in a big repository, so Stop still works meanwhile: it
+            // leaves the files as they are, without the list (the prompt can still be undone).
+            using var finishing = new CancellationTokenSource();
+            this.runCts = finishing;
             if (prompt?.SnapshotBefore != null)
             {
                 try
                 {
-                    await this.FormatChangedFilesAsync(runEngine, usageEntry); // before the snapshot, so the diff shows the files as they were left
-                    prompt.SnapshotAfter = await WorkingTreeSnapshot.CaptureAsync(runEngine.RepoRoot, CancellationToken.None);
-                    await this.ShowChangedFilesAsync(runEngine.RepoRoot, prompt, usageEntry);
+                    await this.FormatChangedFilesAsync(runEngine, usageEntry, finishing.Token); // before the snapshot, so the diff shows the files as they were left
+                    prompt.SnapshotAfter = await WorkingTreeSnapshot.CaptureAsync(runEngine.RepoRoot, finishing.Token);
+                    await this.ShowChangedFilesAsync(runEngine.RepoRoot, prompt, usageEntry, finishing.Token);
+                }
+                catch (OperationCanceledException)
+                {
                 }
                 catch (Exception ex)
                 {
@@ -525,12 +568,17 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
                 }
             }
 
+            this.runCts = null;
             if (ReferenceEquals(this.engine, runEngine))
             {
                 this.SaveChat(); // skipped if the chat was replaced or reset while this prompt was stopping
+                if (keyRejected)
+                {
+                    this.DisposeEngine(); // a new key needs a new client
+                }
             }
 
-            this.IsBusy = false;
+            this.IsBusy = false; // also carries out a new chat, deletion or engine change asked for while this ran
             if (runEngine.Kind == ChatEngineKind.ClaudeCode)
             {
                 lastRunEndedUtc = DateTime.UtcNow;
@@ -546,7 +594,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         }
 
         // Claude Code stops at the 5-hour limit; if there's weekly limit left, offer to carry on at lower priority.
-        if (failed && runEngine.Kind == ChatEngineKind.ClaudeCode)
+        if (failed && runEngine.Kind == ChatEngineKind.ClaudeCode && ReferenceEquals(this.engine, runEngine))
         {
             await this.OfferLowPriorityAsync();
         }
@@ -583,7 +631,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     /// Formats the lines Claude wrote in the files it changed (see <see cref="ChangeFormatter"/>) and says so in the
     /// transcript. Never fails the run: if formatting can't be done the files stay as Claude left them.
     /// </summary>
-    private async Task FormatChangedFilesAsync(IChatEngine runEngine, ChatEntry? usageEntry)
+    private async Task FormatChangedFilesAsync(IChatEngine runEngine, ChatEntry? usageEntry, CancellationToken cancellationToken)
     {
         if (!this.settings.FormatChangedFiles || runEngine.Mode == AgentMode.Plan || this.runChanges.Count == 0 || CodeIntelligenceHost.Current is not ICodeIntelligence code)
         {
@@ -594,7 +642,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         try
         {
             this.Status = "Formatting the changed code…";
-            IReadOnlyList<string> formatted = await ChangeFormatter.FormatAsync(this.runChanges.ToList(), runEngine.RepoRoot, code, OpenDocuments.HasUnsavedChanges, CancellationToken.None);
+            IReadOnlyList<string> formatted = await ChangeFormatter.FormatAsync(this.runChanges.ToList(), runEngine.RepoRoot, code, OpenDocuments.HasUnsavedChanges, cancellationToken);
             if (formatted.Count == 0)
             {
                 return;

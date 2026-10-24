@@ -482,6 +482,21 @@ internal sealed class McpClient : IDisposable
                 this.initialized = true;
             }
 
+            // On .NET Framework neither the token nor HttpClient's timeout covers reading the body, so a server that goes
+            // quiet mid-stream would hang the chat; disposing the response ends the read.
+            using CancellationTokenRegistration stop = cancellationToken.Register(response.Dispose);
+            try
+            {
+                return await ReadReplyAsync(response, id, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when ((ex is IOException or ObjectDisposedException or HttpRequestException) && cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+        }
+
+        private static async Task<JsonNode> ReadReplyAsync(HttpResponseMessage response, long id, CancellationToken cancellationToken)
+        {
             string mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
             if (mediaType.Equals("text/event-stream", StringComparison.OrdinalIgnoreCase))
             {

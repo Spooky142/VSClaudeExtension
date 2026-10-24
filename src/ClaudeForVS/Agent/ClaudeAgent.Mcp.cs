@@ -64,7 +64,7 @@ internal sealed partial class ClaudeAgent
         if (toStart.Count > 0)
         {
             sink.SetStatus(toStart.Count == 1 ? $"Starting the MCP server {toStart[0].Name}…" : $"Starting {toStart.Count} MCP servers…");
-            var started = await Task.WhenAll(toStart.Select(async server =>
+            var starting = toStart.Select(async server =>
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeout.CancelAfter(McpStartTimeout);
@@ -78,7 +78,25 @@ internal sealed partial class ClaudeAgent
                     string error = ex is OperationCanceledException ? $"It didn't answer within {McpStartTimeout.TotalSeconds:0} seconds." : ex.Message;
                     return (Server: server, Client: (McpClient?)null, Error: error);
                 }
-            }));
+            }).ToList();
+
+            try
+            {
+                await Task.WhenAll(starting);
+            }
+            catch
+            {
+                // Stopped while servers were starting: the ones that did start aren't in mcpClients yet, so nothing else
+                // would ever close them.
+                foreach (var task in starting.Where(t => t.Status == TaskStatus.RanToCompletion))
+                {
+                    (await task).Client?.Dispose();
+                }
+
+                throw;
+            }
+
+            var started = await Task.WhenAll(starting);
 
             var connected = new List<string>();
             foreach ((McpServerConfig server, McpClient? mcp, string? error) in started)

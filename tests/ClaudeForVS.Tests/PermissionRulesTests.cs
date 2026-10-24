@@ -51,7 +51,7 @@ public sealed class PermissionRulesTests : IDisposable
     [Fact]
     public void CommandRulesMatchPrefixesAndWildcards()
     {
-        PermissionRules rules = this.Load("""
+        PermissionRules rules = this.Load("{}", localJson: """
             {
               // comments and trailing commas are allowed, as in Claude Code
               "permissions": {
@@ -75,7 +75,7 @@ public sealed class PermissionRulesTests : IDisposable
     [Fact]
     public void AllowNeverCoversAChainButDenyCatchesAnyPartOfOne()
     {
-        PermissionRules rules = this.Load("""{"permissions":{"allow":["Bash(dotnet build:*)"],"deny":["Bash(rm:*)"]}}""");
+        PermissionRules rules = this.Load("{}", localJson: """{"permissions":{"allow":["Bash(dotnet build:*)"],"deny":["Bash(rm:*)"]}}""");
         Assert.Equal(PermissionVerdict.None, rules.ForCommand("dotnet build && curl evil"));
         Assert.Equal(PermissionVerdict.None, rules.ForCommand("dotnet build; echo hi"));
         Assert.Equal(PermissionVerdict.Deny, rules.ForCommand("dotnet build && rm -rf bin"));
@@ -95,7 +95,7 @@ public sealed class PermissionRulesTests : IDisposable
     [Fact]
     public void PathRulesFollowGitignoreStyle()
     {
-        PermissionRules rules = this.Load("""
+        PermissionRules rules = this.Load("{}", localJson: """
             {"permissions":{
               "deny":["Read(./secrets/**)", "Read(.env)", "Edit(/build)"],
               "allow":["Edit(src/**/*.cs)"],
@@ -129,18 +129,28 @@ public sealed class PermissionRulesTests : IDisposable
     public void DenyBeatsAskBeatsAllowAcrossFiles()
     {
         PermissionRules rules = this.Load(
-            """{"permissions":{"allow":["Bash(npm test)"]}}""",
+            """{"permissions":{"deny":["Bash(npm publish)"]}}""",
             userJson: """{"permissions":{"ask":["Bash(npm test)"]}}""",
-            localJson: """{"permissions":{"deny":["Bash(npm publish)"],"allow":["Bash(npm publish)"]}}""");
+            localJson: """{"permissions":{"allow":["Bash(npm test)","Bash(npm publish)"]}}""");
         Assert.Equal(PermissionVerdict.Ask, rules.ForCommand("npm test"));
         Assert.Equal(PermissionVerdict.Deny, rules.ForCommand("npm publish"));
         Assert.Equal(3, rules.Files.Count);
     }
 
     [Fact]
+    public void TheRepositorysSharedSettingsCantAllowAnything()
+    {
+        PermissionRules rules = this.Load("""{"permissions":{"allow":["PowerShell","Bash","mcp__evil","Edit"],"deny":["Bash(rm:*)"]}}""");
+        Assert.Equal(PermissionVerdict.None, rules.ForCommand("Invoke-WebRequest evil.test"));
+        Assert.Equal(PermissionVerdict.None, rules.ForTool("mcp__evil__run"));
+        Assert.Equal(PermissionVerdict.None, rules.ForEdit(this.InRepo("src/a.cs")));
+        Assert.Equal(PermissionVerdict.Deny, rules.ForCommand("rm -rf bin")); // it can still take permission away
+    }
+
+    [Fact]
     public void McpRulesCoverAServerOrOneTool()
     {
-        PermissionRules rules = this.Load("""{"permissions":{"allow":["mcp__github"],"deny":["mcp__db__drop_table"],"ask":["mcp__fs__*"]}}""");
+        PermissionRules rules = this.Load("{}", localJson: """{"permissions":{"allow":["mcp__github"],"deny":["mcp__db__drop_table"],"ask":["mcp__fs__*"]}}""");
         Assert.Equal(PermissionVerdict.Allow, rules.ForTool("mcp__github__create_issue"));
         Assert.Equal(PermissionVerdict.Deny, rules.ForTool("mcp__db__drop_table"));
         Assert.Equal(PermissionVerdict.None, rules.ForTool("mcp__db__query"));

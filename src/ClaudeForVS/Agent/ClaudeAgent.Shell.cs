@@ -162,7 +162,7 @@ internal sealed partial class ClaudeAgent
         }
 
         // Values end up in a PowerShell command line, so they're quoted rather than trusted.
-        if (filter.IndexOfAny(['\r', '\n']) >= 0 || configuration.IndexOfAny([' ', '\r', '\n', '\'', '"', ';', '&', '|']) >= 0)
+        if (filter.IndexOfAny(['\r', '\n']) >= 0 || !configuration.All(c => char.IsLetterOrDigit(c) || c is '_' or '.' or '-'))
         {
             throw new ToolInputException("`filter` and `configuration` can't contain line breaks, and `configuration` must be a plain name such as Debug or Release.");
         }
@@ -189,11 +189,11 @@ internal sealed partial class ClaudeAgent
             command = "dotnet test" + (fullTarget.Equals(this.RepoRoot, StringComparison.OrdinalIgnoreCase) ? string.Empty : " " + TestResults.PsQuote(fullTarget))
                 + $" --logger {TestResults.PsQuote("trx;LogFileName=" + TrxName)} --results-directory {TestResults.PsQuote(resultsDirectory)}"
                 + (filter.Length > 0 ? $" --filter {TestResults.PsQuote(filter)}" : string.Empty)
-                + (configuration.Length > 0 ? $" -c {configuration}" : string.Empty)
+                + (configuration.Length > 0 ? $" -c {TestResults.PsQuote(configuration)}" : string.Empty)
                 + (noBuild ? " --no-build" : string.Empty);
         }
 
-        string title = $"Run tests: {label}{(filter.Length > 0 ? $" ({filter})" : string.Empty)}";
+        string title = $"Run tests: {label}{(configuration.Length > 0 ? $" · {configuration}" : string.Empty)}{(filter.Length > 0 ? $" ({filter})" : string.Empty)}";
         PermissionVerdict verdict = this.permissions.ForCommand(command);
         if (verdict == PermissionVerdict.Deny)
         {

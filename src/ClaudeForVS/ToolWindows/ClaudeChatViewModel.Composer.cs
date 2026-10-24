@@ -193,7 +193,6 @@ internal sealed partial class ClaudeChatViewModel
                 "/review-staged" => SlashCommands.ReviewStagedPrompt(command.Argument),
                 "/review-branch" => SlashCommands.ReviewBranchPrompt(command.Argument),
                 "/conflicts" => SlashCommands.ConflictsPrompt,
-                "/fix-build" => SlashCommands.FixBuildPrompt,
                 "/commit-message" => SlashCommands.CommitMessagePrompt,
                 "/pr-message" => SlashCommands.PrMessagePrompt,
                 "/pulled" => SlashCommands.PulledPrompt,

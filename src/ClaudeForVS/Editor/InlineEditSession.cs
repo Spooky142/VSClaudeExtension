@@ -54,6 +54,9 @@ internal sealed class InlineEditSession
     private readonly StackPanel buttons;
     private ITextSnapshot? appliedSnapshot;
 
+    // True while Claude is working on the edit; afterwards the marker only shows the result or an error.
+    private bool working = true;
+
     private InlineEditSession(IWpfTextView view, ITrackingSpan span)
     {
         this.view = view;
@@ -89,12 +92,12 @@ internal sealed class InlineEditSession
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         if (Current(view) is InlineEditSession running)
         {
-            if (running.appliedSnapshot is null)
+            if (running.working)
             {
                 return; // still waiting for Claude; one at a time
             }
 
-            running.Finish(); // a new edit keeps the last one
+            running.Finish(); // a new edit keeps the last one, or closes the last one's message
         }
 
         (int startLine, int endLine) = await ChooseLinesAsync(view);
@@ -124,21 +127,30 @@ internal sealed class InlineEditSession
         }
         catch (OperationCanceledException) when (session.cancel.IsCancellationRequested)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            session.working = false;
             session.Finish();
             return;
         }
         catch (OperationCanceledException)
         {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            session.working = false;
             session.Show("Claude took too long, so nothing was changed.", ("Close", session.Finish));
             return;
         }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.Net.Http.HttpRequestException or Anthropic.Exceptions.AnthropicException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // Anything else (Claude Code missing, a network or API error) is shown; otherwise the session would stay
+            // "editing" and block Alt+/ in this editor.
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            session.working = false;
             session.Show("Claude couldn't edit this: " + OneLine(ex.Message), ("Close", session.Finish));
             return;
         }
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        session.working = false;
         session.Apply(code);
     }
 

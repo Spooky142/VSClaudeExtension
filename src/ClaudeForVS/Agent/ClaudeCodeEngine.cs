@@ -58,10 +58,10 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
 
     // One Claude Code process answers every message in the chat, reading them from stdin, so each message doesn't
     // pay for starting it and reconnecting the approval server. It's replaced when something on its command line
-    // changes (mode, effort, MCP servers turned off, lower priority), after a rewind, or after it was stopped.
+    // changes (mode, effort, subagent model, MCP servers turned off, lower priority), after a rewind, or after it was stopped.
     private Process? process;
     private Task<string>? processStderr;
-    private (AgentMode Mode, EffortLevel Effort, string DisabledMcp, bool LowPriority) processSettings;
+    private (AgentMode Mode, EffortLevel Effort, ClaudeModel? SubagentModel, string DisabledMcp, bool LowPriority) processSettings;
     private bool restartNeeded;
 
     // Its output is read between messages too (see DrainIdleOutputAsync). The read in progress then is handed to the
@@ -102,6 +102,9 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     public EffortLevel Effort { get; set; }
 
     public AgentMode Mode { get; set; }
+
+    /// <summary>The model Claude Code's subagents run on; null leaves it to Claude Code. Used from the next message on.</summary>
+    public ClaudeModel? SubagentModel { get; set; }
 
     /// <summary>The model ID Claude Code reported running for <see cref="Model"/>'s alias, e.g. "claude-opus-5-5"; null before it starts.</summary>
     public string? ResolvedModelId { get; private set; }

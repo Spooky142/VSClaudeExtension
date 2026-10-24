@@ -77,10 +77,12 @@ internal sealed class PermissionRules
                 continue;
             }
 
+            // A cloned repository could otherwise allow itself anything, so its shared settings can only take permission away.
+            bool shared = IsSharedRepoSettings(path, repoRoot);
             int before = rules.Count;
             foreach ((string name, PermissionVerdict verdict) in new[] { ("allow", PermissionVerdict.Allow), ("ask", PermissionVerdict.Ask), ("deny", PermissionVerdict.Deny) })
             {
-                if (permissions.TryGetProperty(name, out JsonElement list) && list.ValueKind == JsonValueKind.Array)
+                if (!(shared && verdict == PermissionVerdict.Allow) && permissions.TryGetProperty(name, out JsonElement list) && list.ValueKind == JsonValueKind.Array)
                 {
                     foreach (JsonElement item in list.EnumerateArray())
                     {
@@ -108,6 +110,14 @@ internal sealed class PermissionRules
         Path.Combine(repoRoot, ".claude", "settings.json"),
         Path.Combine(repoRoot, ".claude", "settings.local.json"),
     ];
+
+    /// <summary>
+    /// True for the repository's committed .claude/settings.json, which comes with whatever was cloned. Unlike the user's
+    /// own settings and settings.local.json (where Claude Code saves the user's "don't ask again" answers), nothing it
+    /// says may grant permission: allow rules and MCP server approvals in it are ignored.
+    /// </summary>
+    public static bool IsSharedRepoSettings(string path, string repoRoot) =>
+        string.Equals(Path.GetFullPath(path), Path.GetFullPath(Path.Combine(repoRoot, ".claude", "settings.json")), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>A shell command line (run_command, or a git command written as "git …").</summary>
     public PermissionVerdict ForCommand(string command)

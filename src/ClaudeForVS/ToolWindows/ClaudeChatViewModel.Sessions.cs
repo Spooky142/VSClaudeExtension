@@ -312,7 +312,7 @@ internal sealed partial class ClaudeChatViewModel
         if (info.Engine != this.settings.Engine)
         {
             AgentSettings switched = this.settings with { Engine = info.Engine };
-            switched.Save();
+            switched.SaveChangesFrom(this.settings);
             this.Settings = switched;
             status += info.Engine == ChatEngineKind.ClaudeCode ? " Switched to Claude Code to continue it." : " Switched to the Claude API to continue it.";
         }
@@ -347,59 +347,101 @@ internal sealed partial class ClaudeChatViewModel
         }
     }
 
-    public void DeleteSession(SessionItem item)
-    {
-        SessionStore.Delete(item.Info.Id);
-        if (item.Info.Id == this.chatId)
-        {
-            this.NewChat();
-            this.ShowHistory = true;
-        }
-
-        this.RefreshSessions();
-    }
+    public void DeleteSession(SessionItem item) => this.DeleteChats([item]);
 
     /// <summary>True while a search or the repository filter is hiding some chats.</summary>
     public bool IsSessionListFiltered => this.sessionSearch.Trim().Length > 0 || this.thisRepoOnly;
 
     /// <summary>Deletes every unpinned chat the History tab is showing (all of them, unless it's filtered).</summary>
-    public void DeleteShownSessions()
+    public void DeleteShownSessions() => this.DeleteChats(this.Sessions.Where(s => !s.IsPinned).ToList());
+
+    /// <summary>
+    /// Deletes chats. A chat open in a window (this one or another) is deleted by that window once its reply, if any,
+    /// has stopped, and the window starts afresh; otherwise its next save would bring the chat back.
+    /// </summary>
+    private void DeleteChats(IReadOnlyList<SessionItem> items)
     {
-        bool deletedCurrent = false;
-        foreach (SessionItem item in this.Sessions.Where(s => !s.IsPinned).ToList())
+        foreach (IGrouping<ClaudeChatViewModel, SessionItem> group in items.GroupBy(i => OwnerOf(i.Info.Id) ?? this))
         {
-            SessionStore.Delete(item.Info.Id);
-            deletedCurrent |= item.Info.Id == this.chatId;
+            ClaudeChatViewModel owner = group.Key;
+            List<string> ids = group.Select(i => i.Info.Id).ToList();
+            void Delete()
+            {
+                foreach (string id in ids)
+                {
+                    SessionStore.Delete(id);
+                }
+
+                if (owner.chatId != null && ids.Contains(owner.chatId))
+                {
+                    owner.ResetChat();
+                    if (owner == this)
+                    {
+                        owner.ShowHistory = true;
+                    }
+                    else
+                    {
+                        owner.Status = "This chat was deleted in another Claude window.";
+                    }
+                }
+
+                RefreshSessionLists(this);
+            }
+
+            // Only a reply in the deleted chat needs stopping.
+            if (owner.chatId != null && ids.Contains(owner.chatId))
+            {
+                owner.WhenIdle(Delete);
+            }
+            else
+            {
+                Delete();
+            }
+        }
+    }
+
+    /// <summary>The window that has this chat open, if any (this one included).</summary>
+    private static ClaudeChatViewModel? OwnerOf(string id) => Instances.FirstOrDefault(c => c.chatId == id);
+
+    /// <summary>Refreshes the History list in this window, and in any other window showing it.</summary>
+    private static void RefreshSessionLists(ClaudeChatViewModel current)
+    {
+        foreach (ClaudeChatViewModel chat in Instances.Where(c => c == current || c.ShowHistory))
+        {
+            chat.RefreshSessions();
+        }
+    }
+
+    /// <summary>
+    /// Changes a chat's summary from the History tab. If a window has the chat open, its own summary is used (the list's
+    /// can be out of date, e.g. its Claude Code session) and it learns the change, since it saves the summary again.
+    /// </summary>
+    private void ChangeInfo(SessionItem item, Func<SessionInfo, SessionInfo> change, Action<ClaudeChatViewModel> tellOwner, string failure)
+    {
+        ClaudeChatViewModel? owner = OwnerOf(item.Info.Id);
+        SessionInfo info = owner?.CurrentInfo() is SessionInfo current ? current with { Updated = item.Info.Updated } : item.Info;
+        try
+        {
+            SessionStore.SaveInfo(change(info));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            this.Status = failure + ex.Message;
+            return;
         }
 
-        if (deletedCurrent)
+        if (owner != null)
         {
-            this.NewChat();
-            this.ShowHistory = true;
+            tellOwner(owner);
         }
 
-        this.RefreshSessions();
+        RefreshSessionLists(this);
     }
 
     public void TogglePin(SessionItem item)
     {
         bool pinned = !item.IsPinned;
-        try
-        {
-            SessionStore.SaveInfo(item.Info with { Pinned = pinned });
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            this.Status = "Couldn't pin this chat: " + ex.Message;
-            return;
-        }
-
-        if (item.Info.Id == this.chatId)
-        {
-            this.chatPinned = pinned;
-        }
-
-        this.RefreshSessions();
+        this.ChangeInfo(item, info => info with { Pinned = pinned }, owner => owner.chatPinned = pinned, "Couldn't pin this chat: ");
     }
 
     public void StartRename(SessionItem item)
@@ -422,22 +464,7 @@ internal sealed partial class ClaudeChatViewModel
             return;
         }
 
-        try
-        {
-            SessionStore.SaveInfo(item.Info with { Title = title });
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            this.Status = "Couldn't rename this chat: " + ex.Message;
-            return;
-        }
-
-        if (item.Info.Id == this.chatId)
-        {
-            this.chatTitle = title;
-        }
-
-        this.RefreshSessions();
+        this.ChangeInfo(item, info => info with { Title = title }, owner => owner.chatTitle = title, "Couldn't rename this chat: ");
     }
 
     /// <summary>Saves a chat from the History tab as Markdown.</summary>
