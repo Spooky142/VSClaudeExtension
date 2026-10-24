@@ -44,6 +44,7 @@ public sealed class ClaudeCodeStreamTests : IDisposable
     {
         this.Feed("""{"type":"system","subtype":"init","session_id":"abc-123","tools":["Bash","Read"],"model":"claude-opus-5-5"}""");
         Assert.Equal("abc-123", this.engine.SessionId);
+        Assert.Equal("claude-opus-5-5", this.engine.ResolvedModelId); // what the "opus" alias resolved to
         Assert.Null(this.engine.Checkpoint); // the session exists, but no message in it is known yet
 
         this.Feed("""{"type":"assistant","uuid":"msg-1","message":{"content":[{"type":"text","text":"Hi"}]}}""");

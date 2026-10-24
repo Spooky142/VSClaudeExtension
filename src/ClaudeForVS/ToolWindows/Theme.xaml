@@ -43,6 +43,24 @@
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
+  <!-- One line of tool output or diff (DataContext is a DiffLine). -->
+  <DataTemplate x:Key="DiffLineTemplate">
+    <Border x:Name="Bg" Padding="8,0">
+      <TextBlock x:Name="LineText" Text="{Binding Text}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" TextWrapping="Wrap" />
+    </Border>
+    <DataTemplate.Triggers>
+      <DataTrigger Binding="{Binding Kind}" Value="Added">
+        <Setter TargetName="Bg" Property="Background" Value="{StaticResource AddedTint}" />
+      </DataTrigger>
+      <DataTrigger Binding="{Binding Kind}" Value="Removed">
+        <Setter TargetName="Bg" Property="Background" Value="{StaticResource RemovedTint}" />
+      </DataTrigger>
+      <DataTrigger Binding="{Binding Kind}" Value="Hunk">
+        <Setter TargetName="LineText" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
+      </DataTrigger>
+    </DataTemplate.Triggers>
+  </DataTemplate>
+
   <!-- Flat square icon button (header actions). -->
   <Style x:Key="IconButton" TargetType="Button">
     <Setter Property="FontFamily" Value="{StaticResource IconFont}" />

@@ -21,6 +21,7 @@ namespace ClaudeForVS;
 [Guid(PackageGuidString)]
 [ProvideMenuResource("Menus.ctmenu", 1)]
 [ProvideToolWindow(typeof(ClaudeToolWindow), Style = VsDockStyle.Float, Width = 560, Height = 760, MultiInstances = true)] // floating windows; can still be docked by dragging
+[ProvideToolWindow(typeof(ClaudeTasksWindow), Style = VsDockStyle.Float, Width = 720, Height = 480, MultiInstances = true)]
 [ProvideBindingPath]
 [ProvideOptionPage(typeof(OptionsPage), "Claude", "General", 0, 0, true)]
 public sealed class ClaudePackage : AsyncPackage
@@ -217,6 +218,23 @@ public sealed class ClaudePackage : AsyncPackage
         ClaudeChatControl? chat = await this.OpenChatWindowAsync();
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
         chat?.OpenBranch(info, prompt);
+    }
+
+    /// <summary>
+    /// Shows the Claude Tasks window of <paramref name="chat"/> (it has the chat window's instance number), with the
+    /// requested task selected. Unless asked to, it doesn't take focus, so it can open while the user is typing.
+    /// </summary>
+    internal void ShowTasksWindow(ClaudeChatControl chat, TasksWindowRequest request)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.FindToolWindow(typeof(ClaudeTasksWindow), chat.Pane.InstanceNumber, create: true) is not ClaudeTasksWindow { Frame: IVsWindowFrame frame } window)
+        {
+            return;
+        }
+
+        window.Bind(chat);
+        window.Tasks.Select(request.Task);
+        _ = request.Activate ? frame.Show() : frame.ShowNoActivate();
     }
 
     /// <summary>Opens a chat window (see <see cref="OpenNewChatWindowAsync"/>) and returns its chat, or null if there are too many.</summary>

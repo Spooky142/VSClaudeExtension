@@ -484,8 +484,8 @@ internal sealed partial class ClaudeChatViewModel
         long window = AgentSettings.ContextWindow;
         var sb = new System.Text.StringBuilder("**Context**\n\n");
         sb.Append(this.contextTokens > 0
-            ? $"- {FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens ({100.0 * this.contextTokens / window:0}%) · {AgentSettings.ModelName(model)}\n"
-            : $"- {FormatTokens(window)} token window ({AgentSettings.ModelName(model)}). How much is used is known after Claude's next reply.\n");
+            ? $"- {FormatTokens(this.contextTokens)} of {FormatTokens(window)} tokens ({100.0 * this.contextTokens / window:0}%) · {this.settings.NameOf(model)}\n"
+            : $"- {FormatTokens(window)} token window ({this.settings.NameOf(model)}). How much is used is known after Claude's next reply.\n");
         sb.Append($"- {this.Messages.Count(m => m.Kind == ChatEntryKind.User)} of your messages and {this.Messages.Count(m => m.Kind == ChatEntryKind.Assistant && !m.IsLocalReply)} replies in this chat\n");
 
         bool api = (this.engine?.Kind ?? this.settings.Engine) == ChatEngineKind.Api;

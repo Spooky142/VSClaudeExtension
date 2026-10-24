@@ -28,8 +28,8 @@ internal sealed partial class ClaudeAgent : IChatEngine
     private const int DefaultCommandSeconds = 300;
     private const int MaxCommandSeconds = 1800;
 
-    // A running command's row shows this many of its latest output lines, refreshed this often.
-    private const int LiveOutputLines = 40;
+    // A running command's live view (in the Claude Tasks window) shows this many of its latest output lines, refreshed this often.
+    private const int LiveOutputLines = 200;
     private static readonly TimeSpan LiveOutputInterval = TimeSpan.FromMilliseconds(250);
 
     // Web searches and fetches allowed per response; each search is billed on top of tokens.
@@ -95,6 +95,7 @@ internal sealed partial class ClaudeAgent : IChatEngine
 
         this.RepoRoot = repoRoot;
         this.Model = model;
+        this.ModelId = AgentSettings.ModelId(model);
         this.Effort = effort;
         this.Mode = mode;
         this.files = new RepoFiles(repoRoot);
@@ -173,6 +174,9 @@ internal sealed partial class ClaudeAgent : IChatEngine
 
     /// <summary>Fixed for the conversation: thinking blocks in the history only make sense to the model that wrote them.</summary>
     public ClaudeModel Model { get; }
+
+    /// <summary>The API model ID sent for <see cref="Model"/>; the built-in version unless set to a newer one.</summary>
+    public string ModelId { get; init; }
 
     /// <summary>Can change between turns; takes effect on the next request.</summary>
     public EffortLevel Effort { get; set; }

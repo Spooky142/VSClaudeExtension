@@ -16,7 +16,7 @@ internal static class ChatExporter
         var md = new StringBuilder();
         md.Append("# ").Append(info.Title.Length > 0 ? info.Title : "Claude chat").Append("\n\n");
         string via = info.Engine == ChatEngineKind.ClaudeCode ? " via Claude Code" : string.Empty;
-        md.Append($"_{Path.GetFileName(info.RepoPath.TrimEnd('\\', '/'))} · {AgentSettings.ModelName(info.Model)}{via} · {info.Created.LocalDateTime:d MMM yyyy HH:mm}_\n\n");
+        md.Append($"_{Path.GetFileName(info.RepoPath.TrimEnd('\\', '/'))} · {AgentSettings.ModelName(info.Model, info.Engine)}{via} · {info.Created.LocalDateTime:d MMM yyyy HH:mm}_\n\n");
 
         foreach (SavedEntry entry in entries)
         {

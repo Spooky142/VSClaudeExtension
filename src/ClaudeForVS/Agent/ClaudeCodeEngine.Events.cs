@@ -31,6 +31,11 @@ internal sealed partial class ClaudeCodeEngine
                 {
                     case "init":
                         this.SessionId = Str(ev, "session_id") ?? this.SessionId;
+                        if (isTopLevel)
+                        {
+                            this.ResolvedModelId = Str(ev, "model") ?? this.ResolvedModelId;
+                        }
+
                         chatSink.SetStatus("Claude Code is working…");
                         break;
                     case "compact_boundary" when isTopLevel:

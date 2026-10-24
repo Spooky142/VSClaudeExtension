@@ -88,10 +88,14 @@ internal interface IChatSink
 
     /// <summary>
     /// Shows a tool call while it runs, e.g. a command and its output so far, with a button that stops just this
-    /// call. Disposing it removes the row; the finished call is then reported with <see cref="ToolActivity"/>.
+    /// call: a one-line row in the chat, and its output in the Claude Tasks window. Disposing it removes the row and
+    /// marks the task finished; the finished call is then reported with <see cref="ToolActivity"/> (same title).
     /// </summary>
     /// <param name="stop">Called on the UI thread when the user stops it; null if it can't be stopped on its own.</param>
-    /// <param name="expanded">True to show its output from the start, e.g. a subagent's steps, rather than on a click.</param>
+    /// <param name="expanded">
+    /// True to open the Claude Tasks window as soon as it starts, e.g. for a subagent; otherwise the window opens only if
+    /// the call is still running after a few seconds.
+    /// </param>
     ILiveActivity StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded = false);
 
     void SetStatus(string? status);

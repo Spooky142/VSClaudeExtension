@@ -53,6 +53,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
         this.Attachments.CollectionChanged += (_, _) => this.OnPropertyChanged(nameof(this.HasAttachments));
         this.RefreshUsage();
+        this.RefreshBanners();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -151,12 +152,13 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             this.OnPropertyChanged(nameof(this.RepoTooltip));
             this.UpdateSetupMessage();
             this.RefreshUsage(); // the strip shows different meters per engine
+            this.RefreshBanners();
         }
     }
 
     /// <summary>Header chip text, e.g. "Opus 5.5 · High · Coding" or "Opus 5.5 · High · Coding · Claude Code".</summary>
     public string ModelSummary =>
-        $"{AgentSettings.ModelName(this.settings.Model)} · {AgentSettings.EffortName(this.settings.Effort)} · {AgentSettings.ModeName(this.settings.Mode)}"
+        $"{this.settings.NameOf(this.settings.Model)} ·{AgentSettings.EffortName(this.settings.Effort)} · {AgentSettings.ModeName(this.settings.Mode)}"
         + (this.settings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty);
 
     /// <summary>Last known Claude Code install/sign-in state, or null before the first check.</summary>
@@ -267,7 +269,9 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     public void ApplySettings(AgentSettings newSettings, string repoPath, string? newApiKey)
     {
         bool engineChanged = newSettings.Engine != this.settings.Engine;
-        bool modelChanged = newSettings.Model != this.settings.Model;
+        bool modelChanged = newSettings.Model != this.settings.Model
+            || (newSettings.UseNewestApiModels != this.settings.UseNewestApiModels
+                && newSettings.ApiModelId(newSettings.Model) != this.settings.ApiModelId(this.settings.Model));
         newSettings.Save();
         this.Settings = newSettings;
         this.RepoPath = repoPath;
@@ -293,7 +297,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             if (hadHistory)
             {
                 string via = newSettings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty;
-                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {AgentSettings.ModelName(newSettings.Model)}{via}"));
+                this.Messages.Add(new ChatEntry(ChatEntryKind.Notice, $"New chat · {newSettings.NameOf(newSettings.Model)}{via}"));
             }
         }
         else
@@ -422,7 +426,10 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             return null;
         }
 
-        var agent = new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode);
+        var agent = new ClaudeAgent(apiKey, root, this.settings.Model, this.settings.Effort, this.settings.Mode)
+        {
+            ModelId = this.settings.ApiModelId(this.settings.Model),
+        };
         ApplyApiSettings(agent, this.settings);
         return agent;
     }
@@ -522,6 +529,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             if (runEngine.Kind == ChatEngineKind.ClaudeCode)
             {
                 lastRunEndedUtc = DateTime.UtcNow;
+                ObserveModel(runEngine);
             }
 
             if (this.Status.StartsWith("Waiting", StringComparison.Ordinal) || this.Status.StartsWith("Running", StringComparison.Ordinal))
@@ -613,26 +621,10 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.currentAssistant = null;
         this.currentThinking = null;
         this.Messages.Add(new ChatEntry(ChatEntryKind.Tool, title, detail: Truncate(detail), activity: kind, change: change));
+        this.ReportToolTaskResult(kind, title, detail);
     }
 
     void IChatSink.SetStatus(string? status) => this.Status = status ?? string.Empty;
-
-    ILiveActivity IChatSink.StartLiveActivity(ActivityKind kind, string title, Action? stop, bool expanded)
-    {
-        this.currentAssistant = null;
-        this.currentThinking = null;
-        var entry = new ChatEntry(ChatEntryKind.Tool, title, activity: kind) { StopAction = stop, StartsExpanded = expanded };
-        this.Messages.Add(entry);
-        return new LiveActivity(this.Messages, entry);
-    }
-
-    /// <summary>A tool call's row while it runs; removed when it finishes, as the finished call gets its own row.</summary>
-    private sealed class LiveActivity(ObservableCollection<ChatEntry> messages, ChatEntry entry) : ILiveActivity
-    {
-        public void SetOutput(string output) => entry.SetDetail(Truncate(output));
-
-        public void Dispose() => messages.Remove(entry);
-    }
 
     private static string Truncate(string detail)
         => detail.Length > MaxDetailChars ? detail.Substring(0, MaxDetailChars) + "\n…" : detail;

@@ -98,6 +98,9 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
 
     public AgentMode Mode { get; set; }
 
+    /// <summary>The model ID Claude Code reported running for <see cref="Model"/>'s alias, e.g. "claude-opus-5-5"; null before it starts.</summary>
+    public string? ResolvedModelId { get; private set; }
+
     /// <summary>The Claude Code session this conversation runs in; set before the first message to continue an earlier one.</summary>
     public string? SessionId { get; set; }
 

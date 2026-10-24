@@ -314,7 +314,7 @@ internal sealed class SessionItem : System.ComponentModel.INotifyPropertyChanged
     }
 
     public string Subtitle =>
-        $"{Path.GetFileName(this.Info.RepoPath.TrimEnd('\\', '/'))} · {AgentSettings.ModelName(this.Info.Model)}"
+        $"{Path.GetFileName(this.Info.RepoPath.TrimEnd('\\', '/'))} · {AgentSettings.ModelName(this.Info.Model, this.Info.Engine)}"
         + (this.Info.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty)
         + $" · {this.Info.MessageCount} {(this.Info.MessageCount == 1 ? "message" : "messages")}";
 

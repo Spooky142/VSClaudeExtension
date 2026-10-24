@@ -63,6 +63,7 @@ public partial class SettingsDialog : DialogWindow
         this.RepoBox.Text = repoPath;
         this.RunHooksBox.IsChecked = settings.RunHooks;
         this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
+        this.NewestModelsBox.IsChecked = settings.UseNewestApiModels;
         this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.UpdateRepoHint();
         this.UpdateAllowedCommands();
@@ -128,7 +129,9 @@ public partial class SettingsDialog : DialogWindow
             return;
         }
 
-        bool restarts = this.SelectedModel != this.current.Model || this.SelectedEngine != this.current.Engine;
+        bool restarts = this.SelectedModel != this.current.Model || this.SelectedEngine != this.current.Engine
+            || (this.SelectedEngine == ChatEngineKind.Api && (this.NewestModelsBox?.IsChecked == true) != this.current.UseNewestApiModels
+                && ModelCatalog.NewerApiModel(this.SelectedModel) != null);
         this.ModelChangeNote.Visibility = this.hasConversation && restarts ? Visibility.Visible : Visibility.Collapsed;
 
         this.EffortHint.Text = this.SelectedEffort switch
@@ -156,6 +159,7 @@ public partial class SettingsDialog : DialogWindow
         // Per-token prices only apply to the API; Claude Code usage comes out of the plan.
         Visibility prices = code ? Visibility.Collapsed : Visibility.Visible;
         this.OpusPrice.Visibility = this.SonnetPrice.Visibility = this.HaikuPrice.Visibility = prices;
+        this.UpdateModelNames();
 
         ClaudeCodeStatus? status = this.codeStatus;
         bool ready = status is { Installed: true, SignedIn: true };
@@ -173,6 +177,33 @@ public partial class SettingsDialog : DialogWindow
         this.SignInButton.Style = (Style)this.FindResource(status is { SignedIn: true } ? "OutlineButton" : "PrimaryButton");
         this.SignInButton.Margin = new Thickness(0, 0, 6, 0);
         this.InstallButton.IsEnabled = this.SignInButton.IsEnabled = this.RefreshButton.IsEnabled = !this.busy;
+    }
+
+    /// <summary>The model cards show the versions the selected engine would run.</summary>
+    private void UpdateModelNames()
+    {
+        if (this.OpusName is null || this.NewestModelsBox is null || this.NewestModelsHint is null)
+        {
+            return;
+        }
+
+        bool newest = this.NewestModelsBox.IsChecked == true;
+        this.OpusName.Text = AgentSettings.ModelName(ClaudeModel.Opus, this.SelectedEngine, newest);
+        this.SonnetName.Text = AgentSettings.ModelName(ClaudeModel.Sonnet, this.SelectedEngine, newest);
+        this.HaikuName.Text = AgentSettings.ModelName(ClaudeModel.Haiku, this.SelectedEngine, newest);
+
+        IEnumerable<string> newer = new[] { ClaudeModel.Opus, ClaudeModel.Sonnet, ClaudeModel.Haiku }
+            .Select(ModelCatalog.NewerApiModel).OfType<ModelVersion>().Select(m => m.Name);
+        string built = $"This extension was built for {AgentSettings.ModelName(ClaudeModel.Opus, ChatEngineKind.Api)}, {AgentSettings.ModelName(ClaudeModel.Sonnet, ChatEngineKind.Api)} and {AgentSettings.ModelName(ClaudeModel.Haiku, ChatEngineKind.Api)}. ";
+        this.NewestModelsHint.Text = built + (newer.Any()
+            ? $"Newer on the Claude API: {string.Join(", ", newer)}. A new version can work differently; if requests start failing, turn this off. Cost estimates use the prices above."
+            : "When the Claude API lists a newer version, chats use it. Claude Code always uses its newest versions.");
+    }
+
+    private void OnNewestModelsChanged(object sender, RoutedEventArgs e)
+    {
+        this.UpdateModelNames();
+        this.UpdateHints();
     }
 
     private void OnEngineChanged(object sender, RoutedEventArgs e)
@@ -363,6 +394,7 @@ public partial class SettingsDialog : DialogWindow
             PinnedRepoPath = follows ? null : root ?? text,
             RunHooks = this.RunHooksBox.IsChecked == true,
             FormatChangedFiles = this.FormatChangedBox.IsChecked == true,
+            UseNewestApiModels = this.NewestModelsBox.IsChecked == true,
             SpendLimitUsd = double.TryParse(this.SpendLimitBox.Text.Trim().TrimStart('$'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out double limit) && limit > 0 ? limit : 0,
         };
         this.ResultRepoPath = text.Length == 0 ? this.SolutionRepoRoot() ?? string.Empty : root ?? text;

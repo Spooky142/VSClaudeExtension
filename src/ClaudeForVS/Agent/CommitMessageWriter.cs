@@ -116,7 +116,7 @@ internal static class CommitMessageWriter
         using var client = new AnthropicClient { ApiKey = apiKey };
         Message message = await client.Messages.Create(new MessageCreateParams
         {
-            Model = AgentSettings.ModelId(settings.Model),
+            Model = settings.ApiModelId(settings.Model),
             MaxTokens = 2000,
             Messages = [new() { Role = Role.User, Content = prompt }],
         }, cancellationToken).ConfigureAwait(false);
@@ -137,7 +137,7 @@ internal static class CommitMessageWriter
     private static async Task<string> AskClaudeCodeAsync(AgentSettings settings, string repoRoot, string prompt, CancellationToken cancellationToken)
     {
         string exe = ClaudeCodeCli.FindExecutable() ?? throw new InvalidOperationException("Claude Code isn't installed. Install it from Claude's Settings.");
-        var args = new List<string> { "-p", "--output-format", "text", "--max-turns", "1", "--model", AgentSettings.ModelId(settings.Model) };
+        var args = new List<string> { "-p", "--output-format", "text", "--max-turns", "1", "--model", AgentSettings.ClaudeCodeAlias(settings.Model) };
         var psi = new ProcessStartInfo(exe, string.Join(" ", args.Select(GitRunner.QuoteArgument)))
         {
             WorkingDirectory = repoRoot,

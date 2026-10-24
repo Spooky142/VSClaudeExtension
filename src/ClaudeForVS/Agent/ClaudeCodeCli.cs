@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -120,7 +121,105 @@ internal static class ClaudeCodeCli
         psi.EnvironmentVariables.Remove("ANTHROPIC_AUTH_TOKEN");
     }
 
-    private static async Task<(int ExitCode, string Output)> RunAsync(string exe, IReadOnlyList<string> args, CancellationToken cancellationToken)
+    // The npm package's "latest" tag is the newest release; the native installer's `claude update` installs the same versions.
+    private const string LatestVersionUrl = "https://registry.npmjs.org/@anthropic-ai/claude-code/latest";
+
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
+
+    /// <summary>The installed version, e.g. "2.1.296", or null if `claude --version` didn't say.</summary>
+    public static async Task<string?> GetVersionAsync(string exe, CancellationToken cancellationToken)
+    {
+        (int exitCode, string output) = await RunAsync(exe, ["--version"], cancellationToken).ConfigureAwait(false);
+        string version = output.Trim().Split(' ').FirstOrDefault() ?? string.Empty;
+        return exitCode == 0 && version.Length > 0 && char.IsDigit(version[0]) ? version : null;
+    }
+
+    /// <summary>The newest published version, or null if it can't be found out (offline, say).</summary>
+    public static async Task<string?> GetLatestVersionAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using HttpResponseMessage response = await Http.GetAsync(LatestVersionUrl, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("version", out JsonElement v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()
+                : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException && !cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Compares dotted version numbers ("2.1.296" &lt; "2.1.300" &lt; "2.2.0"): positive if <paramref name="a"/> is
+    /// newer. Anything after a part's digits (a "-beta" tag) is ignored.
+    /// </summary>
+    public static int CompareVersions(string a, string b)
+    {
+        static int[] Parts(string version) => version.Trim().Split('.')
+            .Select(p => new string(p.TakeWhile(char.IsDigit).ToArray()))
+            .Select(p => int.TryParse(p, out int n) ? n : 0)
+            .ToArray();
+
+        int[] x = Parts(a), y = Parts(b);
+        for (int i = 0; i < Math.Max(x.Length, y.Length); i++)
+        {
+            int left = i < x.Length ? x[i] : 0, right = i < y.Length ? y[i] : 0;
+            if (left != right)
+            {
+                return left.CompareTo(right);
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// True if the user has turned Claude Code's updates off with DISABLE_AUTOUPDATER, in Visual Studio's environment
+    /// or the "env" section of ~/.claude/settings.json; then updates are offered rather than installed.
+    /// </summary>
+    public static bool AutoUpdateDisabled()
+    {
+        static bool IsSet(string? value) => !string.IsNullOrWhiteSpace(value) && value!.Trim() is not "0" and not "false";
+
+        if (IsSet(Environment.GetEnvironmentVariable("DISABLE_AUTOUPDATER")))
+        {
+            return true;
+        }
+
+        string dir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") is { Length: > 0 } configDir
+            ? configDir
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "settings.json")));
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("env", out JsonElement env) && env.ValueKind == JsonValueKind.Object
+                && env.TryGetProperty("DISABLE_AUTOUPDATER", out JsonElement value)
+                && IsSet(value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Runs `claude update` without a window. Returns its exit code and what it printed.</summary>
+    public static async Task<(int ExitCode, string Output)> UpdateAsync(string exe, CancellationToken cancellationToken)
+    {
+        // It never asks anything, but don't let a stuck download hang the check forever.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(5));
+        return await RunAsync(exe, ["update"], timeout.Token, includeStderr: true).ConfigureAwait(false);
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunAsync(string exe, IReadOnlyList<string> args, CancellationToken cancellationToken, bool includeStderr = false)
     {
         var psi = new ProcessStartInfo(exe, string.Join(" ", args.Select(GitRunner.QuoteArgument)))
         {
@@ -129,19 +228,26 @@ internal static class ClaudeCodeCli
             UseShellExecute = false,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
         RemoveApiKeyVariables(psi);
 
         using var process = Process.Start(psi)!;
         Task<string> output = process.StandardOutput.ReadToEndAsync();
-        _ = process.StandardError.ReadToEndAsync();
+        Task<string> errors = process.StandardError.ReadToEndAsync();
         using (cancellationToken.Register(() => Processes.Kill(process)))
         {
             await WaitForExitAsync(process).ConfigureAwait(false);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return (process.ExitCode, await output.ConfigureAwait(false));
+        string text = await output.ConfigureAwait(false);
+        if (includeStderr && (await errors.ConfigureAwait(false)).Trim() is { Length: > 0 } err)
+        {
+            text = text.TrimEnd() + "\n" + err;
+        }
+
+        return (process.ExitCode, text);
     }
 
     private static Task WaitForExitAsync(Process process)

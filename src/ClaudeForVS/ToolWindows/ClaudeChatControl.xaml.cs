@@ -55,6 +55,7 @@ public partial class ClaudeChatControl : UserControl
         this.viewModel.ChooseExportPath = ChooseExportPath;
         this.viewModel.BranchRequested += (_, branch) =>
             this.package.JoinableTaskFactory.RunAsync(() => this.package.OpenBranchAsync(branch.Info, branch.Prompt)).Task.FileAndForget("ClaudeForVS/Branch");
+        this.viewModel.TasksWindowRequested += (_, request) => this.package.ShowTasksWindow(this, request);
         this.viewModel.ReadOutputWindow = () => this.package.Vs.GetOutputWindowText();
         this.viewModel.ListOpenDocuments = () => this.package.Vs.GetOpenDocuments();
         this.viewModel.CopyText = text =>
@@ -99,13 +100,19 @@ public partial class ClaudeChatControl : UserControl
         package.SolutionOpened += (_, directory) => this.viewModel.OnSolutionOpened(directory);
         OptionsPage.Applied += (_, settings) => this.viewModel.ApplySettings(settings, this.viewModel.RepoPath, null);
 
-        // Keep the usage strip's "resets in" countdowns current, and plan usage fresh while no prompt is running.
+        // Keep the usage strip's "resets in" countdowns current, and plan usage fresh while no prompt is running. The first
+        // tick, shortly after Visual Studio starts, and then one a day check for Claude Code updates and newer models.
         this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
         {
             this.viewModel.RefreshUsage();
             if (this.IsVisible && this.viewModel.PlanUsageDue)
             {
                 this.viewModel.RefreshPlanUsageAsync().FileAndForget("ClaudeForVS/PlanUsage");
+            }
+
+            if (this.viewModel.UpdateCheckDue)
+            {
+                this.viewModel.CheckForUpdatesAsync().FileAndForget("ClaudeForVS/CheckForUpdates");
             }
         }, this.Dispatcher);
 
@@ -165,6 +172,8 @@ public partial class ClaudeChatControl : UserControl
 
     /// <summary>The tool window this chat is in.</summary>
     internal ClaudeToolWindow Pane { get; }
+
+    internal ClaudeChatViewModel ViewModel => this.viewModel;
 
     internal bool IsIdle => this.viewModel.IsIdle;
 
@@ -536,7 +545,17 @@ public partial class ClaudeChatControl : UserControl
         }
     }
 
-    private void OnStopEntry(object sender, RoutedEventArgs e) => ContextOf<ChatEntry>(sender)?.RequestStop();
+    private void OnStopEntry(object sender, RoutedEventArgs e) => ContextOf<ChatEntry>(sender)?.LiveTask?.RequestStop();
+
+    private void OnShowEntryTask(object sender, RoutedEventArgs e)
+    {
+        if (ContextOf<ChatEntry>(sender)?.LiveTask is ToolTask task)
+        {
+            this.viewModel.ShowToolTasks(task, activate: true);
+        }
+    }
+
+    private void OnShowToolTasks(object sender, RoutedEventArgs e) => this.viewModel.ShowToolTasks(null, activate: true);
 
     private void OnOpenChangedFile(object sender, RoutedEventArgs e)
     {
@@ -616,7 +635,7 @@ public partial class ClaudeChatControl : UserControl
         Section("Model");
         foreach (ClaudeModel model in new[] { ClaudeModel.Opus, ClaudeModel.Sonnet, ClaudeModel.Haiku })
         {
-            Item(AgentSettings.ModelName(model), model == current.Model, () => this.viewModel.QuickSet(model: model), model == current.Model ? null : restartNote);
+            Item(current.NameOf(model), model == current.Model, () => this.viewModel.QuickSet(model: model), model == current.Model ? null : restartNote);
         }
 
         Section("Effort");
@@ -639,6 +658,22 @@ public partial class ClaudeChatControl : UserControl
         };
         menu.Items.Add(settings);
         menu.IsOpen = true;
+    }
+
+    private void OnBannerAction(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is NoticeBanner banner)
+        {
+            banner.Run();
+        }
+    }
+
+    private void OnDismissBanner(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is NoticeBanner banner)
+        {
+            this.viewModel.DismissBanner(banner);
+        }
     }
 
     private void OnOpenSettings(object sender, RoutedEventArgs e)

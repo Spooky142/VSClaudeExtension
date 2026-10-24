@@ -50,6 +50,12 @@ public sealed class ClaudeToolWindow : ToolWindowPane
         {
             this.InstanceNumber = n;
             this.Caption = n == 0 ? "Claude" : $"Claude ({n + 1})";
+
+            // Its tasks window may have come back with Visual Studio's layout first.
+            if (this.chat != null && this.Package is ClaudePackage package && package.FindToolWindow(typeof(ClaudeTasksWindow), n, create: false) is ClaudeTasksWindow tasks)
+            {
+                tasks.Bind(this.chat);
+            }
         }
     }
 }

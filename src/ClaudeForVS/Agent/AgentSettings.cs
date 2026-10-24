@@ -88,6 +88,13 @@ internal sealed record AgentSettings
     /// </summary>
     public bool FormatChangedFiles { get; init; } = true;
 
+    /// <summary>
+    /// On the Claude API engine, use the newest version of the chosen model the Models API lists, rather than the one
+    /// this extension was built for. Off by default: a new version can change what requests it accepts. (Claude Code
+    /// always runs the newest version it knows about.)
+    /// </summary>
+    public bool UseNewestApiModels { get; init; }
+
     public static AgentSettings Load()
     {
         try
@@ -106,7 +113,7 @@ internal sealed record AgentSettings
 
     public void Save() => AtomicFile.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, JsonOptions));
 
-    /// <summary>API model ID.</summary>
+    /// <summary>The API model ID this extension was built and tested with.</summary>
     public static string ModelId(ClaudeModel model) => model switch
     {
         ClaudeModel.Sonnet => "claude-sonnet-5-5",
@@ -114,16 +121,33 @@ internal sealed record AgentSettings
         _ => "claude-opus-5-5",
     };
 
+    /// <summary>The model ID the Claude API engine sends: the newest listed version if <see cref="UseNewestApiModels"/> is on.</summary>
+    public string ApiModelId(ClaudeModel model) =>
+        this.UseNewestApiModels && ModelCatalog.NewerApiModel(model) is ModelVersion newer ? newer.Id : ModelId(model);
+
+    /// <summary>Claude Code's alias for the family, which it resolves to the newest version itself.</summary>
+    public static string ClaudeCodeAlias(ClaudeModel model) => model switch
+    {
+        ClaudeModel.Sonnet => "sonnet",
+        ClaudeModel.Haiku => "haiku",
+        _ => "opus",
+    };
+
     /// <summary>Context window in tokens, the same for every model.</summary>
     public const long ContextWindow = 1_000_000;
 
-    /// <summary>Short display name, e.g. "Opus 5.5".</summary>
-    public static string ModelName(ClaudeModel model) => model switch
-    {
-        ClaudeModel.Sonnet => "Sonnet 5.5",
-        ClaudeModel.Haiku => "Haiku 5.5",
-        _ => "Opus 5.5",
-    };
+    /// <summary>
+    /// Short display name of the version an engine runs, e.g. "Opus 5.5": on Claude Code, the one its alias last
+    /// resolved to; on the API, the newest listed one if <paramref name="newestApi"/>, otherwise the built-in one.
+    /// </summary>
+    public static string ModelName(ClaudeModel model, ChatEngineKind engine, bool newestApi = false) =>
+        (engine == ChatEngineKind.ClaudeCode ? ModelCatalog.ClaudeCodeModel(model)
+            : newestApi ? ModelCatalog.NewerApiModel(model)
+            : null)?.Name
+        ?? ModelCatalog.Parse(ModelId(model))!.Name;
+
+    /// <summary>Display name of a model with these settings' engine, e.g. "Opus 5.5".</summary>
+    public string NameOf(ClaudeModel model) => ModelName(model, this.Engine, this.UseNewestApiModels);
 
     public static string EffortName(EffortLevel effort) => effort switch
     {

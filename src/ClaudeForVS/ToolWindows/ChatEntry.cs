@@ -266,25 +266,10 @@ internal sealed class ChatEntry : INotifyPropertyChanged
 
     // ===== Running tool calls only =====
 
-    /// <summary>Stops the tool call this row shows while it runs; null once it can't be stopped.</summary>
-    public Action? StopAction { get; init; }
+    /// <summary>The task this row stands for while it runs; its steps or output are shown in the Claude Tasks window.</summary>
+    public ToolTask? LiveTask { get; init; }
 
-    /// <summary>True to show the detail without a click, e.g. a subagent's steps while it works.</summary>
-    public bool StartsExpanded { get; init; }
-
-    private bool stopRequested;
-
-    public bool CanStop => this.StopAction != null && !this.stopRequested;
-
-    public void RequestStop()
-    {
-        if (this.CanStop)
-        {
-            this.stopRequested = true;
-            this.OnPropertyChanged(nameof(this.CanStop));
-            this.StopAction!();
-        }
-    }
+    public bool IsLive => this.LiveTask != null;
 
     /// <summary>
     /// Adds streamed text. Copying the whole reply out of the buffer (and re-rendering it) for every token gets slow

@@ -93,24 +93,6 @@
       </Setter>
     </Style>
 
-    <!-- One line of tool output or diff. -->
-    <DataTemplate x:Key="DiffLineTemplate">
-      <Border x:Name="Bg" Padding="8,0">
-        <TextBlock x:Name="LineText" Text="{Binding Text}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" TextWrapping="Wrap" />
-      </Border>
-      <DataTemplate.Triggers>
-        <DataTrigger Binding="{Binding Kind}" Value="Added">
-          <Setter TargetName="Bg" Property="Background" Value="{StaticResource AddedTint}" />
-        </DataTrigger>
-        <DataTrigger Binding="{Binding Kind}" Value="Removed">
-          <Setter TargetName="Bg" Property="Background" Value="{StaticResource RemovedTint}" />
-        </DataTrigger>
-        <DataTrigger Binding="{Binding Kind}" Value="Hunk">
-          <Setter TargetName="LineText" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
-        </DataTrigger>
-      </DataTemplate.Triggers>
-    </DataTemplate>
-
     <!-- A line of an edit on the approval card when changes can be kept or left out: a checkbox on each block's first line. -->
     <DataTemplate x:Key="ReviewLineTemplate">
       <Grid>
@@ -247,10 +229,14 @@
                     Click="OnOpenEntryDiff" ToolTip="Open this change in Visual Studio's diff viewer"
                     Visibility="{Binding HasChange, Converter={StaticResource BoolToVis}}" />
             <Button DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Stop" Margin="0,0,4,0" VerticalAlignment="Center"
-                    Click="OnStopEntry" ToolTip="Stop this command; Claude carries on without it"
-                    Visibility="{Binding CanStop, Converter={StaticResource BoolToVis}}" />
-            <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}"
-                          IsChecked="{Binding StartsExpanded, Mode=OneTime}">
+                    Click="OnStopEntry" ToolTip="Stop this; Claude carries on without it"
+                    Visibility="{Binding LiveTask.CanStop, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}" />
+            <Button DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Show" Margin="0,0,2,0" VerticalAlignment="Center"
+                    Click="OnShowEntryTask" ToolTip="Watch this in the Claude Tasks window"
+                    Visibility="{Binding IsLive, Converter={StaticResource BoolToVis}}" />
+            <TextBlock DockPanel.Dock="Right" Text="{Binding LiveTask.StatusText}" Style="{StaticResource Muted}" FontSize="11"
+                       Margin="8,0,6,0" VerticalAlignment="Center" Visibility="{Binding IsLive, Converter={StaticResource BoolToVis}}" />
+            <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" IsEnabled="{Binding HasDetail}">
               <DockPanel Margin="8,5">
                 <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;"
                            Margin="8,0,0,0" Visibility="{Binding HasDetail, Converter={StaticResource BoolToVis}}" />
@@ -442,6 +428,8 @@
     <StackPanel Grid.Row="0">
     <DockPanel Margin="10,8,10,6">
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+        <Button Style="{StaticResource IconButton}" Content="&#xE7C4;" AutomationProperties.Name="Claude Tasks" ToolTip="{Binding ToolTasksTooltip}" Click="OnShowToolTasks"
+                Visibility="{Binding HasToolTasks, Converter={StaticResource BoolToVis}}" />
         <Button Style="{StaticResource IconButton}" Content="&#xE734;" AutomationProperties.Name="Starred messages" ToolTip="Starred messages" Click="OnStarredMenu" />
         <Button Style="{StaticResource IconButton}" Content="&#xE721;" AutomationProperties.Name="Find in this chat (Ctrl+F)" ToolTip="Find in this chat (Ctrl+F)" Click="OnOpenFind" />
         <Button Style="{StaticResource IconButton}" Content="&#xE81C;" AutomationProperties.Name="History" ToolTip="History" Click="OnToggleHistory" />
@@ -631,16 +619,38 @@
       </DockPanel>
     </Border>
 
-    <!-- Shown until the selected engine is ready (API key saved, or Claude Code installed and signed in) -->
-    <Border Grid.Row="1" Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"
-            BorderBrush="{StaticResource Amber}" Background="{StaticResource AmberTint}"
-            Visibility="{Binding HasSetupMessage, Converter={StaticResource BoolToVis}}">
-      <DockPanel>
-        <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Open settings" Click="OnOpenSettings" />
-        <TextBlock Style="{StaticResource Icon}" Text="&#xE8D7;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,10,0" />
-        <TextBlock Text="{Binding SetupMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
-      </DockPanel>
-    </Border>
+    <StackPanel Grid.Row="1">
+      <!-- Shown until the selected engine is ready (API key saved, or Claude Code installed and signed in) -->
+      <Border Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"
+              BorderBrush="{StaticResource Amber}" Background="{StaticResource AmberTint}"
+              Visibility="{Binding HasSetupMessage, Converter={StaticResource BoolToVis}}">
+        <DockPanel>
+          <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Open settings" Click="OnOpenSettings" />
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE8D7;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,10,0" />
+          <TextBlock Text="{Binding SetupMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        </DockPanel>
+      </Border>
+
+      <!-- Claude Code updates and newer model versions -->
+      <ItemsControl ItemsSource="{Binding Banners}" Focusable="False">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border Margin="10,0,10,8" Padding="12,6,4,6" CornerRadius="8" BorderThickness="1"
+                    BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+              <DockPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE711;" VerticalAlignment="Center"
+                        AutomationProperties.Name="Dismiss" ToolTip="Dismiss" Click="OnDismissBanner" />
+                <Button DockPanel.Dock="Right" Style="{StaticResource OutlineButton}" Margin="8,0,2,0" VerticalAlignment="Center"
+                        Content="{Binding ActionText}" Click="OnBannerAction"
+                        Visibility="{Binding HasAction, Converter={StaticResource BoolToVis}}" />
+                <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE946;" FontSize="13" Margin="0,0,10,0" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" VerticalAlignment="Center" />
+              </DockPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
 
     <!-- Transcript -->
     <ScrollViewer x:Name="Transcript" AutomationProperties.Name="Conversation" Grid.Row="2"

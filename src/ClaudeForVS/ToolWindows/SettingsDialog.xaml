@@ -84,7 +84,7 @@
       <StackPanel>
         <DockPanel>
           <TextBlock x:Name="OpusPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$4 / $20 per MTok" />
-          <TextBlock Style="{StaticResource CardTitle}" Text="Opus 5.5" />
+          <TextBlock x:Name="OpusName" Style="{StaticResource CardTitle}" Text="Opus" />
         </DockPanel>
         <TextBlock Style="{StaticResource CardNote}" Text="Most capable. Best for complex, multi-step changes." />
       </StackPanel>
@@ -93,7 +93,7 @@
       <StackPanel>
         <DockPanel>
           <TextBlock x:Name="SonnetPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$2 / $10 per MTok" />
-          <TextBlock Style="{StaticResource CardTitle}" Text="Sonnet 5.5" />
+          <TextBlock x:Name="SonnetName" Style="{StaticResource CardTitle}" Text="Sonnet" />
         </DockPanel>
         <TextBlock Style="{StaticResource CardNote}" Text="Fast and highly capable. Great for everyday work." />
       </StackPanel>
@@ -103,7 +103,7 @@
         <DockPanel>
           <TextBlock x:Name="HaikuPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$0.10 / $0.50 per MTok"
                      ToolTip="For prompts up to 100K tokens; longer prompts are $0.50 / $2.50 per MTok." />
-          <TextBlock Style="{StaticResource CardTitle}" Text="Haiku 5.5" />
+          <TextBlock x:Name="HaikuName" Style="{StaticResource CardTitle}" Text="Haiku" />
         </DockPanel>
         <TextBlock Style="{StaticResource CardNote}" Text="Fastest and cheapest. Good for quick questions." />
       </StackPanel>
@@ -176,6 +176,9 @@
     <!-- Claude API engine's extras: hooks and a spending limit -->
     <StackPanel x:Name="ApiOptionsSection">
       <TextBlock Style="{StaticResource SectionTitle}" Text="Claude API options" />
+      <CheckBox x:Name="NewestModelsBox" Content="Use the newest model versions"
+                AutomationProperties.Name="Use the newest model versions" Checked="OnNewestModelsChanged" Unchecked="OnNewestModelsChanged" />
+      <TextBlock x:Name="NewestModelsHint" Style="{StaticResource CardNote}" Margin="22,2,0,12" />
       <CheckBox x:Name="RunHooksBox" Content="Run hooks from Claude Code's settings files"
                 AutomationProperties.Name="Run hooks from Claude Code's settings files" />
       <TextBlock Style="{StaticResource CardNote}" Margin="22,2,0,0"

@@ -108,7 +108,7 @@ internal sealed partial class ClaudeCodeEngine
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
-            "--model", AgentSettings.ModelId(this.Model),
+            "--model", AgentSettings.ClaudeCodeAlias(this.Model),
             "--permission-mode", this.Mode == AgentMode.Plan ? "plan" : "default",
             "--mcp-config", this.mcpConfigPath,
             "--permission-prompt-tool", ApprovalServer.QualifiedToolName,

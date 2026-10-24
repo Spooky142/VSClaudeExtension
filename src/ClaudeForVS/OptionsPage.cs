@@ -91,7 +91,7 @@ public sealed class OptionsPage : DialogPage
 
     internal sealed class EngineConverter() : NamedEnumConverter<ChatEngineKind>(e => e == ChatEngineKind.ClaudeCode ? "Claude Code" : "Claude API");
 
-    internal sealed class ModelConverter() : NamedEnumConverter<ClaudeModel>(AgentSettings.ModelName);
+    internal sealed class ModelConverter() : NamedEnumConverter<ClaudeModel>(m => AgentSettings.Load().NameOf(m));
 
     internal sealed class EffortConverter() : NamedEnumConverter<EffortLevel>(AgentSettings.EffortName);
 

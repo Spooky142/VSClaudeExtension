@@ -131,7 +131,7 @@ internal sealed partial class ClaudeAgent
 
         return new MessageCreateParams
         {
-            Model = AgentSettings.ModelId(this.Model),
+            Model = this.ModelId,
             MaxTokens = maxTokens,
             Thinking = new ThinkingConfigAdaptive { Display = Display.Summarized },
             OutputConfig = new OutputConfig { Effort = ToApiEffort(this.Effort) },

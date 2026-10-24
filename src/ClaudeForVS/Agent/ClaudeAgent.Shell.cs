@@ -83,7 +83,7 @@ internal sealed partial class ClaudeAgent
     }
 
     /// <summary>
-    /// Runs a command with a row in the transcript that shows its latest output and a Stop button. Returns how it
+    /// Runs a command shown live (in the Claude Tasks window) with its latest output and a Stop button. Returns how it
     /// ended: the exit code (null if it timed out), everything it wrote, and whether the user stopped it.
     /// </summary>
     private async Task<(int? ExitCode, string Output, bool StoppedByUser)> RunWithLiveRowAsync(
@@ -93,7 +93,7 @@ internal sealed partial class ClaudeAgent
         using var stop = new CancellationTokenSource();
         using ILiveActivity live = sink.StartLiveActivity(ActivityKind.Shell, title, stop.Cancel);
 
-        // The row shows the end of the output as it arrives, refreshed a few times a second.
+        // The live view shows the end of the output as it arrives, refreshed a few times a second.
         var tail = new OutputTail(LiveOutputLines);
         Task<(int? ExitCode, string Output)> run = ShellRunner.RunAsync(directory, command, TimeSpan.FromSeconds(timeoutSeconds), cancellationToken, stop.Token, tail.Add);
         while (await Task.WhenAny(run, Task.Delay(LiveOutputInterval)) != run)

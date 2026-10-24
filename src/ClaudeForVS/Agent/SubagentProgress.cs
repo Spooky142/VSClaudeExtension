@@ -5,12 +5,12 @@ using System.Linq;
 namespace ClaudeForVS.Agent;
 
 /// <summary>
-/// A subagent's row in the chat while it works, among Claude's replies and tool calls, listing what it has done so far
-/// (the latest steps). Disposing it removes the row; the finished subagent then gets a row of its own with its report.
+/// A subagent while it works, shown in the Claude Tasks window with what it has done so far (the latest steps).
+/// Disposing it ends the live view; the finished subagent then gets a row of its own in the chat with its report.
 /// </summary>
 internal sealed class SubagentProgress : IDisposable
 {
-    internal const int ShownSteps = 10;
+    internal const int ShownSteps = 100;
 
     private readonly ILiveActivity row;
     private readonly List<string> steps = [];
