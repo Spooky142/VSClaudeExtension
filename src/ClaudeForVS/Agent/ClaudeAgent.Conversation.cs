@@ -21,7 +21,7 @@ internal sealed partial class ClaudeAgent
     /// <summary>
     /// Once the context passes <see cref="CompactAtTokens"/> or <see cref="CompactAt"/> (or a full-length reply would no longer fit), has Claude summarize the conversation and restarts it from that
     /// summary. The request reuses the normal request with the instruction appended, so the history is read from the
-    /// cache. Returns the new tokens it used (counted towards the prompt's total), or 0 if it didn't compact.
+    /// cache. Returns the tokens the summary took to write (counted towards the prompt's total), or 0 if it didn't compact.
     /// </summary>
     private async Task<long> CompactIfNeededAsync(IChatSink sink, bool midTask, CancellationToken cancellationToken, bool force = false)
     {
@@ -54,7 +54,6 @@ internal sealed partial class ClaudeAgent
             {
                 if (ev.TryPickStart(out RawMessageStartEvent? start))
                 {
-                    newTokens += start.Message.Usage.InputTokens + (start.Message.Usage.CacheCreationInputTokens ?? 0);
                     used = new TokenUsage(
                         start.Message.Usage.InputTokens,
                         start.Message.Usage.CacheCreationInputTokens ?? 0,

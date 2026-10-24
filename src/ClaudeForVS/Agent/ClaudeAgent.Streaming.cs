@@ -29,14 +29,12 @@ internal sealed partial class ClaudeAgent
         {
             if (ev.TryPickStart(out RawMessageStartEvent? start))
             {
-                // New input only: the history re-read from the cache on every round isn't counted again.
-                turn.InputTokens = start.Message.Usage.InputTokens
-                    + (start.Message.Usage.CacheCreationInputTokens ?? 0);
+                // The prompt's count is what Claude writes; input (mostly the history and tools sent again) isn't in it.
                 turn.CacheReadTokens = start.Message.Usage.CacheReadInputTokens ?? 0;
                 turn.CacheWriteTokens = start.Message.Usage.CacheCreationInputTokens ?? 0;
                 turn.CacheWrite1hTokens = start.Message.Usage.CacheCreation?.Ephemeral1hInputTokens ?? 0;
                 turn.UncachedInputTokens = start.Message.Usage.InputTokens;
-                sink.ReportLiveTokens(tokensBefore + turn.InputTokens);
+                sink.ReportLiveTokens(tokensBefore);
 
                 // The headers and input size are known now, so the strip needn't wait for the reply to finish.
                 sink.ReportContext(turn.UncachedInputTokens + turn.CacheWriteTokens + turn.CacheReadTokens);
@@ -148,7 +146,7 @@ internal sealed partial class ClaudeAgent
                     : delta.Delta.TryPickThinking(out ThinkingDelta? th) ? th.Thinking.Length
                     : delta.Delta.TryPickInputJson(out InputJsonDelta? ij) ? ij.PartialJson.Length
                     : 0;
-                sink.ReportLiveTokens(tokensBefore + turn.InputTokens + (streamedChars / 4));
+                sink.ReportLiveTokens(tokensBefore + (streamedChars / 4));
             }
             else if (ev.TryPickDelta(out RawMessageDeltaEvent? messageDelta))
             {
@@ -324,7 +322,6 @@ internal sealed partial class ClaudeAgent
         public List<ContentBlockParam> Content = [];
         public List<ToolUseBlockParam> ToolUses = [];
         public string? StopReason;
-        public long InputTokens;
         public long CacheReadTokens;
         public long CacheWriteTokens;
         public long CacheWrite1hTokens;

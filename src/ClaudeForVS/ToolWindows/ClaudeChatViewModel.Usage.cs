@@ -250,9 +250,10 @@ internal sealed partial class ClaudeChatViewModel
 
     private string FormatPromptUsage()
     {
-        TokenUsage t = this.promptTokens;
-        long total = this.liveTokens > 0 ? this.liveTokens : t.Input + t.CacheWrite + t.Output; // new tokens only; cache reads re-send the history every round
-        string text = $"{total:N0} tokens";
+        // Only what Claude wrote: input is mostly the system prompt, tools and history sent again each round, which made
+        // even a short prompt look like tens of thousands of tokens. The cost estimate still covers everything.
+        long output = this.promptTokens.Output > 0 ? this.promptTokens.Output : this.liveTokens;
+        string text = $"{output:N0} tokens";
         return this.promptHasCost ? $"{text} · ≈ ${this.promptCost:0.00}" : text;
     }
 

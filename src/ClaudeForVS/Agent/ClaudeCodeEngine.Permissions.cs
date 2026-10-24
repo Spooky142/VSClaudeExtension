@@ -48,7 +48,7 @@ internal sealed partial class ClaudeCodeEngine
         if (toolName is ApprovalServer.RenameTool or ApprovalServer.ApplyCodeFixTool)
         {
             return this.Mode == AgentMode.Plan
-                ? new PermissionDecision(false, "Plan mode is on, so no files can be changed. Describe the change as text instead; the user can switch modes in Settings.")
+                ? new PermissionDecision(false, "Plan mode is on, so no files can be changed. Describe the change as text instead; the user can switch modes from the model menu above the chat.")
                 : new PermissionDecision(true);
         }
 
@@ -56,7 +56,7 @@ internal sealed partial class ClaudeCodeEngine
         {
             if (this.Mode == AgentMode.Plan)
             {
-                return new PermissionDecision(false, "Plan mode is on, so the solution can't be built. The user can switch modes in Settings.");
+                return new PermissionDecision(false, "Plan mode is on, so the solution can't be built. The user can switch modes from the model menu above the chat.");
             }
 
             if (this.Mode == AgentMode.Auto || CommandRules.IsToolAllowed(this.RepoRoot, "build_solution"))
@@ -69,7 +69,7 @@ internal sealed partial class ClaudeCodeEngine
         {
             if (this.Mode == AgentMode.Plan)
             {
-                return new PermissionDecision(false, "Plan mode is on, so packages can't be changed. The user can switch modes in Settings.");
+                return new PermissionDecision(false, "Plan mode is on, so packages can't be changed. The user can switch modes from the model menu above the chat.");
             }
 
             if (this.Mode == AgentMode.Auto || CommandRules.IsToolAllowed(this.RepoRoot, PackageTools.RuleKey))
@@ -103,10 +103,10 @@ internal sealed partial class ClaudeCodeEngine
             return await this.AskQuestionsAsync(input).ConfigureAwait(false);
         }
 
-        // Plan mode never leaves plan mode or changes files; the user switches modes in Settings.
+        // Plan mode never leaves plan mode or changes files; the user switches modes from the model menu.
         if (this.Mode == AgentMode.Plan && (toolName == "ExitPlanMode" || EditTools.Contains(toolName)))
         {
-            return new PermissionDecision(false, "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes in Settings.");
+            return new PermissionDecision(false, "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes from the model menu above the chat.");
         }
 
         if (this.Mode == AgentMode.Auto)

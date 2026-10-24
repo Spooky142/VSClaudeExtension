@@ -201,24 +201,12 @@
       </DataTemplate.Triggers>
     </DataTemplate>
 
+    <!-- Marks where Claude thought; a label only, without the reasoning itself. -->
     <DataTemplate x:Key="ThinkingTemplate">
-      <StackPanel Margin="0,4,0,2">
-        <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}">
-          <DockPanel Margin="6,4">
-            <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;" />
-            <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xEA80;" Margin="0,0,8,0" />
-            <TextBlock Text="Thinking" FontStyle="Italic" Style="{StaticResource Muted}" VerticalAlignment="Center" />
-          </DockPanel>
-        </ToggleButton>
-        <TextBlock x:Name="Body" Text="{Binding Text}" Style="{StaticResource Muted}" FontStyle="Italic"
-                   TextWrapping="Wrap" Margin="26,2,6,4" Visibility="Collapsed" />
+      <StackPanel Orientation="Horizontal" Margin="6,8,0,6">
+        <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xEA80;" Margin="0,0,8,0" />
+        <TextBlock Text="Thinking" FontStyle="Italic" Style="{StaticResource Muted}" VerticalAlignment="Center" />
       </StackPanel>
-      <DataTemplate.Triggers>
-        <DataTrigger Binding="{Binding IsChecked, ElementName=Toggle}" Value="True">
-          <Setter TargetName="Body" Property="Visibility" Value="Visible" />
-          <Setter TargetName="Chevron" Property="Text" Value="&#xE70D;" />
-        </DataTrigger>
-      </DataTemplate.Triggers>
     </DataTemplate>
 
     <DataTemplate x:Key="ToolTemplate">
@@ -449,6 +437,14 @@
           <StackPanel Orientation="Horizontal">
             <TextBlock Style="{StaticResource Icon}" Text="&#xE945;" FontSize="12" Foreground="{StaticResource Accent}" />
             <TextBlock Text="{Binding ModelSummary}" Margin="7,0,0,0" VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+        <Button x:Name="SubagentChip" Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4"
+                ToolTip="Change the model and effort of the subagents Claude starts for scoped jobs" Click="OnSubagentMenu">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE902;" FontSize="12" Foreground="{StaticResource Accent}" />
+            <TextBlock Text="Subagents" Style="{StaticResource Muted}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding SubagentSummary}" Margin="6,0,0,0" VerticalAlignment="Center" />
           </StackPanel>
         </Button>
         <Button x:Name="DevActionsChip" Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4"

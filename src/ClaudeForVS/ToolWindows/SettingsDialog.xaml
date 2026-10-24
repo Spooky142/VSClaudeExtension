@@ -1,4 +1,4 @@
-<platform:DialogWindow x:Class="ClaudeForVS.ToolWindows.SettingsDialog"
+﻿<platform:DialogWindow x:Class="ClaudeForVS.ToolWindows.SettingsDialog"
                        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                        xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
@@ -78,74 +78,8 @@
       </StackPanel>
     </Border>
 
-    <!-- Model -->
-    <TextBlock Style="{StaticResource SectionTitle}" Text="Model" />
-    <RadioButton x:Name="OpusRadio" GroupName="Model" Style="{StaticResource CardRadio}" Checked="OnModelChanged">
-      <StackPanel>
-        <DockPanel>
-          <TextBlock x:Name="OpusPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$4 / $20 per MTok" />
-          <TextBlock x:Name="OpusName" Style="{StaticResource CardTitle}" Text="Opus" />
-        </DockPanel>
-        <TextBlock Style="{StaticResource CardNote}" Text="Most capable. Best for complex, multi-step changes." />
-      </StackPanel>
-    </RadioButton>
-    <RadioButton x:Name="SonnetRadio" GroupName="Model" Style="{StaticResource CardRadio}" Checked="OnModelChanged">
-      <StackPanel>
-        <DockPanel>
-          <TextBlock x:Name="SonnetPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$2 / $10 per MTok" />
-          <TextBlock x:Name="SonnetName" Style="{StaticResource CardTitle}" Text="Sonnet" />
-        </DockPanel>
-        <TextBlock Style="{StaticResource CardNote}" Text="Fast and highly capable. Great for everyday work." />
-      </StackPanel>
-    </RadioButton>
-    <RadioButton x:Name="HaikuRadio" GroupName="Model" Style="{StaticResource CardRadio}" Checked="OnModelChanged">
-      <StackPanel>
-        <DockPanel>
-          <TextBlock x:Name="HaikuPrice" DockPanel.Dock="Right" Style="{StaticResource Price}" Text="$0.10 / $0.50 per MTok"
-                     ToolTip="For prompts up to 100K tokens; longer prompts are $0.50 / $2.50 per MTok." />
-          <TextBlock x:Name="HaikuName" Style="{StaticResource CardTitle}" Text="Haiku" />
-        </DockPanel>
-        <TextBlock Style="{StaticResource CardNote}" Text="Fastest and cheapest. Good for quick questions." />
-      </StackPanel>
-    </RadioButton>
-    <TextBlock x:Name="ModelChangeNote" Style="{StaticResource CardNote}" Visibility="Collapsed"
-               Text="Changing the engine or model starts a new chat." Foreground="{StaticResource Amber}" />
-
-    <!-- Effort -->
-    <TextBlock Style="{StaticResource SectionTitle}" Text="Effort" />
-    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
-      <UniformGrid Rows="1" Columns="5">
-        <RadioButton x:Name="EffortLow" GroupName="Effort" Style="{StaticResource SegmentRadio}" Content="Low" Checked="OnEffortChanged" />
-        <RadioButton x:Name="EffortMedium" GroupName="Effort" Style="{StaticResource SegmentRadio}" Content="Medium" Checked="OnEffortChanged" />
-        <RadioButton x:Name="EffortHigh" GroupName="Effort" Style="{StaticResource SegmentRadio}" Content="High" Checked="OnEffortChanged" />
-        <RadioButton x:Name="EffortXHigh" GroupName="Effort" Style="{StaticResource SegmentRadio}" Content="Extra high" Checked="OnEffortChanged" />
-        <RadioButton x:Name="EffortMax" GroupName="Effort" Style="{StaticResource SegmentRadio}" Content="Max" Checked="OnEffortChanged" />
-      </UniformGrid>
-    </Border>
-    <TextBlock x:Name="EffortHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
-
-    <!-- Mode -->
-    <TextBlock Style="{StaticResource SectionTitle}" Text="Mode" />
-    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
-      <UniformGrid Rows="1" Columns="3">
-        <RadioButton x:Name="ModeAuto" GroupName="Mode" Style="{StaticResource SegmentRadio}" Content="Auto" Checked="OnModeChanged" />
-        <RadioButton x:Name="ModePlan" GroupName="Mode" Style="{StaticResource SegmentRadio}" Content="Plan" Checked="OnModeChanged" />
-        <RadioButton x:Name="ModeCoding" GroupName="Mode" Style="{StaticResource SegmentRadio}" Content="Coding" Checked="OnModeChanged" />
-      </UniformGrid>
-    </Border>
-    <TextBlock x:Name="ModeHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
-
-    <!-- Subagents: the model the separate helpers Claude starts for scoped jobs run on -->
-    <TextBlock Style="{StaticResource SectionTitle}" Text="Subagent model" />
-    <Border CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
-      <UniformGrid Rows="1" Columns="4">
-        <RadioButton x:Name="SubagentAuto" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Automatic" Checked="OnSubagentChanged" />
-        <RadioButton x:Name="SubagentOpus" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Opus" Checked="OnSubagentChanged" />
-        <RadioButton x:Name="SubagentSonnet" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Sonnet" Checked="OnSubagentChanged" />
-        <RadioButton x:Name="SubagentHaiku" GroupName="Subagent" Style="{StaticResource SegmentRadio}" Content="Haiku" Checked="OnSubagentChanged" />
-      </UniformGrid>
-    </Border>
-    <TextBlock x:Name="SubagentHint" Style="{StaticResource CardNote}" Margin="2,6,0,0" />
+    <TextBlock x:Name="ModelChangeNote" Style="{StaticResource CardNote}" Visibility="Collapsed" Margin="2,6,0,0"
+               Text="Changing the engine starts a new chat." Foreground="{StaticResource Amber}" />
 
     <!-- Repository -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Repository" />

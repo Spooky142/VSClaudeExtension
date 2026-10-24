@@ -49,7 +49,7 @@ internal sealed partial class ClaudeChatViewModel
 
     private sealed record ExtensionUpdate(ExtensionUpdateState State, ExtensionRelease Release, string Detail = "");
 
-    // Shared by every chat window: one check a day, one update at a time, and a banner dismissed in one window goes from all.
+    // Shared by every chat window: a check when one opens and then daily, one update at a time, and a banner dismissed in one window goes from all.
     private static DateTime lastUpdateCheckUtc = DateTime.MinValue;
     private static bool checkingForUpdates;
     private static bool installingUpdate;
@@ -59,13 +59,14 @@ internal sealed partial class ClaudeChatViewModel
 
     public ObservableCollection<NoticeBanner> Banners { get; } = [];
 
-    /// <summary>True when Visual Studio has just started, or a day has passed since the last check, and none is running.</summary>
+    /// <summary>True when a day has passed since the last check (for Visual Studio left open), and none is running.</summary>
     public bool UpdateCheckDue => !checkingForUpdates && DateTime.UtcNow - lastUpdateCheckUtc >= UpdateCheckInterval;
 
     /// <summary>Checks for a newer Claude Code (installing it when no chat is busy), newer API models and a newer version of this extension. Never throws.</summary>
-    public async Task CheckForUpdatesAsync()
+    /// <param name="now">Check even if the last check was less than a day ago, as when a chat window opens.</param>
+    public async Task CheckForUpdatesAsync(bool now = false)
     {
-        if (!this.UpdateCheckDue)
+        if (checkingForUpdates || (!now && !this.UpdateCheckDue))
         {
             return;
         }
@@ -246,6 +247,7 @@ internal sealed partial class ClaudeChatViewModel
         foreach (ClaudeChatViewModel chat in Instances)
         {
             chat.OnPropertyChanged(nameof(chat.ModelSummary));
+            chat.OnPropertyChanged(nameof(chat.SubagentSummary));
             chat.RefreshBanners();
         }
     }

@@ -31,8 +31,8 @@ internal sealed partial class ClaudeAgent
         something, say so. Be concise; your report is all that comes back.
         """;
 
-    // Subagents only read and search, so they run at low effort whatever the model.
-    private const EffortLevel SubagentEffort = EffortLevel.Low;
+    /// <summary>The effort subagents run at; can change between messages.</summary>
+    public EffortLevel SubagentEffort { get; set; } = EffortLevel.Low;
 
     /// <summary>The model subagents run on, for pricing and the web tools' versions; can change between messages.</summary>
     public ClaudeModel SubagentModel { get; set; } = AgentSettings.DefaultApiSubagentModel;
@@ -61,6 +61,7 @@ internal sealed partial class ClaudeAgent
         // Read once, so a settings change mid-run doesn't mix models.
         ClaudeModel model = this.SubagentModel;
         string modelId = this.SubagentModelId;
+        EffortLevel effort = this.SubagentEffort;
         List<ToolUnion> tools = (this.tools ?? BuiltInTools(this.permissions, this.Model))
             .Where(t => ToolName(t) is string name && SubagentTools.Contains(name) && name is not ("web_search" or "web_fetch"))
             .Concat(WebTools(this.permissions, model))
@@ -87,7 +88,7 @@ internal sealed partial class ClaudeAgent
                     break;
                 }
 
-                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools, modelId, SubagentEffort));
+                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools, modelId, effort));
                 this.ReportUsage(sink, turn.Usage, model);
                 if (paused != null)
                 {

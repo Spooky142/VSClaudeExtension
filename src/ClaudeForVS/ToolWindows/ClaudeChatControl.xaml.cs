@@ -114,8 +114,8 @@ public partial class ClaudeChatControl : UserControl
         package.SolutionOpened += (_, directory) => this.viewModel.OnSolutionOpened(directory);
         OptionsPage.Applied += (_, settings) => this.viewModel.ApplySettings(settings, this.viewModel.RepoPath, null);
 
-        // Keep the usage strip's "resets in" countdowns current, and plan usage fresh while no prompt is running. The first
-        // tick, shortly after Visual Studio starts, and then one a day check for Claude Code updates and newer models.
+        // Keep the usage strip's "resets in" countdowns current, and plan usage fresh while no prompt is running. Each chat
+        // window checks for updates when it opens; past that, one tick a day checks again for Claude Code, model and extension updates.
         this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
         {
             this.viewModel.RefreshUsage();
@@ -160,6 +160,9 @@ public partial class ClaudeChatControl : UserControl
                 {
                     this.viewModel.SetRepoFromDirectory(solutionDir);
                 }
+
+                // Each chat window checks for updates when it opens; the usage timer rechecks daily if Visual Studio stays open.
+                this.viewModel.CheckForUpdatesAsync(now: true).FileAndForget("ClaudeForVS/CheckForUpdates");
 
                 // Only the first window carries the last chat over from before Visual Studio restarted; others start empty.
                 if (this.Pane.InstanceNumber == 0)
@@ -686,32 +689,101 @@ public partial class ClaudeChatControl : UserControl
             menu.Items.Add(item);
         }
 
-        string? restartNote = this.viewModel.HasConversation ? "Starts a new chat" : null;
+        bool api = current.Engine == ChatEngineKind.Api;
+        string? restartNote = this.viewModel.HasConversation ? " Starts a new chat." : null;
         Section("Model");
         foreach (ClaudeModel model in new[] { ClaudeModel.Opus, ClaudeModel.Sonnet, ClaudeModel.Haiku })
         {
-            Item(current.NameOf(model), model == current.Model, () => this.viewModel.QuickSet(model: model), model == current.Model ? null : restartNote);
+            // Per-token prices only apply to the API; Claude Code usage comes out of the plan.
+            string price = api ? " " + ModelPrice(model) + "." : string.Empty;
+            Item(current.NameOf(model), model == current.Model, () => this.viewModel.QuickSet(model: model),
+                ModelDescription(model) + price + (model == current.Model ? null : restartNote));
         }
 
         Section("Effort");
         foreach (EffortLevel effort in new[] { EffortLevel.Low, EffortLevel.Medium, EffortLevel.High, EffortLevel.XHigh, EffortLevel.Max })
         {
-            Item(AgentSettings.EffortName(effort), effort == current.Effort, () => this.viewModel.QuickSet(effort: effort));
+            Item(AgentSettings.EffortName(effort), effort == current.Effort, () => this.viewModel.QuickSet(effort: effort), EffortDescription(effort));
         }
 
         Section("Mode");
-        Item("Auto · edits without asking", current.Mode == AgentMode.Auto, () => this.viewModel.QuickSet(mode: AgentMode.Auto));
-        Item("Plan · read-only", current.Mode == AgentMode.Plan, () => this.viewModel.QuickSet(mode: AgentMode.Plan));
-        Item("Coding · asks before changes", current.Mode == AgentMode.Coding, () => this.viewModel.QuickSet(mode: AgentMode.Coding));
+        Item("Auto · edits without asking", current.Mode == AgentMode.Auto, () => this.viewModel.QuickSet(mode: AgentMode.Auto),
+            "Edits files and runs commands without asking. Fastest, but review the changes afterwards.");
+        Item("Plan · read-only", current.Mode == AgentMode.Plan, () => this.viewModel.QuickSet(mode: AgentMode.Plan),
+            "Reviews your code and suggests changes, but never edits files.");
+        Item("Coding · asks before changes", current.Mode == AgentMode.Coding, () => this.viewModel.QuickSet(mode: AgentMode.Coding),
+            "Edits files and runs commands after you approve each action.");
+        menu.IsOpen = true;
+    }
+
+    private static string ModelDescription(ClaudeModel model) => model switch
+    {
+        ClaudeModel.Sonnet => "Fast and highly capable. Great for everyday work.",
+        ClaudeModel.Haiku => "Fastest and cheapest. Good for quick questions.",
+        _ => "Most capable. Best for complex, multi-step changes.",
+    };
+
+    private static string ModelPrice(ClaudeModel model) => model switch
+    {
+        ClaudeModel.Sonnet => "$2 / $10 per MTok",
+        ClaudeModel.Haiku => "$0.10 / $0.50 per MTok ($0.50 / $2.50 past 100K tokens)",
+        _ => "$4 / $20 per MTok",
+    };
+
+    private static string EffortDescription(EffortLevel effort) => effort switch
+    {
+        EffortLevel.Low => "Quickest and cheapest. Fine for simple questions and lookups.",
+        EffortLevel.Medium => "Balanced speed and depth.",
+        EffortLevel.High => "Thinks things through. A good default for coding.",
+        EffortLevel.XHigh => "More thorough reasoning for tricky changes. Slower and uses more tokens.",
+        _ => "Deepest reasoning when correctness matters most. Slowest and most expensive.",
+    };
+
+    /// <summary>The Subagents chip's menu: the model and effort of the subagents Claude starts, from the next one on.</summary>
+    private void OnSubagentMenu(object sender, RoutedEventArgs e)
+    {
+        AgentSettings current = this.viewModel.Settings;
+        bool code = current.Engine == ChatEngineKind.ClaudeCode;
+        var menu = new ContextMenu { PlacementTarget = this.SubagentChip, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+
+        void Header(string title) => menu.Items.Add(new MenuItem { Header = title, IsEnabled = false, FontWeight = FontWeights.SemiBold });
+
+        void Item(string header, bool isChecked, Action apply, string? toolTip = null)
+        {
+            var item = new MenuItem { Header = header, IsCheckable = true, IsChecked = isChecked, ToolTip = toolTip };
+            item.Click += (_, _) => apply();
+            menu.Items.Add(item);
+        }
+
+        Header("Subagent model");
+        string automatic = code ? "Claude Code decides, following its own settings (such as CLAUDE_CODE_SUBAGENT_MODEL in ~/.claude/settings.json)."
+            : $"{current.NameOf(AgentSettings.DefaultApiSubagentModel)}. Subagents only read and search, which Haiku does well for a fraction of the cost.";
+        Item("Automatic", current.SubagentModel is null, () => this.viewModel.QuickSetSubagent(null, current.SubagentEffort), automatic);
+        foreach (ClaudeModel model in new[] { ClaudeModel.Opus, ClaudeModel.Sonnet, ClaudeModel.Haiku })
+        {
+            string description = model switch
+            {
+                ClaudeModel.Opus => "Most thorough, and most expensive. Worth it when subagents review code or investigate tricky problems.",
+                ClaudeModel.Sonnet => "A good balance for scoped jobs: capable, and much cheaper than Opus.",
+                _ => "Cheapest and quickest. Fine for finding files and reading code.",
+            };
+            Item(current.NameOf(model), current.SubagentModel == model, () => this.viewModel.QuickSetSubagent(model, current.SubagentEffort), description);
+        }
 
         menu.Items.Add(new Separator());
-        var settings = new MenuItem { Header = "Settings…" };
-        settings.Click += (_, _) =>
+        Header("Subagent effort");
+        if (code)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            this.OnOpenSettings(sender, e);
-        };
-        menu.Items.Add(settings);
+            menu.Items.Add(new MenuItem { Header = "Claude Code has no setting for its subagents' effort", IsEnabled = false });
+        }
+        else
+        {
+            foreach (EffortLevel effort in new[] { EffortLevel.Low, EffortLevel.Medium, EffortLevel.High, EffortLevel.XHigh, EffortLevel.Max })
+            {
+                Item(AgentSettings.EffortName(effort), effort == current.SubagentEffort, () => this.viewModel.QuickSetSubagent(current.SubagentModel, effort));
+            }
+        }
+
         menu.IsOpen = true;
     }
 

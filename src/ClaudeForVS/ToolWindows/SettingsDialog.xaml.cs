@@ -57,23 +57,13 @@ public partial class SettingsDialog : DialogWindow
         this.InitializeComponent();
 
         (settings.Engine == ChatEngineKind.ClaudeCode ? this.CodeEngineRadio : this.ApiEngineRadio).IsChecked = true;
-        this.ModelRadio(settings.Model).IsChecked = true;
-        this.EffortRadio(settings.Effort).IsChecked = true;
-        (settings.Mode switch { AgentMode.Auto => this.ModeAuto, AgentMode.Plan => this.ModePlan, _ => this.ModeCoding }).IsChecked = true;
-        (settings.SubagentModel switch
-        {
-            ClaudeModel.Opus => this.SubagentOpus,
-            ClaudeModel.Sonnet => this.SubagentSonnet,
-            ClaudeModel.Haiku => this.SubagentHaiku,
-            _ => this.SubagentAuto,
-        }).IsChecked = true;
         this.RepoBox.Text = repoPath;
         this.RunHooksBox.IsChecked = settings.RunHooks;
         this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
         this.NotificationsBox.IsChecked = settings.ShowNotifications;
         this.ExtensionUpdatesBox.IsChecked = settings.CheckForExtensionUpdates;
         this.ExtensionUpdatesHint.Text =
-            $"Once a day, looks for a newer release on GitHub ({ExtensionUpdates.Repository}) and offers to install it. You have {ExtensionUpdates.InstalledVersion}.";
+            $"Whenever a chat window opens (and daily while Visual Studio stays open), looks for a newer release on GitHub ({ExtensionUpdates.Repository}) and offers to install it. You have {ExtensionUpdates.InstalledVersion}.";
         this.NewestModelsBox.IsChecked = settings.UseNewestApiModels;
         this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.CompactAtBox.Text = settings.CompactAtTokens > 0 ? (settings.CompactAtTokens / 1000).ToString(System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
@@ -82,7 +72,7 @@ public partial class SettingsDialog : DialogWindow
         this.ApiKeyHint.Text = hasApiKey
             ? "✓ A key is saved. Leave this empty to keep it, or enter a new one to replace it."
             : "Get a key at console.anthropic.com. It's stored encrypted for your Windows account.";
-        this.UpdateHints();
+        this.UpdateChangeNote();
         this.UpdateEngineUi();
 
         if (codeStatus is null)
@@ -100,66 +90,19 @@ public partial class SettingsDialog : DialogWindow
 
     private ChatEngineKind SelectedEngine => this.CodeEngineRadio.IsChecked == true ? ChatEngineKind.ClaudeCode : ChatEngineKind.Api;
 
-    private ClaudeModel SelectedModel =>
-        this.SonnetRadio.IsChecked == true ? ClaudeModel.Sonnet :
-        this.HaikuRadio.IsChecked == true ? ClaudeModel.Haiku :
-        ClaudeModel.Opus;
-
-    private EffortLevel SelectedEffort =>
-        this.EffortLow.IsChecked == true ? EffortLevel.Low :
-        this.EffortMedium.IsChecked == true ? EffortLevel.Medium :
-        this.EffortXHigh.IsChecked == true ? EffortLevel.XHigh :
-        this.EffortMax.IsChecked == true ? EffortLevel.Max :
-        EffortLevel.High;
-
-    private AgentMode SelectedMode =>
-        this.ModeAuto.IsChecked == true ? AgentMode.Auto :
-        this.ModePlan.IsChecked == true ? AgentMode.Plan :
-        AgentMode.Coding;
-
-    private ClaudeModel? SelectedSubagentModel =>
-        this.SubagentOpus.IsChecked == true ? ClaudeModel.Opus :
-        this.SubagentSonnet.IsChecked == true ? ClaudeModel.Sonnet :
-        this.SubagentHaiku.IsChecked == true ? ClaudeModel.Haiku :
-        null;
-
-    private RadioButton ModelRadio(ClaudeModel model) => model switch
-    {
-        ClaudeModel.Sonnet => this.SonnetRadio,
-        ClaudeModel.Haiku => this.HaikuRadio,
-        _ => this.OpusRadio,
-    };
-
-    private RadioButton EffortRadio(EffortLevel effort) => effort switch
-    {
-        EffortLevel.Low => this.EffortLow,
-        EffortLevel.Medium => this.EffortMedium,
-        EffortLevel.XHigh => this.EffortXHigh,
-        EffortLevel.Max => this.EffortMax,
-        _ => this.EffortHigh,
-    };
-
-    private void UpdateHints()
+    /// <summary>Warns that saving starts a new chat: another engine, or another version of the model on the Claude API.</summary>
+    private void UpdateChangeNote()
     {
         // Radio buttons raise Checked during InitializeComponent, before every named element exists.
-        if (this.EffortHint is null || this.ModelChangeNote is null)
+        if (this.ModelChangeNote is null)
         {
             return;
         }
 
-        bool restarts = this.SelectedModel != this.current.Model || this.SelectedEngine != this.current.Engine
+        bool restarts = this.SelectedEngine != this.current.Engine
             || (this.SelectedEngine == ChatEngineKind.Api && (this.NewestModelsBox?.IsChecked == true) != this.current.UseNewestApiModels
-                && ModelCatalog.NewerApiModel(this.SelectedModel) != null);
+                && ModelCatalog.NewerApiModel(this.current.Model) != null);
         this.ModelChangeNote.Visibility = this.hasConversation && restarts ? Visibility.Visible : Visibility.Collapsed;
-
-        this.EffortHint.Text = this.SelectedEffort switch
-        {
-            EffortLevel.Low => "Quickest and cheapest. Fine for simple questions and lookups.",
-            EffortLevel.Medium => "Balanced speed and depth.",
-            EffortLevel.High => "Thinks things through. A good default for coding.",
-            EffortLevel.XHigh => "More thorough reasoning for tricky changes. Slower and uses more tokens.",
-            _ => "Deepest reasoning when correctness matters most. Slowest and most expensive.",
-        };
     }
 
     private void UpdateEngineUi()
@@ -173,11 +116,7 @@ public partial class SettingsDialog : DialogWindow
         this.CodePanel.Visibility = code ? Visibility.Visible : Visibility.Collapsed;
         this.ApiKeySection.Visibility = code ? Visibility.Collapsed : Visibility.Visible;
         this.ApiOptionsSection.Visibility = code ? Visibility.Collapsed : Visibility.Visible;
-
-        // Per-token prices only apply to the API; Claude Code usage comes out of the plan.
-        Visibility prices = code ? Visibility.Collapsed : Visibility.Visible;
-        this.OpusPrice.Visibility = this.SonnetPrice.Visibility = this.HaikuPrice.Visibility = prices;
-        this.UpdateModelNames();
+        this.UpdateNewestModelsHint();
 
         ClaudeCodeStatus? status = this.codeStatus;
         bool ready = status is { Installed: true, SignedIn: true };
@@ -197,79 +136,27 @@ public partial class SettingsDialog : DialogWindow
         this.InstallButton.IsEnabled = this.SignInButton.IsEnabled = this.RefreshButton.IsEnabled = !this.busy;
     }
 
-    /// <summary>The model cards show the versions the selected engine would run.</summary>
-    private void UpdateModelNames()
+    private void UpdateNewestModelsHint()
     {
-        if (this.OpusName is null || this.NewestModelsBox is null || this.NewestModelsHint is null)
+        if (this.NewestModelsHint is null)
         {
             return;
         }
-
-        bool newest = this.NewestModelsBox.IsChecked == true;
-        this.OpusName.Text = AgentSettings.ModelName(ClaudeModel.Opus, this.SelectedEngine, newest);
-        this.SonnetName.Text = AgentSettings.ModelName(ClaudeModel.Sonnet, this.SelectedEngine, newest);
-        this.HaikuName.Text = AgentSettings.ModelName(ClaudeModel.Haiku, this.SelectedEngine, newest);
 
         IEnumerable<string> newer = new[] { ClaudeModel.Opus, ClaudeModel.Sonnet, ClaudeModel.Haiku }
             .Select(ModelCatalog.NewerApiModel).OfType<ModelVersion>().Select(m => m.Name);
         string built = $"This extension was built for {AgentSettings.ModelName(ClaudeModel.Opus, ChatEngineKind.Api)}, {AgentSettings.ModelName(ClaudeModel.Sonnet, ChatEngineKind.Api)} and {AgentSettings.ModelName(ClaudeModel.Haiku, ChatEngineKind.Api)}. ";
         this.NewestModelsHint.Text = built + (newer.Any()
-            ? $"Newer on the Claude API: {string.Join(", ", newer)}. A new version can work differently; if requests start failing, turn this off. Cost estimates use the prices above."
+            ? $"Newer on the Claude API: {string.Join(", ", newer)}. A new version can work differently; if requests start failing, turn this off. Cost estimates use the built-in versions' prices."
             : "When the Claude API lists a newer version, chats use it. Claude Code always uses its newest versions.");
     }
 
-    private void OnNewestModelsChanged(object sender, RoutedEventArgs e)
-    {
-        this.UpdateModelNames();
-        this.UpdateHints();
-    }
+    private void OnNewestModelsChanged(object sender, RoutedEventArgs e) => this.UpdateChangeNote();
 
     private void OnEngineChanged(object sender, RoutedEventArgs e)
     {
-        this.UpdateHints();
+        this.UpdateChangeNote();
         this.UpdateEngineUi();
-        this.UpdateSubagentHint();
-    }
-
-    private void OnSubagentChanged(object sender, RoutedEventArgs e) => this.UpdateSubagentHint();
-
-    private void UpdateSubagentHint()
-    {
-        // Radio buttons raise Checked during InitializeComponent, before every named element exists.
-        if (this.SubagentHint is null || this.SubagentHaiku is null)
-        {
-            return;
-        }
-
-        bool code = this.SelectedEngine == ChatEngineKind.ClaudeCode;
-        this.SubagentHint.Text = this.SelectedSubagentModel switch
-        {
-            null when code => "Claude Code decides, following its own settings (such as CLAUDE_CODE_SUBAGENT_MODEL in ~/.claude/settings.json).",
-            null => "Haiku. Subagents only read and search, which Haiku does well for a fraction of the cost.",
-            ClaudeModel.Opus => "Most thorough, and most expensive. Worth it when subagents review code or investigate tricky problems.",
-            ClaudeModel.Sonnet => "A good balance for scoped jobs: capable, and much cheaper than Opus.",
-            _ => "Cheapest and quickest. Fine for finding files and reading code.",
-        } + (code ? string.Empty : " Subagents always run at low effort here.");
-    }
-
-    private void OnModelChanged(object sender, RoutedEventArgs e) => this.UpdateHints();
-
-    private void OnEffortChanged(object sender, RoutedEventArgs e) => this.UpdateHints();
-
-    private void OnModeChanged(object sender, RoutedEventArgs e)
-    {
-        // Radio buttons raise Checked during InitializeComponent, before every named element exists.
-        if (this.ModeHint is null)
-        {
-            return;
-        }
-
-        this.ModeHint.Text = this.SelectedMode switch
-        {
-            AgentMode.Auto => "Edits files and runs commands without asking. Fastest, but review the changes afterwards.",
-            AgentMode.Plan => "Read-only. Reviews your code and suggests changes, but never edits files.",
-            _ => "Edits files and runs commands after you approve each action.",
-        };
     }
 
     private void OnInstallClaudeCode(object sender, RoutedEventArgs e) =>
@@ -425,13 +312,10 @@ public partial class SettingsDialog : DialogWindow
         string? root = Git.GitRunner.FindRepoRoot(text);
         bool follows = text.Length == 0 || (root != null && string.Equals(root, this.SolutionRepoRoot(), StringComparison.OrdinalIgnoreCase));
 
-        this.Result = new AgentSettings
+        // Model, effort, mode and the subagents' are set from the chips above the chat, so they're kept as they are.
+        this.Result = this.current with
         {
             Engine = this.SelectedEngine,
-            Model = this.SelectedModel,
-            Effort = this.SelectedEffort,
-            Mode = this.SelectedMode,
-            SubagentModel = this.SelectedSubagentModel,
             PinnedRepoPath = follows ? null : root ?? text,
             RunHooks = this.RunHooksBox.IsChecked == true,
             FormatChangedFiles = this.FormatChangedBox.IsChecked == true,

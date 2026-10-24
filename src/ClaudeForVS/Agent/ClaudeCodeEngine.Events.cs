@@ -204,8 +204,10 @@ internal sealed partial class ClaudeCodeEngine
         return $"{tool} {(detail.Length > 80 ? detail.Substring(0, 80) + "…" : detail)}";
     }
 
-    // Live token count for the prompt in progress: finished messages, plus the one streaming (output estimated until it ends).
-    private long liveDone, liveInput, liveOutput, liveChars;
+    // Live token count for the prompt in progress: what Claude wrote in finished messages, plus the one streaming
+    // (estimated until it ends). Input isn't counted: Claude Code re-sends its system prompt, tools and history, which
+    // would swamp what the prompt itself took.
+    private long liveDone, liveOutput, liveChars;
 
     // Everything sent with the streaming message, cache re-read included; plus its output, that's the context size.
     private long contextInput;
@@ -216,8 +218,7 @@ internal sealed partial class ClaudeCodeEngine
         {
             case "message_start" when inner.TryGetProperty("message", out JsonElement message)
                 && message.TryGetProperty("usage", out JsonElement start):
-                this.liveInput = (long)(Num(start, "input_tokens") + Num(start, "cache_creation_input_tokens")); // new input only, not the cache re-read
-                this.contextInput = this.liveInput + (long)Num(start, "cache_read_input_tokens");
+                this.contextInput = (long)(Num(start, "input_tokens") + Num(start, "cache_creation_input_tokens") + Num(start, "cache_read_input_tokens"));
                 this.liveOutput = 0;
                 this.liveChars = 0;
                 chatSink.ReportContext(this.contextInput);
@@ -231,15 +232,15 @@ internal sealed partial class ClaudeCodeEngine
                 break;
             case "message_stop":
                 chatSink.ReportContext(this.contextInput + Math.Max(this.liveOutput, this.liveChars / 4));
-                this.liveDone += this.liveInput + Math.Max(this.liveOutput, this.liveChars / 4);
-                this.liveInput = this.liveOutput = this.liveChars = 0;
+                this.liveDone += Math.Max(this.liveOutput, this.liveChars / 4);
+                this.liveOutput = this.liveChars = 0;
                 chatSink.ReportLiveTokens(this.liveDone);
                 return;
             default:
                 return;
         }
 
-        chatSink.ReportLiveTokens(this.liveDone + this.liveInput + Math.Max(this.liveOutput, this.liveChars / 4));
+        chatSink.ReportLiveTokens(this.liveDone + Math.Max(this.liveOutput, this.liveChars / 4));
     }
 
     /// <summary>

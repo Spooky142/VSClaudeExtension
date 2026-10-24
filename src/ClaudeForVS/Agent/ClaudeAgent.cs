@@ -56,7 +56,7 @@ internal sealed partial class ClaudeAgent : IChatEngine
         """;
 
     private const string PlanModeRefusal =
-        "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes in Settings.";
+        "Plan mode is on, so no changes can be made. Present your suggestions as text; the user can switch modes from the model menu above the chat.";
 
     private const string SettingsRefusal =
         "The user's permission settings (.claude/settings.json) don't allow this, so it wasn't done. Don't try to get around that; ask the user if it matters.";
@@ -351,7 +351,7 @@ internal sealed partial class ClaudeAgent : IChatEngine
             }
 
             this.history.Add(new() { Role = Role.Assistant, Content = turn.Content });
-            promptTokens += turn.InputTokens + turn.OutputTokens;
+            promptTokens += turn.OutputTokens;
             sink.ReportLiveTokens(promptTokens);
             sink.SetStatus(null); // token counts are shown below the reply, not in the footer
             this.ReportUsage(sink, turn.Usage);

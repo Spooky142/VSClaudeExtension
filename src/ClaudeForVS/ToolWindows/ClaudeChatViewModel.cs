@@ -173,6 +173,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         {
             this.Set(ref this.settings, value);
             this.OnPropertyChanged(nameof(this.ModelSummary));
+            this.OnPropertyChanged(nameof(this.SubagentSummary));
             this.OnPropertyChanged(nameof(this.RepoFollowsSolution));
             this.OnPropertyChanged(nameof(this.RepoTooltip));
             this.UpdateSetupMessage();
@@ -183,8 +184,17 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     /// <summary>Header chip text, e.g. "Opus 5.5 · High · Coding" or "Opus 5.5 · High · Coding · Claude Code".</summary>
     public string ModelSummary =>
-        $"{this.settings.NameOf(this.settings.Model)} ·{AgentSettings.EffortName(this.settings.Effort)} · {AgentSettings.ModeName(this.settings.Mode)}"
+        $"{this.settings.NameOf(this.settings.Model)} · {AgentSettings.EffortName(this.settings.Effort)} · {AgentSettings.ModeName(this.settings.Mode)}"
         + (this.settings.Engine == ChatEngineKind.ClaudeCode ? " · Claude Code" : string.Empty);
+
+    /// <summary>
+    /// Subagents chip text, e.g. "Haiku 5.5 · Low" on the Claude API, or "Automatic" when Claude Code picks the model.
+    /// Claude Code has no setting for its subagents' effort, so it isn't shown there.
+    /// </summary>
+    public string SubagentSummary =>
+        this.settings.Engine == ChatEngineKind.ClaudeCode
+            ? (this.settings.SubagentModel is ClaudeModel model ? this.settings.NameOf(model) : "Automatic")
+            : $"{this.settings.NameOf(this.settings.SubagentModel ?? AgentSettings.DefaultApiSubagentModel)} · {AgentSettings.EffortName(this.settings.SubagentEffort)}";
 
     /// <summary>Last known Claude Code install/sign-in state, or null before the first check.</summary>
     public ClaudeCodeStatus? CodeStatus
@@ -361,6 +371,17 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         }
     }
 
+    /// <summary>Changes the subagents' model (null for automatic) or effort from the header menu, from the next subagent on.</summary>
+    public void QuickSetSubagent(ClaudeModel? model, EffortLevel effort)
+    {
+        AgentSettings updated = this.settings with { SubagentModel = model, SubagentEffort = effort };
+        if (updated != this.settings)
+        {
+            this.ApplySettings(updated, this.RepoPath, null);
+            this.Status = $"Subagents now use {this.SubagentSummary}.";
+        }
+    }
+
     public void NewChat() => this.WhenIdle(this.ResetChat);
 
     private void ResetChat()
@@ -478,6 +499,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         agent.CompactAtTokens = settings.CompactAtTokens;
         agent.SubagentModel = settings.SubagentModel ?? AgentSettings.DefaultApiSubagentModel;
         agent.SubagentModelId = settings.ApiModelId(agent.SubagentModel);
+        agent.SubagentEffort = settings.SubagentEffort;
     }
 
     /// <param name="prompt">The prompt being answered; a restore point is taken around it so its changes can be undone. Null for commands.</param>

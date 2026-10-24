@@ -112,7 +112,7 @@ internal sealed record AgentSettings
     /// </summary>
     public bool ShowNotifications { get; init; } = true;
 
-    /// <summary>Check this extension's GitHub releases once a day, and offer to install a newer version.</summary>
+    /// <summary>Check this extension's GitHub releases when a chat window opens (and daily after that), and offer to install a newer version.</summary>
     public bool CheckForExtensionUpdates { get; init; } = true;
 
     /// <summary>
@@ -123,6 +123,12 @@ internal sealed record AgentSettings
 
     /// <summary>What the Claude API engine's subagents use when <see cref="SubagentModel"/> isn't set: they only read and search, which Haiku does well for a fraction of the cost.</summary>
     public const ClaudeModel DefaultApiSubagentModel = ClaudeModel.Haiku;
+
+    /// <summary>
+    /// The effort subagents run at on the Claude API engine. Low by default: they only read and search. (Claude Code
+    /// has no setting for its subagents' effort.)
+    /// </summary>
+    public EffortLevel SubagentEffort { get; init; } = EffortLevel.Low;
 
     public static AgentSettings Load()
     {

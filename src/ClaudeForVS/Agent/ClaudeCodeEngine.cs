@@ -161,7 +161,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
         this.sink = chatSink;
         this.runToken = cancellationToken;
         this.pendingTools.Clear();
-        this.liveDone = this.liveInput = this.liveOutput = this.liveChars = 0;
+        this.liveDone = this.liveOutput = this.liveChars = 0;
 
         // The prompt goes in on stdin as one stream-json user message, which can carry images as well as text.
         // It's written as UTF-8 bytes because net48 can't set the stdin encoding.

@@ -182,12 +182,12 @@ public sealed class ClaudeCodeStreamTests : IDisposable
     {
         this.Feed("""{"type":"stream_event","event":{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_creation_input_tokens":50,"cache_read_input_tokens":1000,"output_tokens":1}}}}""");
         Assert.Equal(1150, this.sink.Contexts.Last());
-        Assert.Equal(150, this.sink.LiveTokens.Last());
+        Assert.Equal(0, this.sink.LiveTokens.Last());
 
         this.Feed("""{"type":"stream_event","event":{"type":"message_delta","usage":{"output_tokens":40}}}""");
         this.Feed("""{"type":"stream_event","event":{"type":"message_stop"}}""");
         Assert.Equal(1190, this.sink.Contexts.Last());
-        Assert.Equal(190, this.sink.LiveTokens.Last());
+        Assert.Equal(40, this.sink.LiveTokens.Last());
     }
 
     [Fact]
