@@ -63,6 +63,7 @@ public partial class SettingsDialog : DialogWindow
         this.RepoBox.Text = repoPath;
         this.RunHooksBox.IsChecked = settings.RunHooks;
         this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
+        this.NotificationsBox.IsChecked = settings.ShowNotifications;
         this.NewestModelsBox.IsChecked = settings.UseNewestApiModels;
         this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.CompactAtBox.Text = settings.CompactAtTokens > 0 ? (settings.CompactAtTokens / 1000).ToString(System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
@@ -395,6 +396,7 @@ public partial class SettingsDialog : DialogWindow
             PinnedRepoPath = follows ? null : root ?? text,
             RunHooks = this.RunHooksBox.IsChecked == true,
             FormatChangedFiles = this.FormatChangedBox.IsChecked == true,
+            ShowNotifications = this.NotificationsBox.IsChecked == true,
             UseNewestApiModels = this.NewestModelsBox.IsChecked == true,
             SpendLimitUsd = double.TryParse(this.SpendLimitBox.Text.Trim().TrimStart('$'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out double limit) && limit > 0 ? limit : 0,
             CompactAtTokens = ParseCompactAt(this.CompactAtBox.Text),

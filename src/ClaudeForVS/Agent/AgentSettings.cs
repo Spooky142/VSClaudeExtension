@@ -105,6 +105,12 @@ internal sealed record AgentSettings
     /// </summary>
     public bool UseNewestApiModels { get; init; }
 
+    /// <summary>
+    /// Show a Windows notification when Claude needs an approval or an answer, or finishes, while Visual Studio isn't
+    /// in front or the chat window is hidden.
+    /// </summary>
+    public bool ShowNotifications { get; init; } = true;
+
     public static AgentSettings Load()
     {
         try

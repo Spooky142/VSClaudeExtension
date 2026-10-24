@@ -6,8 +6,8 @@
     <LangVersion>12</LangVersion>
     <Nullable>enable</Nullable>
     <RootNamespace>ClaudeForVS</RootNamespace>
-    <AssemblyVersion>0.15.0.0</AssemblyVersion>
-    <FileVersion>0.15.0.0</FileVersion>
+    <AssemblyVersion>0.16.0.0</AssemblyVersion>
+    <FileVersion>0.16.0.0</FileVersion>
 
     <!-- VSIX packaging -->
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
@@ -39,6 +39,8 @@
 
   <ItemGroup>
     <Reference Include="System.Design" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Security" />
     <Reference Include="System.Net.Http" />
     <Reference Include="System.ComponentModel.Composition" />

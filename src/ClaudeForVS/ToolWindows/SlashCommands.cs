@@ -26,8 +26,12 @@ internal static class SlashCommands
         ("/mode", "/mode auto|plan|coding", "Change what Claude may do without asking"),
         ("/review", "/review [focus]", "Review your uncommitted changes"),
         ("/review-staged", "/review-staged [focus]", "Review the changes staged in git"),
+        ("/review-branch", "/review-branch [focus]", "Review everything on this branch"),
         ("/conflicts", "/conflicts", "Resolve the current git merge conflicts"),
+        ("/fix-build", "/fix-build", "Build, fix the errors, and repeat until it builds"),
         ("/commit-message", "/commit-message", "Write a short commit message for your changes"),
+        ("/pr-message", "/pr-message", "Write a short pull request message for this branch"),
+        ("/pulled", "/pulled", "Summarize what came in with your last pull"),
         ("/init", "/init", "Create or update CLAUDE.md for this repository"),
         ("/retry", "/retry", "Send your last message again"),
         ("/undo", "/undo", "Undo the file changes made by your last message"),
@@ -57,7 +61,7 @@ internal static class SlashCommands
     };
 
     // Commands whose argument is free text, so completion leaves a space after them.
-    private static readonly HashSet<string> TakesText = new(StringComparer.OrdinalIgnoreCase) { "/review", "/review-staged", "/checkpoint", "/restore" };
+    private static readonly HashSet<string> TakesText = new(StringComparer.OrdinalIgnoreCase) { "/review", "/review-staged", "/review-branch", "/checkpoint", "/restore" };
 
     /// <summary>The command a prompt is, or null if it's an ordinary prompt (or a command for Claude Code).</summary>
     public static SlashCommand? Parse(string text)
@@ -148,6 +152,16 @@ internal static class SlashCommands
         + "line and a suggested fix. Don't change any files. If nothing is staged, say so."
         + (focus.Length > 0 ? $"\n\nFocus on: {focus}" : string.Empty);
 
+    /// <summary>What <c>/review-branch</c> asks Claude to do.</summary>
+    public static string ReviewBranchPrompt(string focus) =>
+        "Review all the changes on the current branch in this repository: the commits that aren't on the branch it was "
+        + "made from (usually main or master; use `git merge-base` and `git diff <base>...HEAD`), plus any uncommitted "
+        + "changes (`git status` and `git diff HEAD`, and read any new files in full). Look for bugs, unhandled edge cases, "
+        + "security problems, and anything inconsistent with the surrounding code. List your findings most serious first, "
+        + "each with the file and line and a suggested fix. Don't change any files. If the branch has no changes of its "
+        + "own, say so."
+        + (focus.Length > 0 ? $"\n\nFocus on: {focus}" : string.Empty);
+
     /// <summary>What <c>/conflicts</c> asks Claude to do.</summary>
     public const string ConflictsPrompt =
         "Resolve the current git merge conflicts in this repository. Use `git status` to find the conflicted files (from a "
@@ -157,13 +171,40 @@ internal static class SlashCommands
         + "with a short summary of how you resolved each file, calling out any conflict where you had to choose one side "
         + "over the other. If there are no conflicts, say so.";
 
+    /// <summary>What <c>/fix-build</c> asks Claude to do.</summary>
+    public const string FixBuildPrompt =
+        "Build the solution open in Visual Studio with the build_solution tool (or, if no solution in this repository is "
+        + "open, with the repository's usual build command) and fix every build error. Read the code around each error "
+        + "before changing it, and fix the cause rather than hiding it: don't delete code, comment it out or suppress "
+        + "errors just to make it build. Then build again, and repeat until the build succeeds. Stop and tell me if an "
+        + "error needs a decision from me, or if a round of fixes doesn't reduce the errors. Leave warnings alone unless "
+        + "they come from your own changes. Finish with a short summary of what was wrong and what you changed. If it "
+        + "already builds, say so.";
+
     /// <summary>What <c>/commit-message</c> asks Claude to do.</summary>
     public const string CommitMessagePrompt =
         "Write a very short, concise commit message for the current changes on this branch. Use the uncommitted changes "
         + "(`git status` and `git diff HEAD`, including new files); if there are none, use the commits on this branch that "
         + "aren't on the branch it was made from. Match the style of the recent history in `git log`. Reply with just the "
-        + "message, formatted in Markdown: a one-line summary, then a few short bullet points only if the changes need "
-        + "them. Don't change any files, and don't stage or commit anything.";
+        + "message as plain text, ready to paste into git, with no Markdown formatting: a one-line summary, then a few "
+        + "short bullet points only if the changes need them. Don't change any files, and don't stage or commit anything.";
+
+    /// <summary>What <c>/pr-message</c> asks Claude to do.</summary>
+    public const string PrMessagePrompt =
+        "Write a very short, concise pull request message for the current branch. Use the commits that aren't on the "
+        + "branch it was made from (usually main or master; use `git merge-base`, `git log <base>..HEAD` and "
+        + "`git diff <base>...HEAD`), plus any uncommitted changes. Reply with just the message, formatted in Markdown: a "
+        + "one-line title, then a few short bullet points covering what changed and why, only as many as the changes "
+        + "need. Don't change any files, and don't stage, commit or push anything.";
+
+    /// <summary>What <c>/pulled</c> asks Claude to do.</summary>
+    public const string PulledPrompt =
+        "Summarize what came into the current branch with my last pull. Use `git reflog` to find the most recent pull "
+        + "(or merge or rebase from upstream) and where HEAD was before it, then `git log` and `git diff --stat` between "
+        + "the two to see what came in. Don't fetch or pull again. Group the summary by area or feature, most significant "
+        + "first, and call out anything likely to affect my work: changed APIs, new dependencies, build or configuration "
+        + "changes, and files I have uncommitted changes in (check `git status`). Don't change any files. If there's no "
+        + "pull in the reflog, say so.";
 
     /// <summary>What <c>/init</c> asks Claude to do.</summary>
     public const string InitPrompt =

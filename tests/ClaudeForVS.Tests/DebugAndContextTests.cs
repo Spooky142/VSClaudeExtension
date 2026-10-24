@@ -89,6 +89,59 @@ public sealed class DebugAndContextTests : IDisposable
         public Task<BuildOutcome> BuildSolutionAsync(CancellationToken cancellationToken) => Task.FromResult(new BuildOutcome(true, "ok"));
 
         public Task<DebugState> GetDebugStateAsync(CancellationToken cancellationToken) => Task.FromResult(this.State);
+
+        public ActiveDocument? Active { get; set; }
+
+        public Task<ActiveDocument?> GetActiveDocumentAsync(CancellationToken cancellationToken) => Task.FromResult(this.Active);
+    }
+
+    [Fact]
+    public void FormatsTheActiveDocument()
+    {
+        var document = new ActiveDocument(
+            @"C:\work\repo\src\Orders.cs", true, 42, 13, 20, 68, 40, 41, "decimal sum = 0;\r\nreturn sum;\r\n",
+            [(@"C:\work\repo\src\Orders.cs", true), (@"C:\work\repo\src\Program.cs", false), (@"C:\elsewhere\Notes.txt", true)]);
+
+        string text = ActiveDocumentReport.Format(document, Repo, _ => true);
+
+        Assert.StartsWith("Active document: src/Orders.cs (unsaved changes", text);
+        Assert.Contains("Caret: line 42, column 13", text);
+        Assert.Contains("Visible in the editor: lines 20-68", text);
+        Assert.Contains("Selection: lines 40-41:\n```\ndecimal sum = 0;\nreturn sum;\n```", text);
+        Assert.Contains("Also open: src/Program.cs, C:/elsewhere/Notes.txt (unsaved)", text);
+
+        string hidden = ActiveDocumentReport.Format(document, Repo, _ => false);
+        Assert.DoesNotContain("decimal sum", hidden);
+        Assert.Contains("restricted by your permission settings", hidden);
+
+        Assert.Contains("Nothing is selected", ActiveDocumentReport.Format(document with { SelectedText = string.Empty }, Repo, _ => true));
+        Assert.StartsWith("No text document is open", ActiveDocumentReport.Format(null, Repo, _ => true));
+    }
+
+    [Fact]
+    public async Task TheApiEngineCanReadTheActiveDocument()
+    {
+        string repo = Path.Combine(Path.GetTempPath(), "ClaudeForVS.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(repo);
+        try
+        {
+            this.host.Active = new ActiveDocument(Path.Combine(repo, "src", "Orders.cs"), false, 7, 1, 1, 30, 7, 7, string.Empty, []);
+            using var api = new FakeAnthropic();
+            api.Reply(Sse.Turn(Sse.ToolUse("toolu_1", "get_active_document", new { }), stopReason: "tool_use")).Reply(Sse.Turn(Sse.Text("Line 7.")));
+            var sink = new RecordingSink();
+            using var agent = new ClaudeAgent("test-key", repo, ClaudeModel.Opus, EffortLevel.Low, AgentMode.Plan, api.Url);
+
+            await agent.SendAsync(new ChatPrompt("What am I looking at?"), sink, CancellationToken.None);
+
+            JsonElement messages = api.Requests[1].RootElement.GetProperty("messages");
+            JsonElement result = messages[messages.GetArrayLength() - 1].GetProperty("content").EnumerateArray().First(b => b.GetProperty("type").GetString() == "tool_result");
+            Assert.StartsWith("Active document: src/Orders.cs", result.GetProperty("content").GetString());
+            Assert.Empty(sink.Approvals);
+        }
+        finally
+        {
+            Directory.Delete(repo, recursive: true);
+        }
     }
 
     [Fact]

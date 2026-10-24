@@ -335,6 +335,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         this.Stop();
         this.DisposeEngine();
         this.Messages.Clear();
+        ChatChanges.Forget(this);
         this.SetTasks([]);
         this.ResetChatUsage();
         this.chatId = null;
@@ -626,6 +627,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
         if (change != null && (kind is ActivityKind.Edit or ActivityKind.Create))
         {
             this.runChanges.Add(change);
+            ChatChanges.Record(this, change); // for the editor's margin
         }
 
         this.currentAssistant = null;

@@ -280,6 +280,7 @@ internal sealed partial class ClaudeChatViewModel
 
         this.DisposeEngine();
         this.Messages.Clear();
+        ChatChanges.Forget(this);
         this.SetTasks([]);
         foreach (SavedEntry e in entries)
         {

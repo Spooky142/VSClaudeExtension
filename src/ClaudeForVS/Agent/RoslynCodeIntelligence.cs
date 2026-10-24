@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Rename;
@@ -28,7 +29,11 @@ internal sealed record EnclosingMember(string Name, string Kind, int StartLine, 
 /// <see cref="ICodeIntelligence"/> on Roslyn. Takes the solution from a function, so Visual Studio supplies its live
 /// workspace and tests supply an in-memory one.
 /// </summary>
-internal sealed class RoslynCodeIntelligence(Func<Solution> solution) : ICodeIntelligence
+/// <param name="hostFixers">
+/// The code fixes the host itself offers for a language (Visual Studio's light bulb fixes, such as adding a using);
+/// the fixes in the projects' analyzer packages are found without it.
+/// </param>
+internal sealed partial class RoslynCodeIntelligence(Func<Solution> solution, Func<string, IReadOnlyList<CodeFixProvider>>? hostFixers = null) : ICodeIntelligence
 {
     private const int MaxLineChars = 200;
 
@@ -54,6 +59,8 @@ internal sealed class RoslynCodeIntelligence(Func<Solution> solution) : ICodeInt
         kindOptions: SymbolDisplayKindOptions.IncludeTypeKeyword,
         parameterOptions: SymbolDisplayParameterOptions.IncludeType | SymbolDisplayParameterOptions.IncludeName,
         miscellaneousOptions: SymbolDisplayMiscellaneousOptions.UseSpecialTypes | SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
+
+    private IReadOnlyList<CodeFixProvider> HostFixers(string language) => hostFixers?.Invoke(language) ?? [];
 
     public async Task<string> GoToDefinitionAsync(CodeSite site, string repoRoot, Func<string, bool> canRead, CancellationToken cancellationToken)
     {

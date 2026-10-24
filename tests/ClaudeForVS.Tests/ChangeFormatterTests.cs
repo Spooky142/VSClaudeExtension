@@ -242,5 +242,9 @@ public sealed class ChangeFormatterTests : IDisposable
         public Task<string> OutlineAsync(string fullPath, string repoRoot, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<RenamePlan> PlanRenameAsync(CodeSite site, string newName, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<string> GetCodeFixesAsync(string fullPath, int line, string diagnosticId, string repoRoot, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<CodeFixPlan> PlanCodeFixAsync(string fullPath, int line, string diagnosticId, string fixTitle, string repoRoot, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

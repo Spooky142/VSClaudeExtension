@@ -11,8 +11,10 @@ using System.Windows.Threading;
 using ClaudeForVS.Agent;
 using ClaudeForVS.Git;
 using ClaudeForVS.Markdown;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 
 namespace ClaudeForVS.ToolWindows;
 
@@ -49,6 +51,10 @@ public partial class ClaudeChatControl : UserControl
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             this.package.Vs.RequestAttention(message);
+            if (this.viewModel.Settings.ShowNotifications && (!VsIntegration.IsActive() || !this.IsChatOnScreen()))
+            {
+                this.package.Notifier.Show(this.Pane.Caption, message, this.BringChatToFront);
+            }
         };
         this.viewModel.LowPriorityOffered += (_, offer) => this.package.JoinableTaskFactory.RunAsync(async () =>
         {
@@ -352,6 +358,31 @@ public partial class ClaudeChatControl : UserControl
     }
 
     private static string WorkText(string status) => status.Length > 0 ? status : "Working…";
+
+    /// <summary>False when the chat window is hidden: closed, auto-hidden, or behind another tab.</summary>
+    private bool IsChatOnScreen()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        return this.Pane.Frame is not IVsWindowFrame frame || (ErrorHandler.Succeeded(frame.IsOnScreen(out int onScreen)) && onScreen != 0);
+    }
+
+    /// <summary>Brings Visual Studio to the front with this chat window showing, for a click on a notification.</summary>
+    private void BringChatToFront()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (Application.Current?.MainWindow is Window main)
+        {
+            if (main.WindowState == WindowState.Minimized)
+            {
+                main.WindowState = WindowState.Normal;
+            }
+
+            main.Activate();
+        }
+
+        (this.Pane.Frame as IVsWindowFrame)?.Show();
+        this.PromptBox.Focus();
+    }
 
     private void RefreshEditorContext()
     {
@@ -700,9 +731,13 @@ public partial class ClaudeChatControl : UserControl
             menu.Items.Add(item);
         }
 
+        Item("Fix the build", "/fix-build", "Build the solution, fix the errors and build again until it succeeds");
         Item("Resolve merge conflicts", "/conflicts", "Resolve the conflicts from the current merge, rebase or cherry-pick, without staging or committing");
         Item("Review staged changes", "/review-staged", "Review only what's staged in git, without changing any files");
-        Item("Write a commit message", "/commit-message", "A very short commit message for your changes, in Markdown");
+        Item("Review this branch", "/review-branch", "Review every change on this branch since it left its base branch, without changing any files");
+        Item("Write a commit message", "/commit-message", "A very short commit message for your changes, in plain text");
+        Item("Write a pull request message", "/pr-message", "A very short pull request message for this branch, in Markdown");
+        Item("What came in with my last pull", "/pulled", "Summarize the commits your last pull brought in and what they might affect");
         menu.IsOpen = true;
     }
 

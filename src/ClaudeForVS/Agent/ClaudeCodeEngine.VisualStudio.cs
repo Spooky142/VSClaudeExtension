@@ -56,8 +56,18 @@ internal sealed partial class ClaudeCodeEngine
             case "find_symbols":
                 return (await CodeTools.FindSymbolsAsync(CodeTools.ToDictionary(input), new RepoFiles(this.RepoRoot), this.RepoRoot, _ => true, cancellationToken).ConfigureAwait(false), false);
 
+            case "get_active_document":
+                ActiveDocument? active = await vs.GetActiveDocumentAsync(cancellationToken).ConfigureAwait(false);
+                return (ActiveDocumentReport.Format(active, this.RepoRoot, _ => true), false);
+
             case "rename_symbol":
                 return await this.RenameSymbolAsync(CodeTools.ToDictionary(input), cancellationToken).ConfigureAwait(false);
+
+            case "get_code_fixes":
+                return (await CodeTools.GetCodeFixesAsync(CodeTools.ToDictionary(input), new RepoFiles(this.RepoRoot), this.RepoRoot, cancellationToken).ConfigureAwait(false), false);
+
+            case "apply_code_fix":
+                return await this.ApplyCodeFixAsync(CodeTools.ToDictionary(input), cancellationToken).ConfigureAwait(false);
 
             case "list_packages":
                 return (await PackageTools.ListAsync(CodeTools.ToDictionary(input), this.RepoRoot, cancellationToken).ConfigureAwait(false), false);
@@ -81,40 +91,9 @@ internal sealed partial class ClaudeCodeEngine
     {
         var repoFiles = new RepoFiles(this.RepoRoot);
         RenamePlan plan = await CodeTools.PlanRenameAsync(input, repoFiles, this.RepoRoot, cancellationToken).ConfigureAwait(false);
-        string title = CodeTools.Title(plan);
-        IChatSink? chatSink = this.sink;
-
-        if (this.Mode != AgentMode.Auto && !this.editsPreApproved)
+        if (await this.ApproveChangesAsync(CodeTools.Title(plan), CodeTools.Describe(plan, this.RepoRoot), cancellationToken).ConfigureAwait(false) is string refused)
         {
-            if (chatSink is null)
-            {
-                return ("No one is available to approve this.", true);
-            }
-
-            await this.approvalGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-                chatSink.SetStatus("Waiting for your approval…");
-                ApprovalResult result = await chatSink.RequestApprovalAsync(ActivityKind.Edit, title, CodeTools.Describe(plan, this.RepoRoot), "Allow all edits", cancellationToken);
-                if (result.Decision == Approval.Deny)
-                {
-                    return ("The user declined this rename. Don't retry it; ask what they'd like instead.", true);
-                }
-
-                if (result.Decision == Approval.AllowAll)
-                {
-                    this.editsPreApproved = true;
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                return ("Cancelled by the user.", true);
-            }
-            finally
-            {
-                this.approvalGate.Release();
-            }
+            return (refused.Length > 0 ? refused : "The user declined this rename. Don't retry it; ask what they'd like instead.", true);
         }
 
         // Writing checks for unsaved editor changes, which Visual Studio only answers on its main thread.
@@ -122,10 +101,80 @@ internal sealed partial class ClaudeCodeEngine
         IReadOnlyList<FileChange> changes = CodeTools.ApplyRename(plan, repoFiles, this.RepoRoot);
         foreach (FileChange change in changes)
         {
-            chatSink?.ToolActivity(ActivityKind.Edit, $"Renamed in {this.Relative(change.FullPath)}", UnifiedDiff.Create(change.Before, change.After), change);
+            this.sink?.ToolActivity(ActivityKind.Edit, $"Renamed in {this.Relative(change.FullPath)}", UnifiedDiff.Create(change.Before, change.After), change);
         }
 
         return ($"Renamed {plan.Symbol} to {plan.NewName} in {string.Join(", ", changes.Select(c => this.Relative(c.FullPath)))}. Check the result with get_diagnostics or build_solution.", false);
+    }
+
+    /// <summary>apply_code_fix for Claude Code: works the fix out, shows every file's changes in one approval, then writes them.</summary>
+    private async Task<(string Text, bool IsError)> ApplyCodeFixAsync(IReadOnlyDictionary<string, JsonElement> input, CancellationToken cancellationToken)
+    {
+        var repoFiles = new RepoFiles(this.RepoRoot);
+        CodeFixPlan plan = await CodeTools.PlanCodeFixAsync(input, repoFiles, this.RepoRoot, cancellationToken).ConfigureAwait(false);
+        if (await this.ApproveChangesAsync(CodeTools.Title(plan), CodeTools.Describe(plan, this.RepoRoot), cancellationToken).ConfigureAwait(false) is string refused)
+        {
+            return (refused.Length > 0 ? refused : "The user declined this code fix. Don't retry it; ask what they'd like instead.", true);
+        }
+
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        IReadOnlyList<FileChange> changes = CodeTools.ApplyCodeFix(plan, repoFiles, this.RepoRoot);
+        foreach (FileChange change in changes)
+        {
+            bool created = change.Before.Length == 0;
+            this.sink?.ToolActivity(
+                created ? ActivityKind.Create : ActivityKind.Edit,
+                $"{plan.Fix} in {this.Relative(change.FullPath)}",
+                created ? change.After : UnifiedDiff.Create(change.Before, change.After),
+                change);
+        }
+
+        return ($"Applied \"{plan.Fix}\" ({plan.Diagnostic}) to {string.Join(", ", changes.Select(c => this.Relative(c.FullPath)))}. Check the result with get_diagnostics or build_solution.", false);
+    }
+
+    /// <summary>
+    /// Asks the user to approve changes to several files at once, unless edits need no approval. Returns null to go
+    /// ahead; otherwise why not (empty when the user declined).
+    /// </summary>
+    private async Task<string?> ApproveChangesAsync(string title, string detail, CancellationToken cancellationToken)
+    {
+        IChatSink? chatSink = this.sink;
+        if (this.Mode == AgentMode.Auto || this.editsPreApproved)
+        {
+            return null;
+        }
+
+        if (chatSink is null)
+        {
+            return "No one is available to approve this.";
+        }
+
+        await this.approvalGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            chatSink.SetStatus("Waiting for your approval…");
+            ApprovalResult result = await chatSink.RequestApprovalAsync(ActivityKind.Edit, title, detail, "Allow all edits", cancellationToken);
+            if (result.Decision == Approval.Deny)
+            {
+                return string.Empty;
+            }
+
+            if (result.Decision == Approval.AllowAll)
+            {
+                this.editsPreApproved = true;
+            }
+
+            return null;
+        }
+        catch (OperationCanceledException)
+        {
+            return "Cancelled by the user.";
+        }
+        finally
+        {
+            this.approvalGate.Release();
+        }
     }
 
     /// <summary>The approval card's title for add_package or remove_package.</summary>

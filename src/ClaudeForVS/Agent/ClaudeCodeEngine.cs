@@ -26,7 +26,10 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
         "The " + ApprovalServer.DiagnosticsTool + " tool lists Visual Studio's Error List (build errors and live IntelliSense errors in open files); " +
         "check it after changing code. " + ApprovalServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
         "projects `dotnet build` can't build. " + ApprovalServer.DebugTool + " reads Visual Studio's debugger (the exception, call stack and locals when the " +
-        "user has paused at a breakpoint or exception). " + ApprovalServer.DefinitionTool + ", " + ApprovalServer.ReferencesTool + " and " + ApprovalServer.SymbolsTool +
+        "user has paused at a breakpoint or exception). " + ApprovalServer.ActiveDocumentTool + " shows the file, caret line and selection the user " +
+        "has in the editor; use it when they say \"this\" or \"here\" without naming a file. " + ApprovalServer.CodeFixesTool + " lists the light bulb's " +
+        "fixes for a line's errors and warnings, and " + ApprovalServer.ApplyCodeFixTool + " applies one; prefer them to hand edits for things like " +
+        "missing usings or unimplemented interface members. " + ApprovalServer.DefinitionTool + ", " + ApprovalServer.ReferencesTool + " and " + ApprovalServer.SymbolsTool +
         " use Visual Studio's code model (Roslyn) for C# and Visual Basic, which knows what a name really refers to; prefer them to grep for " +
         "\"where is this declared\" or \"what calls this\", and " + ApprovalServer.RenameTool + " to rename a symbol everywhere with one approval. " +
         ApprovalServer.ListPackagesTool + ", " + ApprovalServer.AddPackageTool + " and " + ApprovalServer.RemovePackageTool + " manage NuGet packages " +
@@ -83,7 +86,9 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
         {
             mcpServers = new Dictionary<string, object>
             {
-                [ApprovalServer.ServerName] = new { type = "http", url = this.approvalServer.Url },
+                // Claude Code gives up on a call to an HTTP server that's quiet for 5 minutes, and the approval tool is
+                // quiet for as long as an approval or question waits for the user. The server's own timeout raises that.
+                [ApprovalServer.ServerName] = new { type = "http", url = this.approvalServer.Url, timeout = ApprovalServer.CallTimeoutMilliseconds },
             },
         }));
     }

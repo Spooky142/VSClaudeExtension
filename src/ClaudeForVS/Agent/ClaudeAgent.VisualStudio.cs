@@ -56,6 +56,16 @@ internal sealed partial class ClaudeAgent
         return result;
     }
 
+    private async Task<string> GetActiveDocumentAsync(IChatSink sink, CancellationToken cancellationToken)
+    {
+        IVisualStudioHost vs = VisualStudioHost.Current ?? throw new ToolInputException("Visual Studio's editor isn't available.");
+        sink.SetStatus("Looking at the editor…");
+        ActiveDocument? document = await vs.GetActiveDocumentAsync(cancellationToken);
+        string result = ActiveDocumentReport.Format(document, this.RepoRoot, this.CanShow);
+        sink.ToolActivity(ActivityKind.Search, document is null ? "Looked at the editor" : $"Looked at {Path.GetFileName(document.FullPath)} in the editor", result);
+        return result;
+    }
+
     private async Task<string> BuildSolutionAsync(IChatSink sink, CancellationToken cancellationToken)
     {
         const string Title = "Build the solution in Visual Studio";

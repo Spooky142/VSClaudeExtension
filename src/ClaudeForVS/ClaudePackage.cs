@@ -39,6 +39,7 @@ public sealed class ClaudePackage : AsyncPackage
     private const int AddToClaudeCommandId = 0x0108;
     private const int WriteCommitMessageCommandId = 0x0109;
     private const int AskAboutDebugStateCommandId = 0x010A;
+    private const int EditInlineCommandId = 0x010B;
 
     // Chat windows beyond this many are refused; each one can run its own Claude.
     private const int MaxChatWindows = 20;
@@ -126,6 +127,9 @@ public sealed class ClaudePackage : AsyncPackage
     /// <summary>The editor, Error List, diff viewer and main window. Available once the package has initialized.</summary>
     internal VsIntegration Vs { get; private set; } = null!;
 
+    /// <summary>Windows notifications for every chat window: one notification area icon between them.</summary>
+    internal DesktopNotifier Notifier { get; } = new();
+
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
@@ -163,6 +167,9 @@ public sealed class ClaudePackage : AsyncPackage
 
             // The debugger's state is read before the chat takes focus, as the user may be about to step.
             this.AddCommand(commands, AskAboutDebugStateCommandId, () => this.Vs.GetDebugState(), (chat, state) => chat.AskAboutDebugState(state));
+
+            // Edits in the editor itself; the chat window isn't involved.
+            commands.AddCommand(new MenuCommand((_, _) => this.EditInline(), new CommandID(CommandSet, EditInlineCommandId)));
         }
 
         this.solution = await this.GetServiceAsync(typeof(SVsSolution)) as IVsSolution;
@@ -189,6 +196,24 @@ public sealed class ClaudePackage : AsyncPackage
                 }).Task.FileAndForget("ClaudeForVS/Command");
             },
             new CommandID(CommandSet, id)));
+    }
+
+    /// <summary>Edit with Claude (Alt+/): asks what to change at the caret and edits the code in place.</summary>
+    private void EditInline()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.Vs.GetActiveTextView() is not (Microsoft.VisualStudio.Text.Editor.IWpfTextView view, string path))
+        {
+            this.Vs.RequestAttention("Put the caret in a code file to edit it with Claude.");
+            return;
+        }
+
+        // The repository and settings of the chat used last, as the chat would edit with them; else the file's own repository.
+        string repoRoot = this.LastActiveChat?.ViewModel.RepoRoot is string chatRoot && path.StartsWith(chatRoot, StringComparison.OrdinalIgnoreCase)
+            ? chatRoot
+            : Git.GitRunner.FindRepoRoot(System.IO.Path.GetDirectoryName(path)) ?? System.IO.Path.GetDirectoryName(path)!;
+        Agent.AgentSettings settings = this.LastActiveChat?.ViewModel.Settings ?? Agent.AgentSettings.Load();
+        this.JoinableTaskFactory.RunAsync(() => Editor.InlineEditSession.StartAsync(view, path, repoRoot, settings)).Task.FileAndForget("ClaudeForVS/EditInline");
     }
 
     /// <summary>Shows the chat window used most recently (the first one if none has been used yet) and returns its chat.</summary>
@@ -318,6 +343,11 @@ public sealed class ClaudePackage : AsyncPackage
         {
             this.solution.UnadviseSolutionEvents(this.solutionEventsCookie);
             this.solutionEventsCookie = 0;
+        }
+
+        if (disposing)
+        {
+            this.Notifier.Dispose();
         }
 
         base.Dispose(disposing);

@@ -155,6 +155,13 @@
     <TextBlock Style="{StaticResource CardNote}" Margin="22,2,0,0"
                Text="When Claude finishes a reply, the lines it changed in C# and Visual Basic files are formatted by Visual Studio's formatter using your .editorconfig. Lines it didn't touch, and files with unsaved changes, are left as they are." />
 
+    <!-- Telling the user when Claude needs them -->
+    <TextBlock Style="{StaticResource SectionTitle}" Text="Notifications" />
+    <CheckBox x:Name="NotificationsBox" Content="Show a Windows notification when Claude needs me or finishes"
+              AutomationProperties.Name="Show a Windows notification when Claude needs me or finishes" />
+    <TextBlock Style="{StaticResource CardNote}" Margin="22,2,0,0"
+               Text="Only while Visual Studio isn't in front or the chat window is hidden. Click the notification to go back to the chat. The status bar and the flashing taskbar button tell you either way." />
+
     <!-- Commands remembered with "Always allow" on the approval card, for the repository above -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Always-allowed commands" />
     <ItemsControl x:Name="AllowedCommandsList">

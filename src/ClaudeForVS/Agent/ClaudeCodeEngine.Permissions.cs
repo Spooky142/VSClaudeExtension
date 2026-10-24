@@ -38,17 +38,17 @@ internal sealed partial class ClaudeCodeEngine
     private async Task<PermissionDecision> DecideCoreAsync(string toolName, JsonElement input, string? toolUseId)
     {
         // Reading the Error List, the debugger, the code model or the package list never needs asking; a build is treated like a command.
-        if (toolName is ApprovalServer.DiagnosticsTool or ApprovalServer.DebugTool or ApprovalServer.DefinitionTool or ApprovalServer.ReferencesTool
-            or ApprovalServer.SymbolsTool or ApprovalServer.ListPackagesTool)
+        if (toolName is ApprovalServer.DiagnosticsTool or ApprovalServer.DebugTool or ApprovalServer.ActiveDocumentTool or ApprovalServer.CodeFixesTool
+            or ApprovalServer.DefinitionTool or ApprovalServer.ReferencesTool or ApprovalServer.SymbolsTool or ApprovalServer.ListPackagesTool)
         {
             return new PermissionDecision(true);
         }
 
-        // A rename asks for approval itself, once its changes are known and shown together.
-        if (toolName == ApprovalServer.RenameTool)
+        // A rename or code fix asks for approval itself, once its changes are known and shown together.
+        if (toolName is ApprovalServer.RenameTool or ApprovalServer.ApplyCodeFixTool)
         {
             return this.Mode == AgentMode.Plan
-                ? new PermissionDecision(false, "Plan mode is on, so nothing can be renamed. Describe the rename as text instead; the user can switch modes in Settings.")
+                ? new PermissionDecision(false, "Plan mode is on, so no files can be changed. Describe the change as text instead; the user can switch modes in Settings.")
                 : new PermissionDecision(true);
         }
 

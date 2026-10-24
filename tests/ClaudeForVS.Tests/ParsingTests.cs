@@ -169,9 +169,17 @@ public class SlashCommandTests
         Assert.Equal(new SlashCommand("/review-staged", "tests"), SlashCommands.Parse("/review-staged tests"));
         Assert.Equal(new SlashCommand("/conflicts", string.Empty), SlashCommands.Parse("/Conflicts"));
         Assert.Equal(new SlashCommand("/commit-message", string.Empty), SlashCommands.Parse("/commit-message"));
+        Assert.Equal(new SlashCommand("/review-branch", "security"), SlashCommands.Parse("/review-branch security"));
+        Assert.Equal(new SlashCommand("/pr-message", string.Empty), SlashCommands.Parse("/PR-Message"));
+        Assert.Equal(new SlashCommand("/pulled", string.Empty), SlashCommands.Parse("/pulled"));
+        Assert.Equal(new SlashCommand("/fix-build", string.Empty), SlashCommands.Parse("/fix-build"));
+        Assert.Contains("build_solution", SlashCommands.FixBuildPrompt);
         Assert.Contains("git diff --cached", SlashCommands.ReviewStagedPrompt(string.Empty));
         Assert.EndsWith("Focus on: tests", SlashCommands.ReviewStagedPrompt("tests"));
-        Assert.Equal(["/review ", "/review-staged "], SlashCommands.Suggest("/rev").Select(s => s.Insert));
+        Assert.Contains("git merge-base", SlashCommands.ReviewBranchPrompt(string.Empty));
+        Assert.EndsWith("Focus on: security", SlashCommands.ReviewBranchPrompt("security"));
+        Assert.Contains("no Markdown", SlashCommands.CommitMessagePrompt);
+        Assert.Equal(["/review ", "/review-staged ", "/review-branch "], SlashCommands.Suggest("/rev").Select(s => s.Insert));
     }
 
     [Fact]

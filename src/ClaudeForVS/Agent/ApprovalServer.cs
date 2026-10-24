@@ -20,6 +20,9 @@ internal sealed class ApprovalServer : IDisposable
     public const string ServerName = "visualstudio";
     public const string ToolName = "approve";
 
+    /// <summary>How long Claude Code waits for one call (an approval or question the user hasn't answered yet, or a build): 24 hours.</summary>
+    public const int CallTimeoutMilliseconds = 24 * 60 * 60 * 1000;
+
     /// <summary>The name Claude Code knows the tool by.</summary>
     public const string QualifiedToolName = "mcp__" + ServerName + "__" + ToolName;
 
@@ -29,6 +32,12 @@ internal sealed class ApprovalServer : IDisposable
     public const string BuildTool = "mcp__" + ServerName + "__build_solution";
 
     public const string DebugTool = "mcp__" + ServerName + "__get_debug_state";
+
+    public const string ActiveDocumentTool = "mcp__" + ServerName + "__get_active_document";
+
+    public const string CodeFixesTool = "mcp__" + ServerName + "__get_code_fixes";
+
+    public const string ApplyCodeFixTool = "mcp__" + ServerName + "__apply_code_fix";
 
     public const string DefinitionTool = "mcp__" + ServerName + "__go_to_definition";
 
@@ -293,6 +302,55 @@ internal static class VisualStudioTools
                 },
             },
             ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "get_active_document",
+            ["description"] =
+                "See where the user is in Visual Studio's editor: the file they last worked in (and whether it has unsaved changes), the caret's " +
+                "line and column, the lines in view, the selected text, and the other open files. Use it when the user says \"this\", \"here\" or " +
+                "\"the selected code\" without naming a file.",
+            ["inputSchema"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() },
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "get_code_fixes",
+            ["description"] =
+                "List the compiler errors and warnings (and those from the project's analyzer packages) on a line of a C# or Visual Basic file, " +
+                "with the fixes Visual Studio's light bulb offers for each, e.g. adding a missing using, implementing an interface or generating a " +
+                "method. Then apply one with apply_code_fix instead of editing by hand.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["path"] = new JsonObject { ["type"] = "string", ["description"] = "The file, relative to the repository root." },
+                    ["line"] = new JsonObject { ["type"] = "integer", ["description"] = "The line (1-based) with the problem." },
+                    ["diagnostic"] = new JsonObject { ["type"] = "string", ["description"] = "Only this diagnostic ID, e.g. \"CS0246\". Default: every one on the line." },
+                },
+                ["required"] = new JsonArray("path", "line"),
+            },
+            ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
+        },
+        new JsonObject
+        {
+            ["name"] = "apply_code_fix",
+            ["description"] =
+                "Apply one of the fixes get_code_fixes listed, the way choosing it from Visual Studio's light bulb does. The user approves the " +
+                "changes to every file at once.",
+            ["inputSchema"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["path"] = new JsonObject { ["type"] = "string", ["description"] = "The file, relative to the repository root." },
+                    ["line"] = new JsonObject { ["type"] = "integer", ["description"] = "The line (1-based) with the problem." },
+                    ["diagnostic"] = new JsonObject { ["type"] = "string", ["description"] = "The diagnostic ID the fix is for, e.g. \"CS0246\"." },
+                    ["fix"] = new JsonObject { ["type"] = "string", ["description"] = "The fix's title exactly as get_code_fixes listed it." },
+                },
+                ["required"] = new JsonArray("path", "line", "diagnostic", "fix"),
+            },
         },
         new JsonObject
         {

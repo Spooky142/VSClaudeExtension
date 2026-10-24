@@ -102,6 +102,25 @@ internal sealed class VsIntegration : IVisualStudioHost
         }
     }
 
+    /// <summary>The code editor used last and the file in it; null when it isn't a file's editor.</summary>
+    public (Microsoft.VisualStudio.Text.Editor.IWpfTextView View, string FullPath)? GetActiveTextView()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.services.GetService(typeof(Microsoft.VisualStudio.TextManager.Interop.SVsTextManager)) is not Microsoft.VisualStudio.TextManager.Interop.IVsTextManager manager
+            || ErrorHandler.Failed(manager.GetActiveView(0, null, out Microsoft.VisualStudio.TextManager.Interop.IVsTextView vsView)) || vsView is null
+            || this.services.GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel)) is not Microsoft.VisualStudio.ComponentModelHost.IComponentModel components)
+        {
+            return null;
+        }
+
+        Microsoft.VisualStudio.Text.Editor.IWpfTextView? view = components.GetService<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>().GetWpfTextView(vsView);
+        return view != null
+            && components.GetService<Microsoft.VisualStudio.Text.ITextDocumentFactoryService>().TryGetTextDocument(view.TextDataModel.DocumentBuffer, out Microsoft.VisualStudio.Text.ITextDocument document)
+            && !string.IsNullOrEmpty(document.FilePath)
+            ? (view, document.FilePath)
+            : null;
+    }
+
     /// <summary>Opens a file in the editor with the caret on the given line (1-based; 0 leaves it where it was).</summary>
     public bool OpenFile(string fullPath, int line, int endLine = 0)
     {
@@ -331,6 +350,52 @@ internal sealed class VsIntegration : IVisualStudioHost
         }
 
         return result;
+    }
+
+    public async System.Threading.Tasks.Task<ActiveDocument?> GetActiveDocumentAsync(System.Threading.CancellationToken cancellationToken)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        if (this.GetEditorContext() is not EditorContext editor)
+        {
+            return null;
+        }
+
+        int caretLine = editor.StartLine;
+        int caretColumn = 1;
+        try
+        {
+            if (this.Dte?.ActiveDocument?.Selection is TextSelection selection)
+            {
+                caretLine = selection.ActivePoint.Line;
+                caretColumn = selection.ActivePoint.DisplayColumn;
+            }
+        }
+        catch (COMException)
+        {
+        }
+
+        // The lines scrolled into view, from the editor view that was last active (the one the document is shown in).
+        int first = 0, last = 0;
+        if (this.services.GetService(typeof(Microsoft.VisualStudio.TextManager.Interop.SVsTextManager)) is Microsoft.VisualStudio.TextManager.Interop.IVsTextManager manager
+            && ErrorHandler.Succeeded(manager.GetActiveView(0, null, out Microsoft.VisualStudio.TextManager.Interop.IVsTextView view)) && view != null
+            && ErrorHandler.Succeeded(view.GetScrollInfo(1, out _, out _, out int visible, out int top)))
+        {
+            first = top + 1;
+            last = top + Math.Max(1, visible);
+        }
+
+        IReadOnlyList<(string Path, bool Unsaved)> open = this.GetOpenDocuments();
+        return new ActiveDocument(
+            editor.FullPath,
+            open.Any(d => string.Equals(d.Path, editor.FullPath, StringComparison.OrdinalIgnoreCase) && d.Unsaved),
+            caretLine,
+            caretColumn,
+            first,
+            last,
+            editor.StartLine,
+            editor.EndLine,
+            editor.SelectedText,
+            open.Select(d => (d.Path, d.Unsaved)).ToList());
     }
 
     public async System.Threading.Tasks.Task<DebugState> GetDebugStateAsync(System.Threading.CancellationToken cancellationToken)

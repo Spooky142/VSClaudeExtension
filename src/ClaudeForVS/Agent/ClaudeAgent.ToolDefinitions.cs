@@ -166,6 +166,16 @@ internal sealed partial class ClaudeAgent
         },
         new Tool
         {
+            Name = "get_active_document",
+            Description =
+                "See where the user is in Visual Studio's editor: the file they last worked in (and whether it has unsaved " +
+                "changes), the caret's line and column, the lines in view, the selected text, and the other open files. " +
+                "Use it when the user says \"this\", \"here\" or \"the selected code\" without naming a file.",
+            InputSchema = new() { Properties = new Dictionary<string, JsonElement>() },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
             Name = "build_solution",
             Description =
                 "Build the solution open in Visual Studio (Build > Build Solution) and wait for it to finish, then return " +
@@ -246,6 +256,45 @@ internal sealed partial class ClaudeAgent
                     ["new_name"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The new name: an identifier, without a namespace or type in front." }),
                 },
                 Required = ["path", "line", "symbol", "new_name"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "get_code_fixes",
+            Description =
+                "List the compiler errors and warnings (and those from the project's analyzer packages) on a line of a C# " +
+                "or Visual Basic file, with the fixes Visual Studio's light bulb offers for each: adding a missing using, " +
+                "implementing an interface, generating a method, and so on. Then apply one with apply_code_fix, which is " +
+                "quicker and more reliable than editing by hand.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The file, relative to the repository root." }),
+                    ["line"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "The line (1-based) with the problem, e.g. from get_diagnostics." }),
+                    ["diagnostic"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Only this diagnostic ID, e.g. \"CS0246\". Default: every one on the line." }),
+                },
+                Required = ["path", "line"],
+            },
+            EagerInputStreaming = true,
+        },
+        new Tool
+        {
+            Name = "apply_code_fix",
+            Description =
+                "Apply one of the fixes get_code_fixes listed, the way choosing it from Visual Studio's light bulb does. " +
+                "The user approves the changes to every file at once. Check the result with get_diagnostics afterwards.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The file, relative to the repository root." }),
+                    ["line"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "The line (1-based) with the problem." }),
+                    ["diagnostic"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The diagnostic ID the fix is for, e.g. \"CS0246\"." }),
+                    ["fix"] = JsonSerializer.SerializeToElement(new { type = "string", description = "The fix's title exactly as get_code_fixes listed it." }),
+                },
+                Required = ["path", "line", "diagnostic", "fix"],
             },
             EagerInputStreaming = true,
         },

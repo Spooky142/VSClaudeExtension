@@ -66,6 +66,14 @@
         </Strings>
       </Button>
 
+      <Button guid="guidClaudeCmdSet" id="EditInlineCommandId" priority="0x0050" type="Button">
+        <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
+        <Strings>
+          <ButtonText>Edit with Claude Here</ButtonText>
+          <CanonicalName>Edit.EditWithClaude</CanonicalName>
+          <LocCanonicalName>Edit.EditWithClaude</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidClaudeCmdSet" id="AskAboutSelectionCommandId" priority="0x0100" type="Button">
         <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
         <Strings>
@@ -160,6 +168,9 @@
   <KeyBindings>
     <!-- Opens (or focuses) the chat from anywhere. Rebind in Tools > Options > Environment > Keyboard ("Tools.ClaudeChat"). -->
     <KeyBinding guid="guidClaudeCmdSet" id="ShowClaudeWindowCommandId" editor="guidVSStd97" key1="C" mod1="Control Shift Alt" />
+
+    <!-- Alt+/ in the code editor: edit the code at the caret in place ("Edit.EditWithClaude"). -->
+    <KeyBinding guid="guidClaudeCmdSet" id="EditInlineCommandId" editor="guidTextEditor" key1="VK_OEM_2" mod1="Alt" />
   </KeyBindings>
 
   <Symbols>
@@ -186,7 +197,11 @@
       <IDSymbol name="AddToClaudeCommandId" value="0x0108" />
       <IDSymbol name="WriteCommitMessageCommandId" value="0x0109" />
       <IDSymbol name="AskAboutDebugStateCommandId" value="0x010A" />
+      <IDSymbol name="EditInlineCommandId" value="0x010B" />
     </GuidSymbol>
+
+    <!-- The code editor's key binding scope. -->
+    <GuidSymbol name="guidTextEditor" value="{8B382828-6202-11d1-8870-0000F87579D2}" />
 
     <!-- Test Explorer's command set and context menu. -->
     <GuidSymbol name="guidTestExplorerCmdSet" value="{1e198c22-5980-4e7e-92f3-f73168d1fb63}">

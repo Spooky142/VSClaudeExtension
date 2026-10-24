@@ -27,6 +27,98 @@ internal interface IVisualStudioHost
 
     /// <summary>Whether the debugger is paused, and if so the exception, call stack and locals.</summary>
     Task<DebugState> GetDebugStateAsync(CancellationToken cancellationToken);
+
+    /// <summary>The document the user last worked in, where the caret is and what's selected; null when no text document is open.</summary>
+    Task<ActiveDocument?> GetActiveDocumentAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>The document in the code editor and where the user is in it.</summary>
+/// <param name="CaretLine">1-based, like the other lines here.</param>
+/// <param name="FirstVisibleLine">The first line scrolled into view; 0 if unknown.</param>
+/// <param name="SelectedText">Empty when nothing is selected.</param>
+/// <param name="OtherOpenFiles">The other documents open in the editor, and whether each has unsaved changes.</param>
+internal sealed record ActiveDocument(
+    string FullPath,
+    bool HasUnsavedChanges,
+    int CaretLine,
+    int CaretColumn,
+    int FirstVisibleLine,
+    int LastVisibleLine,
+    int SelectionStartLine,
+    int SelectionEndLine,
+    string SelectedText,
+    IReadOnlyList<(string FullPath, bool Unsaved)> OtherOpenFiles);
+
+/// <summary>Formats the active document for Claude.</summary>
+internal static class ActiveDocumentReport
+{
+    public const int MaxSelectionChars = 8_000;
+    private const int MaxOtherFiles = 30;
+
+    /// <param name="canShow">Whether a file's text may be shown (the user's permission rules); the selection is left out otherwise.</param>
+    public static string Format(ActiveDocument? document, string repoRoot, Func<string, bool> canShow)
+    {
+        if (document is null)
+        {
+            return "No text document is open in Visual Studio's editor.";
+        }
+
+        var sb = new StringBuilder();
+        sb.Append($"Active document: {Shown(document.FullPath, repoRoot)}{(document.HasUnsavedChanges ? " (unsaved changes; read_file shows the saved copy)" : string.Empty)}\n");
+        sb.Append($"Caret: line {document.CaretLine}, column {document.CaretColumn}\n");
+        if (document.FirstVisibleLine > 0 && document.LastVisibleLine >= document.FirstVisibleLine)
+        {
+            sb.Append($"Visible in the editor: lines {document.FirstVisibleLine}-{document.LastVisibleLine}\n");
+        }
+
+        if (document.SelectedText.Trim().Length > 0)
+        {
+            string lines = document.SelectionStartLine == document.SelectionEndLine
+                ? $"line {document.SelectionStartLine}"
+                : $"lines {document.SelectionStartLine}-{document.SelectionEndLine}";
+            if (!canShow(document.FullPath))
+            {
+                sb.Append($"Selection: {lines} (its text is left out: reading this file is restricted by your permission settings)\n");
+            }
+            else
+            {
+                string text = document.SelectedText.Replace("\r\n", "\n");
+                bool cut = text.Length > MaxSelectionChars;
+                sb.Append($"Selection: {lines}:\n```\n{(cut ? text.Substring(0, MaxSelectionChars) : text).TrimEnd('\n')}\n```\n");
+                if (cut)
+                {
+                    sb.Append($"[The selection is {text.Length:N0} characters; only the first {MaxSelectionChars:N0} are shown. Read the file for the rest.]\n");
+                }
+            }
+        }
+        else
+        {
+            sb.Append("Nothing is selected.\n");
+        }
+
+        List<(string FullPath, bool Unsaved)> others = document.OtherOpenFiles
+            .Where(f => !string.Equals(f.FullPath, document.FullPath, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (others.Count > 0)
+        {
+            sb.Append("Also open: ").Append(string.Join(", ", others.Take(MaxOtherFiles).Select(f => Shown(f.FullPath, repoRoot) + (f.Unsaved ? " (unsaved)" : string.Empty))));
+            if (others.Count > MaxOtherFiles)
+            {
+                sb.Append($" and {others.Count - MaxOtherFiles} more");
+            }
+
+            sb.Append('\n');
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>A path relative to the repository with forward slashes, or the full path for files outside it.</summary>
+    private static string Shown(string fullPath, string repoRoot)
+    {
+        string root = repoRoot.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        return (fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? fullPath.Substring(root.Length) : fullPath).Replace('\\', '/');
+    }
 }
 
 /// <summary>Where the engines find Visual Studio. Null outside Visual Studio (e.g. in tests).</summary>

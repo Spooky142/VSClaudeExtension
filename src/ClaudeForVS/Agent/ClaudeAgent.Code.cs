@@ -95,6 +95,63 @@ internal sealed partial class ClaudeAgent
             "Check the result with get_diagnostics or build_solution.";
     }
 
+    private async Task<string> GetCodeFixesAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        string title = $"Find code fixes for {Described(input, "diagnostic", "the problems")}";
+        if (this.RefuseUnreadable(input, title, sink) is string refusal)
+        {
+            return refusal;
+        }
+
+        sink.SetStatus("Looking for code fixes…");
+        string result = await CodeTools.GetCodeFixesAsync(input, this.files, this.RepoRoot, cancellationToken);
+        sink.ToolActivity(ActivityKind.Search, title, result);
+        return result;
+    }
+
+    private async Task<string> ApplyCodeFixAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
+    {
+        if (this.Mode == AgentMode.Plan)
+        {
+            sink.ToolActivity(ActivityKind.Declined, "Apply a code fix", "Blocked in Plan mode.");
+            return PlanModeRefusal;
+        }
+
+        if (this.RefuseUnreadable(input, "Apply a code fix", sink) is string refusal)
+        {
+            return refusal;
+        }
+
+        sink.SetStatus("Working out the code fix…");
+        CodeFixPlan plan = await CodeTools.PlanCodeFixAsync(input, this.files, this.RepoRoot, cancellationToken);
+        string title = CodeTools.Title(plan);
+        foreach (RenamedFile file in plan.Files.Where(f => !f.IsNew))
+        {
+            ThrowIfUnsaved(file.FullPath, this.files.Relative(file.FullPath));
+        }
+
+        ApprovalResult approval = await this.ApproveEditAsync(
+            ActivityKind.Edit, title, CodeTools.Describe(plan, this.RepoRoot), null, sink, cancellationToken, plan.Files.Select(f => f.FullPath).ToList());
+        if (approval.Decision == Approval.Deny)
+        {
+            sink.ToolActivity(ActivityKind.Declined, title, "Declined by you.");
+            return "The user declined this code fix.";
+        }
+
+        IReadOnlyList<FileChange> changes = CodeTools.ApplyCodeFix(plan, this.files, this.RepoRoot);
+        foreach (FileChange change in changes)
+        {
+            sink.ToolActivity(
+                change.Before.Length == 0 ? ActivityKind.Create : ActivityKind.Edit,
+                $"{plan.Fix} in {this.files.Relative(change.FullPath)}",
+                change.Before.Length == 0 ? change.After : UnifiedDiff.Create(change.Before, change.After),
+                change);
+        }
+
+        return $"Applied \"{plan.Fix}\" ({plan.Diagnostic}) to {string.Join(", ", changes.Select(c => this.files.Relative(c.FullPath)))}. " +
+            "Check the result with get_diagnostics or build_solution.";
+    }
+
     private async Task<string> ListPackagesAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
     {
         sink.SetStatus("Reading the projects' NuGet packages…");
@@ -160,9 +217,9 @@ internal sealed partial class ClaudeAgent
     }
 
     /// <summary>"Total (Report.cs:7)": what a code tool call is about, for its row in the chat.</summary>
-    private static string Described(IReadOnlyDictionary<string, JsonElement> input)
+    private static string Described(IReadOnlyDictionary<string, JsonElement> input, string name = "symbol", string fallback = "a symbol")
     {
-        string symbol = input.TryGetValue("symbol", out JsonElement s) && s.ValueKind == JsonValueKind.String ? s.GetString()! : "a symbol";
+        string symbol = input.TryGetValue(name, out JsonElement s) && s.ValueKind == JsonValueKind.String && s.GetString()!.Length > 0 ? s.GetString()! : fallback;
         string file = input.TryGetValue("path", out JsonElement p) && p.ValueKind == JsonValueKind.String ? Path.GetFileName(p.GetString()!) : string.Empty;
         string line = input.TryGetValue("line", out JsonElement l) && l.ValueKind == JsonValueKind.Number ? ":" + l.GetRawText() : string.Empty;
         return file.Length == 0 ? symbol : $"{symbol} ({file}{line})";
