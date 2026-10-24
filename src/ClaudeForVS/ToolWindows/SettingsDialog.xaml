@@ -174,6 +174,12 @@
     <TextBlock Style="{StaticResource CardNote}" Margin="22,2,0,0"
                Text="Only while Visual Studio isn't in front or the chat window is hidden. Click the notification to go back to the chat. The status bar and the flashing taskbar button tell you either way." />
 
+    <!-- This extension's own updates, from its GitHub releases -->
+    <TextBlock Style="{StaticResource SectionTitle}" Text="Updates" />
+    <CheckBox x:Name="ExtensionUpdatesBox" Content="Check for new versions of this extension"
+              AutomationProperties.Name="Check for new versions of this extension" />
+    <TextBlock x:Name="ExtensionUpdatesHint" Style="{StaticResource CardNote}" Margin="22,2,0,0" />
+
     <!-- Commands remembered with "Always allow" on the approval card, for the repository above -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Always-allowed commands" />
     <ItemsControl x:Name="AllowedCommandsList">

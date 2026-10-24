@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using ClaudeForVS.Agent;
@@ -38,11 +39,22 @@ internal sealed partial class ClaudeChatViewModel
 
     private sealed record CodeUpdate(CodeUpdateState State, string Installed, string Latest, string Detail = "");
 
+    private enum ExtensionUpdateState
+    {
+        Available,
+        Downloading,
+        Installing,
+        Failed,
+    }
+
+    private sealed record ExtensionUpdate(ExtensionUpdateState State, ExtensionRelease Release, string Detail = "");
+
     // Shared by every chat window: one check a day, one update at a time, and a banner dismissed in one window goes from all.
     private static DateTime lastUpdateCheckUtc = DateTime.MinValue;
     private static bool checkingForUpdates;
     private static bool installingUpdate;
     private static CodeUpdate? codeUpdate;
+    private static ExtensionUpdate? extensionUpdate;
     private static readonly HashSet<string> DismissedBanners = new(StringComparer.Ordinal);
 
     public ObservableCollection<NoticeBanner> Banners { get; } = [];
@@ -50,7 +62,7 @@ internal sealed partial class ClaudeChatViewModel
     /// <summary>True when Visual Studio has just started, or a day has passed since the last check, and none is running.</summary>
     public bool UpdateCheckDue => !checkingForUpdates && DateTime.UtcNow - lastUpdateCheckUtc >= UpdateCheckInterval;
 
-    /// <summary>Checks for a newer Claude Code (installing it when no chat is busy) and newer API models. Never throws.</summary>
+    /// <summary>Checks for a newer Claude Code (installing it when no chat is busy), newer API models and a newer version of this extension. Never throws.</summary>
     public async Task CheckForUpdatesAsync()
     {
         if (!this.UpdateCheckDue)
@@ -64,6 +76,7 @@ internal sealed partial class ClaudeChatViewModel
         {
             await CheckApiModelsAsync();
             await CheckClaudeCodeAsync();
+            await CheckExtensionAsync();
         }
         finally
         {
@@ -155,6 +168,48 @@ internal sealed partial class ClaudeChatViewModel
         }
     }
 
+    /// <summary>Asks GitHub whether a newer version of this extension has been released, unless that's turned off.</summary>
+    private static async Task CheckExtensionAsync()
+    {
+        if (!AgentSettings.Load().CheckForExtensionUpdates || extensionUpdate is { State: not ExtensionUpdateState.Available })
+        {
+            return; // or one is already being downloaded or installed
+        }
+
+        if (await ExtensionUpdates.GetLatestAsync(CancellationToken.None) is ExtensionRelease release && ExtensionUpdates.IsNewer(release))
+        {
+            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Available, release));
+        }
+    }
+
+    /// <summary>Downloads the release and opens Visual Studio's installer on it, which finishes once Visual Studio closes.</summary>
+    private static async Task InstallExtensionUpdateAsync(ExtensionRelease release)
+    {
+        if (extensionUpdate is { State: ExtensionUpdateState.Downloading })
+        {
+            return;
+        }
+
+        SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Downloading, release));
+        try
+        {
+            string vsix = await ExtensionUpdates.DownloadAsync(release, CancellationToken.None);
+            ExtensionUpdates.StartInstaller(vsix);
+            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Installing, release));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.IO.IOException
+            or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Failed, release, ex is TaskCanceledException ? "it took too long." : ex.Message));
+        }
+    }
+
+    private static void SetExtensionUpdate(ExtensionUpdate? update)
+    {
+        extensionUpdate = update;
+        RefreshAllBanners();
+    }
+
     private static string LastLine(string output) =>
         output.Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.Length > 0) ?? string.Empty;
 
@@ -225,6 +280,31 @@ internal sealed partial class ClaudeChatViewModel
                     $"Couldn't update Claude Code to {update.Latest}" + (update.Detail.Length > 0 ? ": " + update.Detail : "."),
                     "Try again",
                     () => this.RetryUpdate(update)),
+            });
+        }
+
+        if (extensionUpdate is ExtensionUpdate ours && this.settings.CheckForExtensionUpdates)
+        {
+            ExtensionRelease release = ours.Release;
+            string key = $"extension:{ours.State}:{release.Version}";
+            banners.Add(ours.State switch
+            {
+                ExtensionUpdateState.Available => new NoticeBanner(
+                    key,
+                    $"Claude for VS {release.Version} is available (you have {ExtensionUpdates.InstalledVersion}).",
+                    "Update",
+                    () => _ = InstallExtensionUpdateAsync(release)),
+                ExtensionUpdateState.Downloading => new NoticeBanner(key, $"Downloading Claude for VS {release.Version}…"),
+                ExtensionUpdateState.Installing => new NoticeBanner(
+                    key,
+                    $"Claude for VS {release.Version} is ready. Finish in the installer that opened; it completes once you close Visual Studio.",
+                    "Open again",
+                    () => _ = InstallExtensionUpdateAsync(release)),
+                _ => new NoticeBanner(
+                    key,
+                    $"Couldn't download Claude for VS {release.Version}: {ours.Detail}",
+                    "Try again",
+                    () => _ = InstallExtensionUpdateAsync(release)),
             });
         }
 

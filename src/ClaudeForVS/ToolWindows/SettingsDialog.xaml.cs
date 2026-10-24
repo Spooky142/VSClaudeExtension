@@ -71,6 +71,9 @@ public partial class SettingsDialog : DialogWindow
         this.RunHooksBox.IsChecked = settings.RunHooks;
         this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
         this.NotificationsBox.IsChecked = settings.ShowNotifications;
+        this.ExtensionUpdatesBox.IsChecked = settings.CheckForExtensionUpdates;
+        this.ExtensionUpdatesHint.Text =
+            $"Once a day, looks for a newer release on GitHub ({ExtensionUpdates.Repository}) and offers to install it. You have {ExtensionUpdates.InstalledVersion}.";
         this.NewestModelsBox.IsChecked = settings.UseNewestApiModels;
         this.SpendLimitBox.Text = settings.SpendLimitUsd > 0 ? settings.SpendLimitUsd.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
         this.CompactAtBox.Text = settings.CompactAtTokens > 0 ? (settings.CompactAtTokens / 1000).ToString(System.Globalization.CultureInfo.CurrentCulture) : string.Empty;
@@ -433,6 +436,7 @@ public partial class SettingsDialog : DialogWindow
             RunHooks = this.RunHooksBox.IsChecked == true,
             FormatChangedFiles = this.FormatChangedBox.IsChecked == true,
             ShowNotifications = this.NotificationsBox.IsChecked == true,
+            CheckForExtensionUpdates = this.ExtensionUpdatesBox.IsChecked == true,
             UseNewestApiModels = this.NewestModelsBox.IsChecked == true,
             SpendLimitUsd = double.TryParse(this.SpendLimitBox.Text.Trim().TrimStart('$'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out double limit) && limit > 0 ? limit : 0,
             CompactAtTokens = ParseCompactAt(this.CompactAtBox.Text),

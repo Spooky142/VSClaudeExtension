@@ -112,6 +112,9 @@ internal sealed record AgentSettings
     /// </summary>
     public bool ShowNotifications { get; init; } = true;
 
+    /// <summary>Check this extension's GitHub releases once a day, and offer to install a newer version.</summary>
+    public bool CheckForExtensionUpdates { get; init; } = true;
+
     /// <summary>
     /// The model subagents run on. Null leaves it to the engine: <see cref="DefaultApiSubagentModel"/> on the Claude
     /// API, and Claude Code's own choice (or its CLAUDE_CODE_SUBAGENT_MODEL setting) on Claude Code.
