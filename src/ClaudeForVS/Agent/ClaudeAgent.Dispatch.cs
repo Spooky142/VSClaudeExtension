@@ -21,7 +21,8 @@ internal sealed partial class ClaudeAgent
     /// <summary>Runs one tool call, turning failures into an error result for Claude.</summary>
     private async Task<ToolResultBlockParam> RunToolAsync(ToolUseBlockParam toolUse, IChatSink sink, CancellationToken cancellationToken)
     {
-        if (!this.CanRunInParallel(toolUse))
+        bool changesFiles = this.CanChangeFiles(toolUse);
+        if (changesFiles)
         {
             this.ForgetRepoFiles(); // it may write files (or run something that does)
         }
@@ -48,6 +49,36 @@ internal sealed partial class ClaudeAgent
             sink.ToolActivity(ActivityKind.Failed, $"{toolUse.Name} failed", ex.Message);
             return Error(toolUse.ID, ex.Message);
         }
+        finally
+        {
+            if (changesFiles)
+            {
+                this.ForgetRepoFiles(); // in case a glob or grep (in a subagent, say) listed them while it ran
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tools that may add or remove files, directly or by running something that does, after which the repository's
+    /// files are listed afresh. Hooks can too, but they run around any tool, so they're left to the listing's lifetime.
+    /// </summary>
+    private bool CanChangeFiles(ToolUseBlockParam toolUse)
+    {
+        if (this.mcpTools.TryGetValue(toolUse.Name, out var mcp))
+        {
+            return !mcp.Tool.ReadOnly;
+        }
+
+        return toolUse.Name switch
+        {
+            "edit_file" or "write_file" or "delete_file" or "move_file" or "run_command" or "run_tests" or "build_solution"
+                or "rename_symbol" or "apply_code_fix" or "add_package" or "remove_package" => true,
+            "git" => !(toolUse.Input.TryGetValue("args", out JsonElement args)
+                && args.ValueKind == JsonValueKind.Array
+                && args.EnumerateArray().All(a => a.ValueKind == JsonValueKind.String)
+                && GitRunner.IsReadOnly(args.EnumerateArray().Select(a => a.GetString()!).ToList())),
+            _ => false,
+        };
     }
 
     private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(400);

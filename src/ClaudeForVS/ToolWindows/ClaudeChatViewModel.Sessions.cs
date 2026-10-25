@@ -248,44 +248,64 @@ internal sealed partial class ClaudeChatViewModel
     }
 
     /// <summary>Replaces the current chat with a saved one. The next message continues it.</summary>
-    public void OpenSession(SessionItem item) => this.OpenSession(item, null);
-
-    /// <param name="loaded">The chat's transcript, if it has been read already.</param>
-    private void OpenSession(SessionItem item, List<SavedEntry>? loaded)
+    /// <remarks>The transcript is read on a background thread, so a long chat doesn't hold up Visual Studio while it loads.</remarks>
+    public async Task OpenSessionAsync(SessionItem item)
     {
-        if (this.IsBusy)
+        if (!this.CanOpenSession(item.Info))
         {
-            this.Status = "Stop the running prompt before opening another chat.";
             return;
         }
 
-        SessionInfo info = item.Info;
-        if (Instances.Any(other => other != this && other.chatId == info.Id))
-        {
-            this.Status = "This chat is open in another Claude window.";
-            return;
-        }
-
-        if (!Directory.Exists(info.RepoPath))
-        {
-            this.Status = $"The repository for this chat no longer exists: {info.RepoPath}";
-            return;
-        }
-
-        if ((loaded ?? SessionStore.LoadEntries(info.Id)) is not { } entries)
+        List<SavedEntry>? entries = await Task.Run(() => SessionStore.LoadEntries(item.Info.Id));
+        if (entries is null)
         {
             this.Status = "This chat's saved transcript couldn't be read.";
             return;
         }
 
+        this.ShowSession(item, entries);
+    }
+
+    private bool CanOpenSession(SessionInfo info)
+    {
+        if (this.IsBusy)
+        {
+            this.Status = "Stop the running prompt before opening another chat.";
+            return false;
+        }
+
+        if (Instances.Any(other => other != this && other.chatId == info.Id))
+        {
+            this.Status = "This chat is open in another Claude window.";
+            return false;
+        }
+
+        if (!Directory.Exists(info.RepoPath))
+        {
+            this.Status = $"The repository for this chat no longer exists: {info.RepoPath}";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <param name="entries">The chat's transcript, already read.</param>
+    private void ShowSession(SessionItem item, List<SavedEntry> entries)
+    {
+        SessionInfo info = item.Info;
+        if (!this.CanOpenSession(info)) // checked again: things may have changed while the transcript was read
+        {
+            return;
+        }
+
         this.DisposeEngine();
-        this.Messages.Clear();
         ChatChanges.Forget(this);
         this.SetTasks([]);
-        foreach (SavedEntry e in entries)
-        {
+
+        // Swapped in all at once, so the transcript is laid out once rather than after each entry.
+        this.Messages.ReplaceAll(entries.Select(e =>
             // Chats saved by 0.3.9-0.3.10 kept the token count in the header.
-            this.Messages.Add(e.Kind == ChatEntryKind.Usage && e.Text.Length == 0
+            e.Kind == ChatEntryKind.Usage && e.Text.Length == 0
                 ? new ChatEntry(e.Kind, string.Empty, e.Header)
                 : e.Kind == ChatEntryKind.Tool && e.Files is { Count: > 0 }
                 ? new ChatEntry(ChatEntryKind.Changes, string.Empty) { Files = e.Files, SnapshotBefore = e.SnapshotBefore, SnapshotAfter = e.SnapshotAfter }
@@ -296,8 +316,7 @@ internal sealed partial class ClaudeChatViewModel
                     SnapshotBefore = e.SnapshotBefore,
                     SnapshotAfter = e.SnapshotAfter,
                     IsStarred = e.Starred,
-                });
-        }
+                }).ToList());
 
         this.ResetChatUsage();
         this.chatId = info.Id;
@@ -343,7 +362,7 @@ internal sealed partial class ClaudeChatViewModel
         // Unless something was started (or opened) meanwhile.
         if (last != null && entries != null && this.Messages.Count == 0 && this.engine == null && this.chatId == null)
         {
-            this.OpenSession(new SessionItem(last, isCurrent: false), entries);
+            this.ShowSession(new SessionItem(last, isCurrent: false), entries);
         }
     }
 

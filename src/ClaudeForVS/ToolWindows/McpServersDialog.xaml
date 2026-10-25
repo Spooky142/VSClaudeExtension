@@ -30,7 +30,7 @@
         <ItemsControl.ItemTemplate>
           <DataTemplate>
             <Border Margin="0,0,0,6" Padding="10,8" CornerRadius="8" BorderThickness="1"
-                    BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+                    BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
               <DockPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
                   <Button Style="{StaticResource MiniButton}" Content="Check" Click="OnCheck" Margin="0,0,8,0"
@@ -57,18 +57,18 @@
             </Border>
             <DataTemplate.Triggers>
               <DataTrigger Binding="{Binding State}" Value="Connected">
-                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource AddedGreen}" />
-                <Setter TargetName="Status" Property="Foreground" Value="{StaticResource AddedGreen}" />
+                <Setter TargetName="Dot" Property="Fill" Value="{DynamicResource AddedGreen}" />
+                <Setter TargetName="Status" Property="Foreground" Value="{DynamicResource AddedGreen}" />
               </DataTrigger>
               <DataTrigger Binding="{Binding State}" Value="Failed">
-                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource ErrorRed}" />
-                <Setter TargetName="Status" Property="Foreground" Value="{StaticResource ErrorRed}" />
+                <Setter TargetName="Dot" Property="Fill" Value="{DynamicResource ErrorRed}" />
+                <Setter TargetName="Status" Property="Foreground" Value="{DynamicResource ErrorRed}" />
               </DataTrigger>
               <DataTrigger Binding="{Binding State}" Value="Checking">
-                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource Accent}" />
+                <Setter TargetName="Dot" Property="Fill" Value="{DynamicResource Accent}" />
               </DataTrigger>
               <DataTrigger Binding="{Binding State}" Value="NeedsApproval">
-                <Setter TargetName="Dot" Property="Fill" Value="{StaticResource Amber}" />
+                <Setter TargetName="Dot" Property="Fill" Value="{DynamicResource Amber}" />
               </DataTrigger>
               <DataTrigger Binding="{Binding State}" Value="Off">
                 <Setter TargetName="Dot" Property="Opacity" Value="0.4" />
@@ -80,7 +80,7 @@
     </ScrollViewer>
 
     <Border x:Name="EmptyNote" Padding="12,10" CornerRadius="8" BorderThickness="1" Visibility="Collapsed"
-            BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+            BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
       <TextBlock TextWrapping="Wrap" Style="{StaticResource Muted}"
                  Text="No MCP servers are configured for this repository. Add them with “claude mcp add” in a terminal, or in a .mcp.json file at the root of the repository, then open this window again." />
     </Border>

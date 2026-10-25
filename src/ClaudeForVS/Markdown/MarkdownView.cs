@@ -75,7 +75,11 @@ internal sealed class MarkdownView : RichTextBox
     {
         this.timer.Stop();
         this.lastRender = DateTime.UtcNow;
-        MarkdownRenderer.Update(this.Document, this.Markdown, this.FontSize, this.rendered);
+        using (FileLinks.Using(FileLinks.GetHandler(this)))
+        {
+            MarkdownRenderer.Update(this.Document, this.Markdown, this.FontSize, this.rendered);
+        }
+
         if (this.rendered.ChangedInPlace is Block changed)
         {
             this.blockWidths.Remove(changed); // a streaming code block that grew
@@ -118,6 +122,10 @@ internal sealed class MarkdownView : RichTextBox
             this.fitWidth = null;
             this.blockWidths.Clear();
         }
+        else if (e.Property == FileLinks.HandlerProperty && e.NewValue != null && this.rendered.Items.Count > 0)
+        {
+            this.Rerender(); // rendered before it was in a chat window, so without links to files
+        }
     }
 
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
@@ -151,7 +159,16 @@ internal sealed class MarkdownView : RichTextBox
         {
             if (!this.blockWidths.TryGetValue(block, out double width))
             {
-                width = MeasureBlock(block, pixelsPerDip, available);
+                // Once a block fills the width on offer, the rest can't make the text any wider; leave them unmeasured,
+                // so resizing a long chat doesn't measure every paragraph of every message again.
+                if (content + chrome >= constraintWidth)
+                {
+                    continue;
+                }
+
+                width = ReferenceEquals(block, this.rendered.Streaming?.Section)
+                    ? this.MeasureStreamingCode((Section)block, pixelsPerDip, available)
+                    : MeasureBlock(block, pixelsPerDip, available);
             }
 
             current[block] = width;
@@ -180,10 +197,56 @@ internal sealed class MarkdownView : RichTextBox
         return max;
     }
 
+    private static double Insets(Block block) => block.Padding.Left + block.Padding.Right + block.BorderThickness.Left
+        + block.BorderThickness.Right + block.Margin.Left + block.Margin.Right;
+
+    // The code block still streaming in, its last complete line's line break, and the widest line up to there, so each
+    // render only measures the lines added since rather than the whole block again.
+    private (Paragraph Body, LineBreak LastBreak, double Max, double Available, double PixelsPerDip)? streamingLines;
+
+    /// <summary>Like <see cref="MeasureBlock"/> for a streaming code block's section, measuring only its new lines.</summary>
+    private double MeasureStreamingCode(Section section, double pixelsPerDip, double available)
+    {
+        double insets = Insets(section);
+        double inside = Math.Max(1, available - insets);
+        double max = 0;
+        foreach (Block block in section.Blocks)
+        {
+            if (block is Paragraph body && ReferenceEquals(block, section.Blocks.LastBlock))
+            {
+                double bodyInsets = Insets(body);
+                max = Math.Max(max, this.MeasureCodeBody(body, pixelsPerDip, Math.Max(1, inside - bodyInsets)) + bodyInsets);
+            }
+            else
+            {
+                max = Math.Max(max, MeasureBlock(block, pixelsPerDip, inside));
+            }
+        }
+
+        return max + insets;
+    }
+
+    private double MeasureCodeBody(Paragraph body, double pixelsPerDip, double available)
+    {
+        var line = new LineMeasurer(body, pixelsPerDip, available);
+        if (this.streamingLines is { } cached && ReferenceEquals(cached.Body, body) && ReferenceEquals(cached.LastBreak.Parent, body)
+            && cached.Available == available && cached.PixelsPerDip == pixelsPerDip)
+        {
+            line.AddFrom(cached.LastBreak.NextInline, cached.Max, cached.LastBreak);
+        }
+        else
+        {
+            line.AddFrom(body.Inlines.FirstInline, 0, null);
+        }
+
+        double width = line.Finish();
+        this.streamingLines = line.LastBreak is LineBreak lastBreak ? (body, lastBreak, line.MaxAtLastBreak, available, pixelsPerDip) : null;
+        return width;
+    }
+
     private static double MeasureBlock(Block block, double pixelsPerDip, double available)
     {
-        double insets = block.Padding.Left + block.Padding.Right + block.BorderThickness.Left
-            + block.BorderThickness.Right + block.Margin.Left + block.Margin.Right;
+        double insets = Insets(block);
         double inside = Math.Max(1, available - insets);
         double inner = block switch
         {
@@ -231,24 +294,47 @@ internal sealed class MarkdownView : RichTextBox
             this.available = available;
         }
 
+        /// <summary>The last line break measured, and the widest line before it.</summary>
+        public LineBreak? LastBreak { get; private set; }
+
+        public double MaxAtLastBreak { get; private set; }
+
+        /// <summary>Measures <paramref name="first"/> and the inlines after it, carrying on from lines already measured.</summary>
+        public void AddFrom(Inline? first, double max, LineBreak? lastBreak)
+        {
+            this.max = this.MaxAtLastBreak = max;
+            this.LastBreak = lastBreak;
+            for (Inline? inline = first; inline != null; inline = inline.NextInline)
+            {
+                this.Add(inline);
+            }
+        }
+
         public void AddInlines(InlineCollection inlines)
         {
             foreach (Inline inline in inlines)
             {
-                switch (inline)
-                {
-                    case Run run:
-                        string runText = run.Text.Replace("\t", "    ");
-                        this.runs.Add((this.text.Length, runText.Length, run));
-                        this.text.Append(runText);
-                        break;
-                    case LineBreak:
-                        this.EndLine();
-                        break;
-                    case Span span:
-                        this.AddInlines(span.Inlines);
-                        break;
-                }
+                this.Add(inline);
+            }
+        }
+
+        private void Add(Inline inline)
+        {
+            switch (inline)
+            {
+                case Run run:
+                    string runText = run.Text.Replace("\t", "    ");
+                    this.runs.Add((this.text.Length, runText.Length, run));
+                    this.text.Append(runText);
+                    break;
+                case LineBreak lineBreak:
+                    this.EndLine();
+                    this.LastBreak = lineBreak;
+                    this.MaxAtLastBreak = this.max;
+                    break;
+                case Span span:
+                    this.AddInlines(span.Inlines);
+                    break;
             }
         }
 

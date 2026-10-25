@@ -233,6 +233,11 @@ internal static class ClaudeCodeCli
         RemoveApiKeyVariables(psi);
 
         using var process = Process.Start(psi)!;
+        if (args[0] != "update")
+        {
+            Processes.CloseWithVisualStudio(process); // an update is left to finish, rather than stopped half installed
+        }
+
         Task<string> output = process.StandardOutput.ReadToEndAsync();
         Task<string> errors = process.StandardError.ReadToEndAsync();
         using (cancellationToken.Register(() => Processes.Kill(process)))

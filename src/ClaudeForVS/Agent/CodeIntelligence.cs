@@ -248,11 +248,7 @@ internal static class CodeTools
                 continue;
             }
 
-            if (OpenDocuments.HasUnsavedChanges(file.FullPath))
-            {
-                throw new ToolInputException($"{relative} has unsaved changes in Visual Studio, so nothing was {verb}. Ask the user to save or discard them, then try again.");
-            }
-
+            // A file with unsaved changes is read (and written) in its editor, which is also what Visual Studio planned from.
             RepoFiles.TextFile onDisk = files.Read(relative);
             if (!string.Equals(onDisk.Text.Replace("\r\n", "\n"), file.Before.Replace("\r\n", "\n"), StringComparison.Ordinal))
             {

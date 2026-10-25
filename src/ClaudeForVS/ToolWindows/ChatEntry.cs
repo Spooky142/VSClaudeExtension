@@ -110,7 +110,7 @@ internal sealed class ChatEntry : INotifyPropertyChanged
         this.buffer.Append(text);
         this.text = text;
         this.DetailLines = DiffLine.Parse(detail, activity);
-        this.Change = change;
+        this.change = change is null ? null : new CompressedChange(change);
     }
 
     /// <summary>Header of replies written by the extension itself (/help, /cost, /context) rather than by Claude.</summary>
@@ -127,10 +127,54 @@ internal sealed class ChatEntry : INotifyPropertyChanged
 
     public string Header { get; }
 
-    /// <summary>For file edits: the whole file before and after, for Visual Studio's diff viewer. Not saved with the chat.</summary>
-    public FileChange? Change { get; }
+    private readonly CompressedChange? change;
 
-    public bool HasChange => this.Change != null;
+    /// <summary>
+    /// For file edits: the whole file before and after, for Visual Studio's diff viewer. Not saved with the chat.
+    /// Kept compressed, as a chat holds two copies of the file for every edit for as long as it's open, so this
+    /// expands them again on each call.
+    /// </summary>
+    public FileChange? Change => this.change?.Expand();
+
+    public bool HasChange => this.change != null;
+
+    private sealed class CompressedChange(FileChange change)
+    {
+        private readonly string fullPath = change.FullPath;
+        private readonly byte[] before = Compress(change.Before);
+        private readonly byte[] after = Compress(change.After);
+
+        public FileChange Expand() => new(this.fullPath, Decompress(this.before), Decompress(this.after));
+
+        private static byte[] Compress(string text)
+        {
+            if (text.Length == 0)
+            {
+                return [];
+            }
+
+            using var buffer = new System.IO.MemoryStream();
+            using (var gzip = new System.IO.Compression.GZipStream(buffer, System.IO.Compression.CompressionLevel.Fastest))
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(text);
+                gzip.Write(bytes, 0, bytes.Length);
+            }
+
+            return buffer.ToArray();
+        }
+
+        private static string Decompress(byte[] data)
+        {
+            if (data.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            using var gzip = new System.IO.Compression.GZipStream(new System.IO.MemoryStream(data), System.IO.Compression.CompressionMode.Decompress);
+            using var reader = new System.IO.StreamReader(gzip, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false); // keeps a leading BOM character
+            return reader.ReadToEnd();
+        }
+    }
 
     // ===== Changes entries only =====
 

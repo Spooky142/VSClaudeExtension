@@ -70,6 +70,7 @@ internal static class OneShot
         var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         process.Exited += (_, _) => exited.TrySetResult(true);
         process.Start();
+        Processes.CloseWithVisualStudio(process);
 
         // The prompt goes in on stdin as UTF-8 bytes (net48 can't set stdin's encoding).
         byte[] bytes = new UTF8Encoding(false).GetBytes(prompt);

@@ -10,6 +10,7 @@ public partial class LowPriorityDialog : DialogWindow
     internal LowPriorityDialog(LowPriorityOffer offer)
     {
         this.InitializeComponent();
+        HighContrast.Follow(this);
         this.Message.Text = ClaudeChatViewModel.DescribeOffer(offer);
     }
 

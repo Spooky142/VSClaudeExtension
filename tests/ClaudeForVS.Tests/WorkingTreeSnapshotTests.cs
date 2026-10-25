@@ -133,6 +133,79 @@ public sealed class WorkingTreeSnapshotTests : IDisposable
         Assert.Null(await WorkingTreeSnapshot.ReadFileAsync(this.repo, before!, "new.txt", CancellationToken.None));
     }
 
+    [Fact]
+    public async Task RestoringMoreFilesThanACommandLineHoldsWorksAsync()
+    {
+        await this.GitAsync("init");
+
+        // About 1,200 paths of 60-odd characters: well past Windows' 32K command line.
+        string[] paths = [.. Enumerable.Range(0, 1200).Select(i => $"some/fairly/deep/folder/a-file-with-a-longish-name-{i:D4}.txt"), "odd [1] name.txt"]; // brackets: matched literally
+        foreach (string path in paths)
+        {
+            this.Write(path, "before");
+        }
+
+        string? before = await WorkingTreeSnapshot.CaptureAsync(this.repo, CancellationToken.None);
+        foreach (string path in paths)
+        {
+            this.Write(path, "after");
+        }
+
+        string? after = await WorkingTreeSnapshot.CaptureAsync(this.repo, CancellationToken.None);
+        var changes = await WorkingTreeSnapshot.ChangesAsync(this.repo, before!, after!, CancellationToken.None);
+        Assert.Equal(paths.Length, changes.Count);
+
+        Assert.Null(await WorkingTreeSnapshot.RestoreAsync(this.repo, before!, changes, CancellationToken.None));
+        Assert.All(paths, path => Assert.Equal("before", this.Read(path)));
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(Path.GetTempPath(), "ClaudeForVS"), "restore-*.pathspec"));
+    }
+
+    [Fact]
+    public async Task HugeOutputIsCutShortWhenShownButKeptWholeWhenParsedAsync()
+    {
+        await this.GitAsync("init");
+        string big = string.Concat(Enumerable.Range(0, 40_000).Select(i => $"line {i:D6} of a big file\n")); // about 1 MB
+        this.Write("big.txt", big);
+        string? tree = await WorkingTreeSnapshot.CaptureAsync(this.repo, CancellationToken.None);
+
+        (int code, string shown) = await GitRunner.RunAsync(this.repo, ["show", $"{tree}:big.txt"], CancellationToken.None);
+        Assert.Equal(0, code);
+        Assert.True(shown.Length < 31_000, $"{shown.Length} characters");
+        Assert.Contains("[output truncated: at least", shown);
+
+        (code, string parsed) = await GitRunner.RunAsync(this.repo, ["show", $"{tree}:big.txt"], CancellationToken.None, includeStderr: false);
+        Assert.Equal(0, code);
+        Assert.Equal(big.Length, parsed.Replace("\r\n", "\n").Length);
+    }
+
+    [Fact]
+    public async Task RepositoryFilesLeaveOutThoseDeletedFromDiskAsync()
+    {
+        await this.GitAsync("init");
+        this.Write("a.txt", "a");
+        this.Write("b.txt", "b");
+        await this.GitAsync("add", "a.txt", "b.txt");
+        File.Delete(Path.Combine(this.repo, "b.txt"));
+        this.Write("c.txt", "c");
+
+        Assert.Equal(["a.txt", "c.txt"], await ClaudeForVS.Agent.RepoSearch.ListFilesAsync(this.repo, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ShownOutputIsReadInChunksAndCappedAsync()
+    {
+        int calls = 0;
+        (string text, long total) = await GitRunner.ReadCappedAsync(new StringReader(new string('x', 200_000)), 30_000, () => calls++);
+        Assert.Equal(30_000, text.Length);
+        Assert.Equal(200_000, total);
+        Assert.True(calls > 0);
+
+        calls = 0;
+        (text, total) = await GitRunner.ReadCappedAsync(new StringReader(new string('x', 200_000)), int.MaxValue, () => calls++);
+        Assert.Equal(200_000, text.Length);
+        Assert.Equal(0, calls); // parsed output is never stopped early
+    }
+
     private void Write(string path, string text)
     {
         string full = Path.Combine(this.repo, path);

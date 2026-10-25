@@ -51,7 +51,6 @@ internal sealed class ClaudeChangesMargin : Canvas, IWpfTextViewMargin
 
     private const double MarkWidth = 3;
     private static readonly TimeSpan RecomputeDelay = TimeSpan.FromMilliseconds(300);
-    private static readonly Brush Accent = Frozen(new SolidColorBrush(Color.FromRgb(0xD9, 0x77, 0x57)));
 
     private readonly IWpfTextView view;
     private readonly ITextDocument document;
@@ -183,7 +182,7 @@ internal sealed class ClaudeChangesMargin : Canvas, IWpfTextViewMargin
             {
                 if (!region.IsRemoval && number >= region.NewStart && number < region.NewStart + region.NewCount)
                 {
-                    this.Add(new Rectangle { Width = MarkWidth, Height = line.Height, Fill = Accent }, 1, top);
+                    this.Add(new Rectangle { Width = MarkWidth, Height = line.Height, Fill = HighContrast.EditorAccent }, 1, top);
                 }
                 else if (region.IsRemoval && number == region.NewStart && firstPart)
                 {
@@ -209,7 +208,7 @@ internal sealed class ClaudeChangesMargin : Canvas, IWpfTextViewMargin
     private static Polygon Notch() => new()
     {
         Points = [new Point(0, 0), new Point(MarkWidth + 3, 3), new Point(0, 6)],
-        Fill = Accent,
+        Fill = HighContrast.EditorAccent,
     };
 
     private void OnClick(object sender, MouseButtonEventArgs e)
@@ -230,6 +229,7 @@ internal sealed class ClaudeChangesMargin : Canvas, IWpfTextViewMargin
         }
 
         var menu = new ContextMenu { PlacementTarget = this, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
+        HighContrast.UseVsStyle(menu); // the editor has none of the chat's styles, so it would otherwise be drawn light in a dark theme
         string what = region.IsRemoval
             ? (region.OldCount == 1 ? "Put back the line Claude removed" : $"Put back the {region.OldCount} lines Claude removed")
             : region.OldCount == 0
@@ -275,9 +275,4 @@ internal sealed class ClaudeChangesMargin : Canvas, IWpfTextViewMargin
         }
     }
 
-    private static Brush Frozen(Brush brush)
-    {
-        brush.Freeze();
-        return brush;
-    }
 }

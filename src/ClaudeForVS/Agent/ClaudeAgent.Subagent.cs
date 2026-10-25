@@ -88,7 +88,8 @@ internal sealed partial class ClaudeAgent
                     break;
                 }
 
-                StreamedTurn turn = await this.StreamTurnAsync(inner, 0, stop.Token, this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools, modelId, effort));
+                StreamedTurn turn = await this.StreamTurnAsync(
+                    inner, 0, stop.Token, () => this.BuildRequest(null, SubagentMaxTokens, conversation, system, tools, modelId, effort), conversation);
                 this.ReportUsage(sink, turn.Usage, model);
                 if (paused != null)
                 {

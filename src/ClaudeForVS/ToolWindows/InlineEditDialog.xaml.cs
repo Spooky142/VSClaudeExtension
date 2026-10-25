@@ -6,7 +6,7 @@ using Microsoft.VisualStudio.PlatformUI;
 namespace ClaudeForVS.ToolWindows;
 
 /// <summary>
-/// The box Alt+/ opens at the caret, asking what Claude should change. ShowModal() returns true with the
+/// The box Ctrl+Alt+/ opens at the caret, asking what Claude should change. ShowModal() returns true with the
 /// <see cref="Instruction"/> when the user presses Enter. A dialog rather than a box in the editor, so the keys typed
 /// into it aren't taken by the editor's own commands (Backspace, the arrows, Ctrl+Z…).
 /// </summary>
@@ -15,6 +15,7 @@ public partial class InlineEditDialog : DialogWindow
     internal InlineEditDialog(string heading, Point screenPosition)
     {
         this.InitializeComponent();
+        HighContrast.Follow(this);
         this.Heading.Text = heading;
         this.Left = screenPosition.X;
         this.Top = screenPosition.Y;

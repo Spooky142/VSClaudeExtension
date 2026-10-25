@@ -638,7 +638,7 @@ internal static class MarkdownRenderer
     /// <summary>Plain text, with any paths to files in the repository turned into links.</summary>
     private static WpfInline RenderText(string text)
     {
-        if (FileLinks.Resolve is null)
+        if (FileLinks.Current is null)
         {
             return new Run(text);
         }
@@ -689,9 +689,10 @@ internal static class MarkdownRenderer
             : $" at line {target.Line}";
         hyperlink.ToolTip = $"Open {target.FullPath}{lines}";
         hyperlink.Cursor = Cursors.Hand;
+        FileLinkHandler? links = FileLinks.Current; // the window rendering it, for when it's clicked later
         hyperlink.Click += (_, e) =>
         {
-            FileLinks.Open?.Invoke(target);
+            links?.Open(target);
             e.Handled = true;
         };
     }

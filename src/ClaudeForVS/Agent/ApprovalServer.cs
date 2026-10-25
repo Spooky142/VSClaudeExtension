@@ -145,48 +145,76 @@ internal sealed class ApprovalServer : IDisposable
                 body = await reader.ReadToEndAsync().ConfigureAwait(false);
             }
 
-            JsonNode? request = JsonNode.Parse(body);
-            JsonNode? id = request?["id"]?.DeepClone();
-            string method = request?["method"]?.GetValue<string>() ?? string.Empty;
+            JsonNode? request;
+            try
+            {
+                request = JsonNode.Parse(body);
+            }
+            catch (JsonException)
+            {
+                await WriteReplyAsync(response, Failure(null, -32700, "Parse error")).ConfigureAwait(false);
+                return;
+            }
 
+            JsonNode? id = request?["id"]?.DeepClone();
             if (id is null)
             {
                 response.StatusCode = 202; // notification, e.g. notifications/initialized
                 return;
             }
 
-            JsonNode result = method switch
+            // Whatever goes wrong from here (a cancelled approval, a COM error from Visual Studio, an odd request), Claude
+            // Code gets a JSON-RPC error for this id, not an empty reply it can't make sense of.
+            JsonObject reply;
+            try
             {
-                "initialize" => new JsonObject
+                string method = request?["method"]?.GetValue<string>() ?? string.Empty;
+                JsonNode? result = method switch
                 {
-                    ["protocolVersion"] = request?["params"]?["protocolVersion"]?.DeepClone() ?? "2025-06-18",
-                    ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
-                    ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = "1.0.0" },
-                },
-                "ping" => new JsonObject(),
-                "tools/list" => new JsonObject { ["tools"] = new JsonArray([ToolDefinition(), .. VisualStudioTools.Definitions()]) },
-                "tools/call" => await this.CallToolAsync(request?["params"]).ConfigureAwait(false),
-                _ => null!,
-            };
+                    "initialize" => new JsonObject
+                    {
+                        ["protocolVersion"] = request?["params"]?["protocolVersion"]?.DeepClone() ?? "2025-06-18",
+                        ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+                        ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = "1.0.0" },
+                    },
+                    "ping" => new JsonObject(),
+                    "tools/list" => new JsonObject { ["tools"] = new JsonArray([ToolDefinition(), .. VisualStudioTools.Definitions()]) },
+                    "tools/call" => await this.CallToolAsync(request?["params"]).ConfigureAwait(false),
+                    _ => null,
+                };
 
-            JsonObject reply = result is null
-                ? new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "Method not found" } }
-                : new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
+                reply = result is null
+                    ? Failure(id, -32601, "Method not found")
+                    : new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
+            }
+            catch (Exception ex)
+            {
+                reply = Failure(id.DeepClone(), -32603, ex is OperationCanceledException ? "The request was cancelled." : ex.Message);
+            }
 
-            byte[] bytes = Encoding.UTF8.GetBytes(reply.ToJsonString());
-            response.StatusCode = 200;
-            response.ContentType = "application/json";
-            response.ContentLength64 = bytes.Length;
-            await response.OutputStream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+            await WriteReplyAsync(response, reply).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is JsonException or HttpListenerException or IOException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpListenerException or IOException or InvalidOperationException or ObjectDisposedException)
         {
+            // The connection went; there's no one to answer.
             try { response.StatusCode = 400; } catch (InvalidOperationException) { }
         }
         finally
         {
             try { response.Close(); } catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException) { }
         }
+    }
+
+    private static JsonObject Failure(JsonNode? id, int code, string message) =>
+        new() { ["jsonrpc"] = "2.0", ["id"] = id, ["error"] = new JsonObject { ["code"] = code, ["message"] = message } };
+
+    private static async Task WriteReplyAsync(HttpListenerResponse response, JsonObject reply)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(reply.ToJsonString());
+        response.StatusCode = 200;
+        response.ContentType = "application/json";
+        response.ContentLength64 = bytes.Length;
+        await response.OutputStream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
     }
 
     private async Task<JsonNode> CallToolAsync(JsonNode? parameters)

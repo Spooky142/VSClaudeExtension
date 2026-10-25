@@ -77,9 +77,35 @@ internal sealed record FileChange(string FullPath, string Before, string After)
             : null;
 }
 
-/// <summary>What the engines need to know about Visual Studio's open documents. Set by the package; call on the UI thread.</summary>
+/// <summary>What happened to text written through <see cref="OpenDocuments.WriteToEditor"/>.</summary>
+internal enum EditorWrite
+{
+    /// <summary>The file isn't open in an editor, so nothing was written; write it to disk instead.</summary>
+    NotOpen,
+
+    /// <summary>Changed in the editor and saved, as the editor had no unsaved changes before.</summary>
+    Saved,
+
+    /// <summary>Changed in the editor, which already had unsaved changes, so it was left for the user to save.</summary>
+    LeftUnsaved,
+}
+
+/// <summary>What the engines need to know about Visual Studio's open documents. Set by the package.</summary>
 internal static class OpenDocuments
 {
-    /// <summary>True if the file is open in an editor with changes that haven't been saved.</summary>
+    /// <summary>True if the file is open in an editor with changes that haven't been saved. Call on the UI thread.</summary>
     public static Func<string, bool> HasUnsavedChanges { get; set; } = _ => false;
+
+    /// <summary>
+    /// The editor's text for a file open with unsaved changes; null if it isn't, when the file on disk is current.
+    /// Can be called on any thread.
+    /// </summary>
+    public static Func<string, string?> UnsavedText { get; set; } = _ => null;
+
+    /// <summary>
+    /// Puts new text into the file's open editor as one change the user can undo with Ctrl+Z, saving it if it had no
+    /// unsaved changes before. Returns <see cref="EditorWrite.NotOpen"/> (having done nothing) if it isn't open in a text
+    /// editor. Can be called on any thread.
+    /// </summary>
+    public static Func<string, string, EditorWrite> WriteToEditor { get; set; } = (_, _) => EditorWrite.NotOpen;
 }

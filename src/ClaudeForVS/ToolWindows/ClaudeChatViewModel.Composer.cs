@@ -143,13 +143,20 @@ internal sealed partial class ClaudeChatViewModel
             .ToList();
     }
 
-    /// <summary>Starts loading the repository's file list, so the first "@" has something to show.</summary>
-    public void WarmFileIndex()
+    /// <summary>
+    /// Starts loading the repository's file list, so the first "@" has something to show. Finishes once it's loaded:
+    /// true if there was no list before, so replies rendered meanwhile couldn't link bare file names.
+    /// </summary>
+    public async Task<bool> WarmFileIndexAsync()
     {
-        if (this.RepoRoot is string root)
+        if (this.RepoRoot is not string root)
         {
-            this.repoFiles.Get(root);
+            return false;
         }
+
+        bool empty = this.repoFiles.Get(root).Count == 0;
+        await this.repoFiles.WhenLoadedAsync();
+        return empty && this.repoFiles.Get(root).Count > 0;
     }
 
     /// <summary>Looks a repository file up by name or path, for links in replies. Uses the cached file list.</summary>
@@ -161,16 +168,15 @@ internal sealed partial class ClaudeChatViewModel
         }
 
         string normalized = path.Replace('\\', '/').TrimStart('.', '/');
-        IReadOnlyList<string> files = this.repoFiles.Get(root);
+        IReadOnlyList<string> named = this.repoFiles.Named(root, normalized.Substring(normalized.LastIndexOf('/') + 1));
         if (normalized.Contains('/'))
         {
-            string? match = files.FirstOrDefault(f => f.Equals(normalized, StringComparison.OrdinalIgnoreCase))
-                ?? files.FirstOrDefault(f => f.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase));
+            string? match = named.FirstOrDefault(f => f.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                ?? named.FirstOrDefault(f => f.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase));
             return match is null ? null : System.IO.Path.Combine(root, match.Replace('/', System.IO.Path.DirectorySeparatorChar));
         }
 
         // A bare file name links only when exactly one file in the repository has it.
-        List<string> named = files.Where(f => f.Equals(normalized, StringComparison.OrdinalIgnoreCase) || f.EndsWith("/" + normalized, StringComparison.OrdinalIgnoreCase)).Take(2).ToList();
         return named.Count == 1 ? System.IO.Path.Combine(root, named[0].Replace('/', System.IO.Path.DirectorySeparatorChar)) : null;
     }
 
@@ -215,7 +221,7 @@ internal sealed partial class ClaudeChatViewModel
 
         // Claude Code expands its own custom commands (with everything they support); the API engine needs them expanded here.
         if (this.settings.Engine == ChatEngineKind.Api
-            && SlashCommands.ParseCustom(text, this.LoadCustomCommands()) is (CustomCommand custom, string arguments))
+            && SlashCommands.ParseCustom(text, this.LoadCustomCommands(fresh: true)) is (CustomCommand custom, string arguments))
         {
             return this.SendWithAttachments(text, custom.Expand(arguments), out run);
         }
@@ -223,8 +229,26 @@ internal sealed partial class ClaudeChatViewModel
         return this.SendWithAttachments(text, text, out run);
     }
 
-    /// <summary>Custom commands for the current repository and user, read fresh so edits to them apply straight away.</summary>
-    private IReadOnlyList<CustomCommand> LoadCustomCommands() => CustomCommands.Load(this.RepoRoot);
+    // Custom commands as last read, so completions don't read every command file on each keystroke.
+    private (string? Root, DateTime At, IReadOnlyList<CustomCommand> Commands)? customCommands;
+
+    /// <summary>
+    /// Custom commands for the current repository and user. Completions reuse what was read in the last few seconds;
+    /// sending reads them <paramref name="fresh"/>, so edits to them apply straight away.
+    /// </summary>
+    private IReadOnlyList<CustomCommand> LoadCustomCommands(bool fresh = false)
+    {
+        string? root = this.RepoRoot;
+        if (!fresh && this.customCommands is { } cached && string.Equals(cached.Root, root, StringComparison.OrdinalIgnoreCase)
+            && DateTime.UtcNow - cached.At < TimeSpan.FromSeconds(5))
+        {
+            return cached.Commands;
+        }
+
+        IReadOnlyList<CustomCommand> commands = CustomCommands.Load(root);
+        this.customCommands = (root, DateTime.UtcNow, commands);
+        return commands;
+    }
 
     /// <summary>Sends <paramref name="sendText"/> with the attachments, showing <paramref name="displayText"/> in the transcript.</summary>
     private bool SendWithAttachments(string displayText, string sendText, out Task run)
@@ -282,7 +306,7 @@ internal sealed partial class ClaudeChatViewModel
         switch (command.Name)
         {
             case "/help":
-                this.ShowLocalReply(SlashCommands.HelpText(this.LoadCustomCommands()));
+                this.ShowLocalReply(SlashCommands.HelpText(this.LoadCustomCommands(fresh: true)));
                 return true;
 
             case "/copy":

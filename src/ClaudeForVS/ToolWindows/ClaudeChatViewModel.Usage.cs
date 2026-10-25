@@ -54,10 +54,22 @@ internal sealed partial class ClaudeChatViewModel
         List<UsageMeter> meters = this.settings.Engine == ChatEngineKind.ClaudeCode ? this.PlanMeters() : this.ApiMeters();
         meters.Add(this.ContextMeter());
 
-        this.UsageMeters.Clear();
-        foreach (UsageMeter meter in meters)
+        // Only tiles that changed are replaced, so the timer's refresh doesn't rebuild the strip when nothing moved.
+        for (int i = 0; i < meters.Count; i++)
         {
-            this.UsageMeters.Add(meter);
+            if (i >= this.UsageMeters.Count)
+            {
+                this.UsageMeters.Add(meters[i]);
+            }
+            else if (!this.UsageMeters[i].Equals(meters[i]))
+            {
+                this.UsageMeters[i] = meters[i];
+            }
+        }
+
+        while (this.UsageMeters.Count > meters.Count)
+        {
+            this.UsageMeters.RemoveAt(this.UsageMeters.Count - 1);
         }
 
         this.UsageEmptyText = meters.Count > 0 ? string.Empty
@@ -221,10 +233,7 @@ internal sealed partial class ClaudeChatViewModel
     /// <summary>Fetches the plan usage windows now, rather than waiting for the next prompt to report them.</summary>
     public async Task RefreshPlanUsageAsync()
     {
-        foreach (PlanLimit limit in await PlanUsageClient.FetchAsync(CancellationToken.None))
-        {
-            ((IChatSink)this).ReportPlanLimit(limit);
-        }
+        ReportPlanLimits(await PlanUsageClient.FetchAsync(CancellationToken.None));
     }
 
     private void ResetChatUsage()
@@ -279,19 +288,32 @@ internal sealed partial class ClaudeChatViewModel
         this.RefreshUsage();
     }
 
-    void IChatSink.ReportPlanLimit(PlanLimit limit)
+    void IChatSink.ReportPlanLimit(PlanLimit limit) => ReportPlanLimits([limit]);
+
+    /// <summary>Takes in plan windows, then saves them and refreshes every window's strip once for the lot.</summary>
+    private static void ReportPlanLimits(IReadOnlyList<PlanLimit> limits)
     {
-        // Stream events often omit the percentage; keep the last exact figure for the same window period.
-        if (limit.Utilization is null
-            && PlanLimits.TryGetValue(limit.Window, out PlanLimit? known)
-            && known.Utilization is double pct
-            && known.ResetsAt is DateTimeOffset knownReset && limit.ResetsAt is DateTimeOffset newReset
-            && Math.Abs((knownReset - newReset).TotalMinutes) < 5)
+        if (limits.Count == 0)
         {
-            limit = limit with { Utilization = pct };
+            return;
         }
 
-        PlanLimits[limit.Window] = limit;
+        foreach (PlanLimit reported in limits)
+        {
+            // Stream events often omit the percentage; keep the last exact figure for the same window period.
+            PlanLimit limit = reported;
+            if (limit.Utilization is null
+                && PlanLimits.TryGetValue(limit.Window, out PlanLimit? known)
+                && known.Utilization is double pct
+                && known.ResetsAt is DateTimeOffset knownReset && limit.ResetsAt is DateTimeOffset newReset
+                && Math.Abs((knownReset - newReset).TotalMinutes) < 5)
+            {
+                limit = limit with { Utilization = pct };
+            }
+
+            PlanLimits[limit.Window] = limit;
+        }
+
         PlanUsageStore.Save(PlanLimits.Values);
         foreach (ClaudeChatViewModel chat in Instances)
         {

@@ -15,6 +15,7 @@ public partial class ClaudeTasksControl : UserControl
     public ClaudeTasksControl()
     {
         this.InitializeComponent();
+        HighContrast.Follow(this);
     }
 
     internal void Bind(ClaudeChatViewModel chat)
@@ -52,32 +53,40 @@ public partial class ClaudeTasksControl : UserControl
     // A cleared or trimmed list may have taken the selected task with it.
     private void OnTasksChanged(object? sender, NotifyCollectionChangedEventArgs e) => this.Select(null);
 
+    /// <summary>The output list's scroll viewer, from its template.</summary>
+    private ScrollViewer? Output => this.OutputLines.Template?.FindName("Output", this.OutputLines) as ScrollViewer;
+
     private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         // A running task is watched from its latest output; a finished one is read from the top.
         this.followOutput = this.List.SelectedItem is ToolTask { IsRunning: true };
         if (this.followOutput)
         {
-            this.Output.ScrollToEnd();
+            this.Output?.ScrollToEnd();
         }
         else
         {
-            this.Output.ScrollToHome();
+            this.Output?.ScrollToHome();
         }
     }
 
     private void OnOutputScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        if (e.OriginalSource is not ScrollViewer output)
+        {
+            return;
+        }
+
         if (e.ExtentHeightChange != 0)
         {
             if (this.followOutput)
             {
-                this.Output.ScrollToEnd();
+                output.ScrollToEnd();
             }
         }
         else
         {
-            this.followOutput = this.Output.VerticalOffset >= this.Output.ScrollableHeight - 2;
+            this.followOutput = output.VerticalOffset >= output.ScrollableHeight - 2;
         }
     }
 

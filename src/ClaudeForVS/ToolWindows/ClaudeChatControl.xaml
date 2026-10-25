@@ -31,7 +31,7 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Cursor" Value="Arrow" />
@@ -55,10 +55,10 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PressTint}" />
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -79,10 +79,10 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PressTint}" />
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Cursor" Value="Arrow" />
@@ -108,10 +108,10 @@
       </Grid>
       <DataTemplate.Triggers>
         <DataTrigger Binding="{Binding Kind}" Value="Added">
-          <Setter TargetName="Bg" Property="Background" Value="{StaticResource AddedTint}" />
+          <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AddedTint}" />
         </DataTrigger>
         <DataTrigger Binding="{Binding Kind}" Value="Removed">
-          <Setter TargetName="Bg" Property="Background" Value="{StaticResource RemovedTint}" />
+          <Setter TargetName="Bg" Property="Background" Value="{DynamicResource RemovedTint}" />
         </DataTrigger>
         <DataTrigger Binding="{Binding Kind}" Value="Hunk">
           <Setter TargetName="LineText" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
@@ -129,7 +129,7 @@
            What was attached sits under the bubble, and Edit / Retry / Undo appear on hover. -->
       <StackPanel x:Name="Root" Margin="48,10,0,0" HorizontalAlignment="Left" Background="Transparent">
         <Border HorizontalAlignment="Left" CornerRadius="12,12,4,12" Padding="12,8"
-                Background="{StaticResource UserBubble}" BorderThickness="1" BorderBrush="{StaticResource UserBubbleBorder}">
+                Background="{DynamicResource UserBubble}" BorderThickness="1" BorderBrush="{DynamicResource UserBubbleBorder}">
           <md:MarkdownView Markdown="{Binding Text, Mode=OneWay}" FontSize="13"
                            Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
         </Border>
@@ -137,7 +137,7 @@
           <TextBlock Style="{StaticResource Icon}" Text="&#xE723;" FontSize="10" Margin="0,0,4,0" />
           <TextBlock Text="{Binding Note}" Style="{StaticResource Muted}" FontSize="10.5" TextTrimming="CharacterEllipsis" />
         </StackPanel>
-        <TextBlock Style="{StaticResource Icon}" Text="&#xE735;" FontSize="11" Foreground="{StaticResource Accent}" Margin="6,3,0,0"
+        <TextBlock Style="{StaticResource Icon}" Text="&#xE735;" FontSize="11" Foreground="{DynamicResource Accent}" Margin="6,3,0,0"
                    ToolTip="Starred" AutomationProperties.Name="Starred message"
                    Visibility="{Binding IsStarred, Converter={StaticResource BoolToVis}}" />
         <StackPanel x:Name="Actions" Orientation="Horizontal" Margin="0,1,0,0" Visibility="Hidden">
@@ -168,19 +168,19 @@
 
     <DataTemplate x:Key="AssistantTemplate">
       <Border x:Name="Bubble" Margin="0,10,24,6" HorizontalAlignment="Left" CornerRadius="12,12,12,4" Padding="12,10"
-              Background="{StaticResource SubtleFill}" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}">
+              Background="{DynamicResource SubtleFill}" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}">
         <StackPanel>
           <DockPanel Margin="0,0,0,6">
             <Button x:Name="CopyReply" DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Copy" Margin="12,0,0,0"
                     Click="OnCopyEntry" ToolTip="Copy this reply as Markdown" Visibility="Hidden" />
             <Button x:Name="StarReply" DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="{Binding StarText}" Margin="12,0,0,0"
                     Click="OnToggleStar" ToolTip="Star this reply to find it again from the star menu in the header" Visibility="Hidden" />
-            <TextBlock DockPanel.Dock="Right" Style="{StaticResource Icon}" Text="&#xE735;" FontSize="11" Foreground="{StaticResource Accent}"
+            <TextBlock DockPanel.Dock="Right" Style="{StaticResource Icon}" Text="&#xE735;" FontSize="11" Foreground="{DynamicResource Accent}"
                        VerticalAlignment="Center" ToolTip="Starred" AutomationProperties.Name="Starred message"
                        Visibility="{Binding IsStarred, Converter={StaticResource BoolToVis}}" />
             <StackPanel Orientation="Horizontal">
-              <Border Width="20" Height="20" CornerRadius="10" Background="{StaticResource Accent}">
-                <TextBlock Text="✻" Foreground="White" FontSize="12" FontFamily="Segoe UI Symbol"
+              <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource Accent}">
+                <TextBlock Text="✻" Foreground="{DynamicResource OnAccent}" FontSize="12" FontFamily="Segoe UI Symbol"
                            HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0" />
               </Border>
               <TextBlock Text="Claude" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center" />
@@ -210,7 +210,7 @@
     </DataTemplate>
 
     <DataTemplate x:Key="ToolTemplate">
-      <Border Margin="0,2,24,2" HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+      <Border Margin="0,2,24,2" HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
         <StackPanel>
           <DockPanel>
             <Button DockPanel.Dock="Right" Style="{StaticResource MiniButton}" Content="Diff" Margin="0,0,4,0" VerticalAlignment="Center"
@@ -234,7 +234,7 @@
               </DockPanel>
             </ToggleButton>
           </DockPanel>
-          <Border x:Name="Details" Visibility="Collapsed" BorderThickness="0,1,0,0" BorderBrush="{StaticResource SubtleBorder}" Padding="0,4">
+          <Border x:Name="Details" Visibility="Collapsed" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource SubtleBorder}" Padding="0,4">
             <ItemsControl ItemsSource="{Binding DetailLines}" ItemTemplate="{StaticResource DiffLineTemplate}" />
           </Border>
         </StackPanel>
@@ -249,11 +249,11 @@
         </DataTrigger>
         <DataTrigger Binding="{Binding Activity}" Value="Edit">
           <Setter TargetName="Glyph" Property="Text" Value="&#xE70F;" />
-          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Accent}" />
         </DataTrigger>
         <DataTrigger Binding="{Binding Activity}" Value="Create">
           <Setter TargetName="Glyph" Property="Text" Value="&#xE710;" />
-          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Accent}" />
         </DataTrigger>
         <DataTrigger Binding="{Binding Activity}" Value="Declined">
           <Setter TargetName="Glyph" Property="Text" Value="&#xE711;" />
@@ -262,7 +262,7 @@
         </DataTrigger>
         <DataTrigger Binding="{Binding Activity}" Value="Failed">
           <Setter TargetName="Glyph" Property="Text" Value="&#xE7BA;" />
-          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Amber}" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Amber}" />
         </DataTrigger>
         <DataTrigger Binding="{Binding Activity}" Value="Search">
           <Setter TargetName="Glyph" Property="Text" Value="&#xE721;" />
@@ -275,16 +275,16 @@
         </DataTrigger>
         <DataTrigger Binding="{Binding Activity}" Value="Question">
           <Setter TargetName="Glyph" Property="Text" Value="&#xE897;" />
-          <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
+          <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Accent}" />
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
 
     <DataTemplate x:Key="ErrorTemplate">
-      <Border Margin="0,6" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource ErrorRed}" Background="{StaticResource ErrorTint}" Padding="10,8">
+      <Border Margin="0,6" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource ErrorRed}" Background="{DynamicResource ErrorTint}" Padding="10,8">
         <DockPanel>
           <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE783;" FontSize="14"
-                     Foreground="{StaticResource ErrorRed}" VerticalAlignment="Top" Margin="0,1,10,0" />
+                     Foreground="{DynamicResource ErrorRed}" VerticalAlignment="Top" Margin="0,1,10,0" />
           <StackPanel>
             <TextBlock Text="{Binding Header}" FontWeight="SemiBold" />
             <TextBlock Text="{Binding Text}" TextWrapping="Wrap" Margin="0,2,0,0" Style="{StaticResource Muted}" />
@@ -300,14 +300,14 @@
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
-        <Border Height="1" Background="{StaticResource SubtleBorder}" VerticalAlignment="Center" />
+        <Border Height="1" Background="{DynamicResource SubtleBorder}" VerticalAlignment="Center" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock Text="{Binding Header}" Style="{StaticResource Muted}" FontSize="11" Margin="10,0" VerticalAlignment="Center" />
           <Button Style="{StaticResource MiniButton}" Content="Restore files" Click="OnRestorePoint" Margin="0,0,10,0"
                   ToolTip="Put every file back the way it was at this restore point. The conversation is left as it is."
                   Visibility="{Binding IsRestorePoint, Converter={StaticResource BoolToVis}}" />
         </StackPanel>
-        <Border Grid.Column="2" Height="1" Background="{StaticResource SubtleBorder}" VerticalAlignment="Center" />
+        <Border Grid.Column="2" Height="1" Background="{DynamicResource SubtleBorder}" VerticalAlignment="Center" />
       </Grid>
     </DataTemplate>
 
@@ -318,20 +318,20 @@
 
     <!-- The files a prompt changed: "3 files changed +42 −10", expanding to one row per file that opens its diff. -->
     <DataTemplate x:Key="ChangesTemplate">
-      <Border Margin="0,4,24,4" HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+      <Border Margin="0,4,24,4" HorizontalAlignment="Left" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
         <StackPanel>
           <ToggleButton x:Name="Toggle" Style="{StaticResource RowToggle}" ToolTip="Show the files Claude changed">
             <DockPanel Margin="8,5">
               <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Style="{StaticResource Icon}" FontSize="9" Text="&#xE76C;" Margin="10,0,0,0" />
-              <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE70F;" Foreground="{StaticResource Accent}" Margin="0,0,8,0" />
+              <TextBlock Style="{StaticResource Icon}" FontSize="12" Text="&#xE70F;" Foreground="{DynamicResource Accent}" Margin="0,0,8,0" />
               <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="{Binding FilesChangedText}" FontSize="11.5" />
-                <TextBlock Text="{Binding AddedText}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" Foreground="{StaticResource AddedGreen}" Margin="10,0,0,0" />
-                <TextBlock Text="{Binding RemovedText}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" Foreground="{StaticResource RemovedRed}" Margin="6,0,0,0" />
+                <TextBlock Text="{Binding AddedText}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" Foreground="{DynamicResource AddedGreen}" Margin="10,0,0,0" />
+                <TextBlock Text="{Binding RemovedText}" FontFamily="{StaticResource MonoFont}" FontSize="11.5" Foreground="{DynamicResource RemovedRed}" Margin="6,0,0,0" />
               </StackPanel>
             </DockPanel>
           </ToggleButton>
-          <Border x:Name="Details" Visibility="Collapsed" BorderThickness="0,1,0,0" BorderBrush="{StaticResource SubtleBorder}" Padding="0,3">
+          <Border x:Name="Details" Visibility="Collapsed" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource SubtleBorder}" Padding="0,3">
             <ItemsControl ItemsSource="{Binding FileRows}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
@@ -342,9 +342,9 @@
                             ToolTip="{Binding StatusText}">
                       <DockPanel>
                         <TextBlock DockPanel.Dock="Right" Text="{Binding RemovedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
-                                   Foreground="{StaticResource RemovedRed}" Margin="6,0,0,0" />
+                                   Foreground="{DynamicResource RemovedRed}" Margin="6,0,0,0" />
                         <TextBlock DockPanel.Dock="Right" Text="{Binding AddedText}" FontFamily="{StaticResource MonoFont}" FontSize="11"
-                                   Foreground="{StaticResource AddedGreen}" Margin="12,0,0,0" />
+                                   Foreground="{DynamicResource AddedGreen}" Margin="12,0,0,0" />
                         <TextBlock x:Name="FilePath" Text="{Binding Path}" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
                                    TextTrimming="CharacterEllipsis" />
                       </DockPanel>
@@ -372,8 +372,8 @@
 
     <!-- An attachment above the prompt box: image thumbnail or icon, label, and × to remove it. -->
     <DataTemplate x:Key="AttachmentChip">
-      <Border Margin="0,0,6,6" CornerRadius="10" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
-              Background="{StaticResource SubtleFill}" Padding="7,2,2,2" ToolTip="{Binding ToolTip}">
+      <Border Margin="0,0,6,6" CornerRadius="10" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
+              Background="{DynamicResource SubtleFill}" Padding="7,2,2,2" ToolTip="{Binding ToolTip}">
         <StackPanel Orientation="Horizontal">
           <Image Source="{Binding Thumbnail}" Height="18" MaxWidth="36" Margin="0,0,5,0" Stretch="Uniform"
                  Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVis}}" />
@@ -429,20 +429,20 @@
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
         <Button Style="{StaticResource OutlineButton}" Margin="0" Padding="10,4" ToolTip="{Binding RepoTooltip}" Click="OnOpenSettings">
           <StackPanel Orientation="Horizontal">
-            <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="12" Foreground="{StaticResource Accent}" />
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE8B7;" FontSize="12" Foreground="{DynamicResource Accent}" />
             <TextBlock Text="{Binding RepoName}" FontWeight="SemiBold" Margin="7,0,0,0" VerticalAlignment="Center" />
           </StackPanel>
         </Button>
         <Button x:Name="ModelChip" Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4" ToolTip="Change model, effort or mode" Click="OnModelMenu">
           <StackPanel Orientation="Horizontal">
-            <TextBlock Style="{StaticResource Icon}" Text="&#xE945;" FontSize="12" Foreground="{StaticResource Accent}" />
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE945;" FontSize="12" Foreground="{DynamicResource Accent}" />
             <TextBlock Text="{Binding ModelSummary}" Margin="7,0,0,0" VerticalAlignment="Center" />
           </StackPanel>
         </Button>
         <Button x:Name="SubagentChip" Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4"
                 ToolTip="Change the model and effort of the subagents Claude starts for scoped jobs" Click="OnSubagentMenu">
           <StackPanel Orientation="Horizontal">
-            <TextBlock Style="{StaticResource Icon}" Text="&#xE902;" FontSize="12" Foreground="{StaticResource Accent}" />
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE902;" FontSize="12" Foreground="{DynamicResource Accent}" />
             <TextBlock Text="Subagents" Style="{StaticResource Muted}" Margin="7,0,0,0" VerticalAlignment="Center" />
             <TextBlock Text="{Binding SubagentSummary}" Margin="6,0,0,0" VerticalAlignment="Center" />
           </StackPanel>
@@ -450,7 +450,7 @@
         <Button x:Name="DevActionsChip" Style="{StaticResource OutlineButton}" Margin="6,0,0,0" Padding="10,4"
                 ToolTip="Ask Claude to do a git job: resolve conflicts, review staged changes or write a commit message" Click="OnDevActionsMenu">
           <StackPanel Orientation="Horizontal">
-            <TextBlock Style="{StaticResource Icon}" Text="&#xE90F;" FontSize="12" Foreground="{StaticResource Accent}" />
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE90F;" FontSize="12" Foreground="{DynamicResource Accent}" />
             <TextBlock Text="Developer actions" Margin="7,0,0,0" VerticalAlignment="Center" />
             <TextBlock Style="{StaticResource Icon}" Text="&#xE70D;" FontSize="8" Margin="6,1,0,0" VerticalAlignment="Center" />
           </StackPanel>
@@ -471,7 +471,7 @@
           <ItemsControl.ItemTemplate>
             <DataTemplate>
               <Border Margin="3" Padding="10,6,10,6" CornerRadius="8" BorderThickness="1"
-                      BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}"
+                      BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}"
                       ToolTip="{Binding Detail}">
                 <StackPanel>
                   <DockPanel>
@@ -485,12 +485,12 @@
               </Border>
               <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding Severity}" Value="Warning">
-                  <Setter TargetName="Bar" Property="Foreground" Value="{StaticResource Amber}" />
-                  <Setter TargetName="ValueText" Property="Foreground" Value="{StaticResource Amber}" />
+                  <Setter TargetName="Bar" Property="Foreground" Value="{DynamicResource Amber}" />
+                  <Setter TargetName="ValueText" Property="Foreground" Value="{DynamicResource Amber}" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding Severity}" Value="Critical">
-                  <Setter TargetName="Bar" Property="Foreground" Value="{StaticResource ErrorRed}" />
-                  <Setter TargetName="ValueText" Property="Foreground" Value="{StaticResource ErrorRed}" />
+                  <Setter TargetName="Bar" Property="Foreground" Value="{DynamicResource ErrorRed}" />
+                  <Setter TargetName="ValueText" Property="Foreground" Value="{DynamicResource ErrorRed}" />
                 </DataTrigger>
               </DataTemplate.Triggers>
             </DataTemplate>
@@ -539,8 +539,8 @@
         <ItemsControl ItemsSource="{Binding Sessions}" Margin="10,0,10,8">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Border x:Name="Card" Margin="0,0,0,6" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
-                      Background="{StaticResource SubtleFill}">
+              <Border x:Name="Card" Margin="0,0,0,6" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
+                      Background="{DynamicResource SubtleFill}">
                 <DockPanel>
                   <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
                     <Button Style="{StaticResource IconButton}" Content="{Binding PinGlyph}" AutomationProperties.Name="{Binding PinToolTip}" ToolTip="{Binding PinToolTip}" Click="OnPinSession" />
@@ -557,7 +557,7 @@
                         <StackPanel>
                           <DockPanel>
                             <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE840;" FontSize="11" Margin="0,0,6,0"
-                                       Foreground="{StaticResource Accent}" VerticalAlignment="Center" ToolTip="Pinned"
+                                       Foreground="{DynamicResource Accent}" VerticalAlignment="Center" ToolTip="Pinned"
                                        Visibility="{Binding IsPinned, Converter={StaticResource BoolToVis}}" />
                             <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                           </DockPanel>
@@ -574,7 +574,7 @@
               </Border>
               <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                  <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent}" />
+                  <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Accent}" />
                 </DataTrigger>
               </DataTemplate.Triggers>
             </DataTemplate>
@@ -607,7 +607,7 @@
 
     <!-- Find bar (Ctrl+F): Enter / Shift+Enter or F3 / Shift+F3 move between matches, Esc closes it -->
     <Border x:Name="FindBar" Grid.Row="0" Margin="10,0,10,8" Padding="8,4" CornerRadius="8" BorderThickness="1"
-            BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}" Visibility="Collapsed">
+            BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}" Visibility="Collapsed">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock x:Name="FindCount" Style="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="8,0,6,0" />
@@ -627,11 +627,11 @@
     <StackPanel Grid.Row="1">
       <!-- Shown until the selected engine is ready (API key saved, or Claude Code installed and signed in) -->
       <Border Margin="10,0,10,8" Padding="12,9" CornerRadius="8" BorderThickness="1"
-              BorderBrush="{StaticResource Amber}" Background="{StaticResource AmberTint}"
+              BorderBrush="{DynamicResource Amber}" Background="{DynamicResource AmberTint}"
               Visibility="{Binding HasSetupMessage, Converter={StaticResource BoolToVis}}">
         <DockPanel>
           <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Open settings" Click="OnOpenSettings" />
-          <TextBlock Style="{StaticResource Icon}" Text="&#xE8D7;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,10,0" />
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE8D7;" Foreground="{DynamicResource Amber}" FontSize="13" Margin="0,0,10,0" />
           <TextBlock Text="{Binding SetupMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
         </DockPanel>
       </Border>
@@ -641,7 +641,7 @@
         <ItemsControl.ItemTemplate>
           <DataTemplate>
             <Border Margin="10,0,10,8" Padding="12,6,4,6" CornerRadius="8" BorderThickness="1"
-                    BorderBrush="{StaticResource SubtleBorder}" Background="{StaticResource SubtleFill}">
+                    BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
               <DockPanel>
                 <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE711;" VerticalAlignment="Center"
                         AutomationProperties.Name="Dismiss" ToolTip="Dismiss" Click="OnDismissBanner" />
@@ -676,8 +676,8 @@
           </Style.Triggers>
         </Style>
       </StackPanel.Style>
-      <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource Accent}" HorizontalAlignment="Center">
-        <TextBlock Text="✻" Foreground="White" FontSize="22" FontFamily="Segoe UI Symbol"
+      <Border Width="40" Height="40" CornerRadius="20" Background="{DynamicResource Accent}" HorizontalAlignment="Center">
+        <TextBlock Text="✻" Foreground="{DynamicResource OnAccent}" FontSize="22" FontFamily="Segoe UI Symbol"
                    HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-2,0,0" />
       </Border>
       <TextBlock Text="What would you like to work on?" FontSize="16" FontWeight="SemiBold" TextAlignment="Center"
@@ -689,8 +689,8 @@
     </StackPanel>
 
     <!-- Task list: Claude's latest TodoWrite / todo_write list. Click the header to collapse it, × to hide it. -->
-    <Border Grid.Row="3" Margin="10,4,10,4" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
-            Background="{StaticResource SubtleFill}" Visibility="{Binding HasTasks, Converter={StaticResource BoolToVis}}">
+    <Border Grid.Row="3" Margin="10,4,10,4" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
+            Background="{DynamicResource SubtleFill}" Visibility="{Binding HasTasks, Converter={StaticResource BoolToVis}}">
       <StackPanel>
         <DockPanel>
           <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE711;" Width="26" Height="26" Margin="0,0,2,0"
@@ -709,7 +709,7 @@
                   </Style>
                 </TextBlock.Style>
               </TextBlock>
-              <TextBlock Style="{StaticResource Icon}" Text="&#xE9D5;" FontSize="12" Foreground="{StaticResource Accent}" Margin="0,0,8,0" VerticalAlignment="Center" />
+              <TextBlock Style="{StaticResource Icon}" Text="&#xE9D5;" FontSize="12" Foreground="{DynamicResource Accent}" Margin="0,0,8,0" VerticalAlignment="Center" />
               <TextBlock Text="{Binding TasksSummary}" FontWeight="SemiBold" VerticalAlignment="Center" />
               <TextBlock Text="{Binding CurrentTask}" Style="{StaticResource Muted}" Margin="10,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
             </DockPanel>
@@ -727,13 +727,13 @@
                 <DataTemplate.Triggers>
                   <DataTrigger Binding="{Binding Status}" Value="completed">
                     <Setter TargetName="Glyph" Property="Text" Value="&#xE73A;" />
-                    <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource AddedGreen}" />
+                    <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource AddedGreen}" />
                     <Setter TargetName="TaskText" Property="TextDecorations" Value="Strikethrough" />
                     <Setter TargetName="TaskText" Property="Opacity" Value="0.6" />
                   </DataTrigger>
                   <DataTrigger Binding="{Binding Status}" Value="in_progress">
                     <Setter TargetName="Glyph" Property="Text" Value="&#xE768;" />
-                    <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
+                    <Setter TargetName="Glyph" Property="Foreground" Value="{DynamicResource Accent}" />
                     <Setter TargetName="TaskText" Property="FontWeight" Value="SemiBold" />
                   </DataTrigger>
                 </DataTemplate.Triggers>
@@ -745,12 +745,12 @@
     </Border>
 
     <!-- Question card: Claude's multiple-choice questions (never shown at the same time as the approval card) -->
-    <Border Grid.Row="4" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource Accent}"
-            Background="{StaticResource UserBubble}" Padding="12,10"
+    <Border Grid.Row="4" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Accent}"
+            Background="{DynamicResource UserBubble}" Padding="12,10"
             Visibility="{Binding HasPendingQuestions, Converter={StaticResource BoolToVis}}">
       <StackPanel>
         <StackPanel Orientation="Horizontal">
-          <TextBlock Style="{StaticResource Icon}" Text="&#xE897;" Foreground="{StaticResource Accent}" FontSize="13" Margin="0,0,8,0" />
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE897;" Foreground="{DynamicResource Accent}" FontSize="13" Margin="0,0,8,0" />
           <TextBlock Text="{Binding QuestionCardTitle}" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.LiveSetting="Assertive" />
         </StackPanel>
         <ScrollViewer MaxHeight="380" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,6,0,0">
@@ -759,7 +759,7 @@
               <DataTemplate>
                 <StackPanel Margin="0,4,0,8">
                   <Border HorizontalAlignment="Left" CornerRadius="4" Padding="6,1" Margin="0,0,0,4"
-                          Background="{StaticResource SubtleBorder}"
+                          Background="{DynamicResource SubtleBorder}"
                           Visibility="{Binding HasHeader, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="{Binding Header}" FontSize="10.5" FontWeight="SemiBold" />
                   </Border>
@@ -799,16 +799,16 @@
     </Border>
 
     <!-- Approval card for actions that change the repository -->
-    <Border Grid.Row="4" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource Amber}"
-            Background="{StaticResource AmberTint}" Padding="12,10"
+    <Border Grid.Row="4" Margin="10,4,10,8" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Amber}"
+            Background="{DynamicResource AmberTint}" Padding="12,10"
             Visibility="{Binding HasPendingApproval, Converter={StaticResource BoolToVis}}">
       <StackPanel>
         <StackPanel Orientation="Horizontal">
-          <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Foreground="{StaticResource Amber}" FontSize="13" Margin="0,0,8,0" />
+          <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Foreground="{DynamicResource Amber}" FontSize="13" Margin="0,0,8,0" />
           <TextBlock Text="Claude wants to make a change" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.LiveSetting="Assertive" />
         </StackPanel>
         <TextBlock Text="{Binding ApprovalTitle}" FontFamily="{StaticResource MonoFont}" FontSize="12" TextWrapping="Wrap" Margin="21,4,0,0" />
-        <Border Margin="0,8,0,0" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+        <Border Margin="0,8,0,0" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
                 Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
                 Visibility="{Binding HasApprovalDetail, Converter={StaticResource BoolToVis}}">
           <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,4">
@@ -816,7 +816,7 @@
           </ScrollViewer>
         </Border>
         <!-- The same edit with a checkbox per block of changes, when it has several -->
-        <Border Margin="0,8,0,0" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+        <Border Margin="0,8,0,0" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
                 Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
                 Visibility="{Binding IsReviewingBlocks, Converter={StaticResource BoolToVis}}">
           <StackPanel>
@@ -850,13 +850,13 @@
 
     <!-- Activity indicator -->
     <ProgressBar Grid.Row="5" Height="2" Margin="12,0,12,0" IsIndeterminate="{Binding IsBusy}" BorderThickness="0"
-                 Background="Transparent" Foreground="{StaticResource Accent}"
+                 Background="Transparent" Foreground="{DynamicResource Accent}"
                  Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
 
     <!-- Completions for "/" commands and "@" file mentions, shown just above the composer. -->
     <Popup x:Name="SuggestionPopup" Grid.Row="6" PlacementTarget="{Binding ElementName=Composer}" Placement="Top"
            AllowsTransparency="True" StaysOpen="True" Width="{Binding ActualWidth, ElementName=Composer}">
-      <Border Margin="0,0,0,4" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}" Padding="4"
+      <Border Margin="0,0,0,4" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}" Padding="4"
               Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}">
         <ListBox x:Name="SuggestionList" AutomationProperties.Name="Suggestions" MaxHeight="260" BorderThickness="0" Background="Transparent" Focusable="False"
                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" PreviewMouseLeftButtonUp="OnSuggestionClicked">
@@ -871,10 +871,10 @@
                     </Border>
                     <ControlTemplate.Triggers>
                       <Trigger Property="IsMouseOver" Value="True">
-                        <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
                       </Trigger>
                       <Trigger Property="IsSelected" Value="True">
-                        <Setter TargetName="Bd" Property="Background" Value="{StaticResource UserBubble}" />
+                        <Setter TargetName="Bd" Property="Background" Value="{DynamicResource UserBubble}" />
                       </Trigger>
                     </ControlTemplate.Triggers>
                   </ControlTemplate>
@@ -901,10 +901,10 @@
             Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}">
       <Border.Style>
         <Style TargetType="Border">
-          <Setter Property="BorderBrush" Value="{StaticResource SubtleBorder}" />
+          <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorder}" />
           <Style.Triggers>
             <Trigger Property="IsKeyboardFocusWithin" Value="True">
-              <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+              <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
             </Trigger>
           </Style.Triggers>
         </Style>

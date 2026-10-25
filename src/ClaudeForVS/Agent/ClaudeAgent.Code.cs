@@ -72,11 +72,6 @@ internal sealed partial class ClaudeAgent
         sink.SetStatus("Working out the rename…");
         RenamePlan plan = await CodeTools.PlanRenameAsync(input, this.files, this.RepoRoot, cancellationToken);
         string title = CodeTools.Title(plan);
-        foreach (RenamedFile file in plan.Files)
-        {
-            ThrowIfUnsaved(file.FullPath, this.files.Relative(file.FullPath));
-        }
-
         ApprovalResult approval = await this.ApproveEditAsync(
             ActivityKind.Edit, title, CodeTools.Describe(plan, this.RepoRoot), null, sink, cancellationToken, plan.Files.Select(f => f.FullPath).ToList());
         if (approval.Decision == Approval.Deny)
@@ -125,11 +120,6 @@ internal sealed partial class ClaudeAgent
         sink.SetStatus("Working out the code fix…");
         CodeFixPlan plan = await CodeTools.PlanCodeFixAsync(input, this.files, this.RepoRoot, cancellationToken);
         string title = CodeTools.Title(plan);
-        foreach (RenamedFile file in plan.Files.Where(f => !f.IsNew))
-        {
-            ThrowIfUnsaved(file.FullPath, this.files.Relative(file.FullPath));
-        }
-
         ApprovalResult approval = await this.ApproveEditAsync(
             ActivityKind.Edit, title, CodeTools.Describe(plan, this.RepoRoot), null, sink, cancellationToken, plan.Files.Select(f => f.FullPath).ToList());
         if (approval.Decision == Approval.Deny)

@@ -60,8 +60,8 @@
         <TextBlock Style="{StaticResource CardNote}" Text="Runs the Claude Code CLI on this machine, signed in with your own plan, using Claude Code's tools." />
       </StackPanel>
     </RadioButton>
-    <Border x:Name="CodePanel" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
-            Background="{StaticResource SubtleFill}" Padding="12,10" Visibility="Collapsed">
+    <Border x:Name="CodePanel" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
+            Background="{DynamicResource SubtleFill}" Padding="12,10" Visibility="Collapsed">
       <StackPanel>
         <DockPanel>
           <TextBlock x:Name="CodeStatusIcon" DockPanel.Dock="Left" Style="{StaticResource Icon}" FontSize="13" Margin="0,1,8,0"
@@ -79,7 +79,7 @@
     </Border>
 
     <TextBlock x:Name="ModelChangeNote" Style="{StaticResource CardNote}" Visibility="Collapsed" Margin="2,6,0,0"
-               Text="Changing the engine starts a new chat." Foreground="{StaticResource Amber}" />
+               Text="Changing the engine starts a new chat." Foreground="{DynamicResource Amber}" />
 
     <!-- Repository -->
     <TextBlock Style="{StaticResource SectionTitle}" Text="Repository" />
@@ -119,8 +119,8 @@
     <ItemsControl x:Name="AllowedCommandsList">
       <ItemsControl.ItemTemplate>
         <DataTemplate>
-          <Border Margin="0,0,0,4" CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
-                  Background="{StaticResource SubtleFill}" Padding="10,3,3,3">
+          <Border Margin="0,0,0,4" CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
+                  Background="{DynamicResource SubtleFill}" Padding="10,3,3,3">
             <DockPanel>
               <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE74D;" Width="24" Height="24"
                       ToolTip="Ask again before running this" Click="OnRemoveAllowedCommand" />

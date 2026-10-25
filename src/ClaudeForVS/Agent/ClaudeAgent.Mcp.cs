@@ -214,7 +214,7 @@ internal sealed partial class ClaudeAgent
         {
             result = await Task.Run(() => mcp.CallToolAsync(tool.Name, input, cancellationToken), cancellationToken);
         }
-        catch (Exception ex) when (ex is McpClient.McpException or System.Net.Http.HttpRequestException or JsonException)
+        catch (Exception ex) when (ex is McpClient.McpException or System.Net.Http.HttpRequestException or JsonException or TimeoutException)
         {
             throw new InvalidOperationException($"{title} failed: {ex.Message}");
         }

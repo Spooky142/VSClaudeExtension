@@ -68,6 +68,7 @@
 
       <Button guid="guidClaudeCmdSet" id="EditInlineCommandId" priority="0x0050" type="Button">
         <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings>
           <ButtonText>Edit with Claude Here</ButtonText>
           <CanonicalName>Edit.EditWithClaude</CanonicalName>
@@ -76,24 +77,28 @@
       </Button>
       <Button guid="guidClaudeCmdSet" id="AskAboutSelectionCommandId" priority="0x0100" type="Button">
         <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings>
           <ButtonText>Ask Claude About This</ButtonText>
         </Strings>
       </Button>
       <Button guid="guidClaudeCmdSet" id="ExplainCommandId" priority="0x0200" type="Button">
         <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings>
           <ButtonText>Explain</ButtonText>
         </Strings>
       </Button>
       <Button guid="guidClaudeCmdSet" id="FixCommandId" priority="0x0300" type="Button">
         <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings>
           <ButtonText>Fix</ButtonText>
         </Strings>
       </Button>
       <Button guid="guidClaudeCmdSet" id="WriteTestsCommandId" priority="0x0400" type="Button">
         <Parent guid="guidClaudeCmdSet" id="EditorClaudeMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings>
           <ButtonText>Write Tests</ButtonText>
         </Strings>
@@ -127,9 +132,10 @@
         </Strings>
       </Button>
 
-      <!-- Always enabled, so it works before the package has loaded; it says so if the debugger isn't paused. -->
+      <!-- Enabled until the package has loaded (choosing it then says if the debugger isn't paused); after that, hidden when nothing is being debugged and disabled until it pauses. -->
       <Button guid="guidClaudeCmdSet" id="AskAboutDebugStateCommandId" priority="0x0100" type="Button">
         <Parent guid="guidClaudeCmdSet" id="DebugMenuGroup" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
         <Strings>
           <ButtonText>Ask Claude About This Break</ButtonText>
         </Strings>
@@ -169,8 +175,8 @@
     <!-- Opens (or focuses) the chat from anywhere. Rebind in Tools > Options > Environment > Keyboard ("Tools.ClaudeChat"). -->
     <KeyBinding guid="guidClaudeCmdSet" id="ShowClaudeWindowCommandId" editor="guidVSStd97" key1="C" mod1="Control Shift Alt" />
 
-    <!-- Alt+/ in the code editor: edit the code at the caret in place ("Edit.EditWithClaude"). -->
-    <KeyBinding guid="guidClaudeCmdSet" id="EditInlineCommandId" editor="guidTextEditor" key1="VK_OEM_2" mod1="Alt" />
+    <!-- Ctrl+Alt+/ in the code editor: edit the code at the caret in place ("Edit.EditWithClaude"). -->
+    <KeyBinding guid="guidClaudeCmdSet" id="EditInlineCommandId" editor="guidTextEditor" key1="VK_OEM_2" mod1="Control Alt" />
   </KeyBindings>
 
   <Symbols>

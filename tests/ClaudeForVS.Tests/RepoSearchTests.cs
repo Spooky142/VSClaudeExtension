@@ -88,6 +88,39 @@ public sealed class RepoSearchTests : IDisposable
     }
 
     [Fact]
+    public void GrepStopsReadingFilesOnceCutOff()
+    {
+        this.Write("a.txt", "hit\n");
+        this.Write("b.txt", "hit\n");
+        this.Write("c.txt", "hit\n");
+        var searched = new List<string>();
+        IEnumerable<string> Files()
+        {
+            foreach (string file in new[] { "a.txt", "b.txt", "c.txt" })
+            {
+                searched.Add(file);
+                yield return file;
+            }
+        }
+
+        string result = RepoSearch.Grep(this.root, Files(), "hit", false, GrepOutput.FilesWithMatches, 0, 1, CancellationToken.None);
+        Assert.Equal(["a.txt"], searched);
+        Assert.Contains("[at least 1 file; results were cut off", result);
+    }
+
+    [Theory]
+    [InlineData("^foo")] // anchors match at each line, not just the file's start
+    [InlineData("bar$")]
+    [InlineData(@"(?<!\s)foo")] // a line's start has nothing before it, though the file has a line break there
+    [InlineData(@"\Afoo")]
+    public void GrepMatchesLineByLineWhateverThePattern(string pattern)
+    {
+        this.Write("crlf.txt", "first line\r\nfoo bar\r\nlast line\r\n");
+        string result = RepoSearch.Grep(this.root, ["crlf.txt"], pattern, false, GrepOutput.Content, 0, 100, CancellationToken.None);
+        Assert.Contains("crlf.txt:2:foo bar", result);
+    }
+
+    [Fact]
     public void GrepRejectsInvalidRegex() =>
         Assert.Throws<ToolInputException>(() => RepoSearch.Grep(this.root, [], "(", false, GrepOutput.Content, 0, 10, CancellationToken.None));
 

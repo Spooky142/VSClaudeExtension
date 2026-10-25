@@ -130,60 +130,103 @@ public sealed class ClaudePackage : AsyncPackage
     /// <summary>Windows notifications for every chat window: one notification area icon between them.</summary>
     internal DesktopNotifier Notifier { get; } = new();
 
+    // .NET Framework allows 2 connections per host by default, which would queue a chat's parallel subagents (each
+    // streaming its own response from the API) behind one another.
+    private const int MinConnectionsPerHost = 16;
+
     protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
     {
+        // Only ever raised: Visual Studio or another extension may have set it higher already.
+        if (System.Net.ServicePointManager.DefaultConnectionLimit < MinConnectionsPerHost)
+        {
+            System.Net.ServicePointManager.DefaultConnectionLimit = MinConnectionsPerHost;
+        }
+
+        // The services are fetched while still on the background thread Visual Studio loads the package on, so its UI
+        // thread only does what has to happen there.
+        object? componentModel = await this.GetServiceAsync(typeof(SComponentModel));
+        object? commandService = await this.GetServiceAsync(typeof(IMenuCommandService));
+        object? solutionService = await this.GetServiceAsync(typeof(SVsSolution));
+
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         Instance = this;
         this.Vs = new VsIntegration(this);
         Agent.OpenDocuments.HasUnsavedChanges = this.Vs.HasUnsavedChanges;
+        Agent.OpenDocuments.UnsavedText = this.Vs.GetUnsavedText;
+        Agent.OpenDocuments.WriteToEditor = this.Vs.WriteToEditor;
         Agent.VisualStudioHost.Current = this.Vs;
         Agent.PackageHostRegistry.Current = new VsPackageHost(this);
-        if (await this.GetServiceAsync(typeof(SComponentModel)) is IComponentModel components)
+        if (componentModel is IComponentModel components)
         {
             Agent.CodeIntelligenceHost.Current = new VsCodeIntelligence(components);
         }
 
-        if (await this.GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService commands)
+        if (commandService is OleMenuCommandService commands)
         {
             this.AddCommand(commands, ShowClaudeWindowCommandId, null, chat => chat.FocusPrompt());
-            commands.AddCommand(new MenuCommand(
-                (_, _) => this.JoinableTaskFactory.RunAsync(this.OpenNewChatWindowAsync).Task.FileAndForget("ClaudeForVS/NewChatWindow"),
-                new CommandID(CommandSet, NewChatWindowCommandId)));
-            commands.AddCommand(new MenuCommand(
-                (_, _) => this.JoinableTaskFactory.RunAsync(this.WriteCommitMessageAsync).Task.FileAndForget("ClaudeForVS/CommitMessage"),
-                new CommandID(CommandSet, WriteCommitMessageCommandId)));
+            this.AddCommand(commands, NewChatWindowCommandId, () => this.JoinableTaskFactory.RunAsync(this.OpenNewChatWindowAsync).Task.FileAndForget("ClaudeForVS/NewChatWindow"));
+            this.AddCommand(
+                commands,
+                WriteCommitMessageCommandId,
+                () => this.JoinableTaskFactory.RunAsync(this.WriteCommitMessageAsync).Task.FileAndForget("ClaudeForVS/CommitMessage"),
+                () => (Git.GitRunner.FindRepoRoot(this.GetSolutionDirectory()) ?? Git.GitRunner.FindRepoRoot(this.LastActiveChat?.RepoPath)) is null ? Availability.Disabled : Availability.Enabled);
 
-            // Test Explorer's selection is copied while it's still the active window.
+            // Test Explorer's selection is copied while it's still the active window. (It isn't looked at beforehand, as
+            // that means going through the clipboard.)
             this.AddCommand(commands, FixTestsCommandId, () => this.Vs.CopyTestExplorerSelection(), (chat, tests) => chat.FixTests(tests));
-            this.AddCommand(commands, AddToClaudeCommandId, () => this.Vs.GetSolutionExplorerSelection(), (chat, items) => chat.AddSolutionItems(items));
+            this.AddCommand(
+                commands, AddToClaudeCommandId, () => this.Vs.GetSolutionExplorerSelection(), (chat, items) => chat.AddSolutionItems(items),
+                () => this.Vs.GetSolutionExplorerSelection().Count > 0 ? Availability.Enabled : Availability.Disabled);
 
-            // Editor commands read the selection before the chat window takes focus.
-            this.AddCommand(commands, AskAboutSelectionCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, null));
-            this.AddCommand(commands, ExplainCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, "Explain this code."));
-            this.AddCommand(commands, FixCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, "Find and fix any bugs in this code."));
+            // Editor commands read the selection before the chat window takes focus. They're only shown in the editor of a
+            // file (not, say, a diff's or the Output window's), so the Claude submenu goes from the others.
+            Func<Availability> inFileEditor = () => this.Vs.GetActiveTextView() is null ? Availability.Hidden : Availability.Enabled;
+            this.AddCommand(commands, AskAboutSelectionCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, null), inFileEditor);
+            this.AddCommand(commands, ExplainCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, "Explain this code."), inFileEditor);
+            this.AddCommand(commands, FixCommandId, () => this.Vs.GetEditorContext(), (chat, editor) => chat.AskAbout(editor, "Find and fix any bugs in this code."), inFileEditor);
             this.AddCommand(commands, WriteTestsCommandId, () => this.Vs.GetEditorContext(), (chat, editor) =>
-                chat.AskAbout(editor, "Write unit tests for this code, following the conventions of the existing tests in this repository."));
-            this.AddCommand(commands, FixErrorsCommandId, () => this.Vs.GetErrors(), (chat, errors) => chat.FixErrors(errors));
+                chat.AskAbout(editor, "Write unit tests for this code, following the conventions of the existing tests in this repository."), inFileEditor);
+            this.AddCommand(
+                commands, FixErrorsCommandId, () => this.Vs.GetErrors(), (chat, errors) => chat.FixErrors(errors),
+                () => this.Vs.GetErrors().Count > 0 ? Availability.Enabled : Availability.Disabled);
 
-            // The debugger's state is read before the chat takes focus, as the user may be about to step.
-            this.AddCommand(commands, AskAboutDebugStateCommandId, () => this.Vs.GetDebugState(), (chat, state) => chat.AskAboutDebugState(state));
+            // The debugger's state is read before the chat takes focus, as the user may be about to step. Hidden when
+            // nothing is being debugged, and not available until it's paused.
+            this.AddCommand(
+                commands, AskAboutDebugStateCommandId, () => this.Vs.GetDebugState(), (chat, state) => chat.AskAboutDebugState(state),
+                () => this.Vs.GetDebugMode() switch
+                {
+                    Agent.DebugMode.Paused => Availability.Enabled,
+                    Agent.DebugMode.Running => Availability.Disabled,
+                    _ => Availability.Hidden,
+                });
 
             // Edits in the editor itself; the chat window isn't involved.
-            commands.AddCommand(new MenuCommand((_, _) => this.EditInline(), new CommandID(CommandSet, EditInlineCommandId)));
+            this.AddCommand(commands, EditInlineCommandId, this.EditInline, inFileEditor);
         }
 
-        this.solution = await this.GetServiceAsync(typeof(SVsSolution)) as IVsSolution;
+        this.solution = solutionService as IVsSolution;
         this.solution?.AdviseSolutionEvents(new SolutionEvents(this), out this.solutionEventsCookie);
+    }
+
+    /// <summary>Whether a command shows on its menus and can be chosen, as worked out when a menu with it opens.</summary>
+    private enum Availability
+    {
+        Hidden,
+        Disabled,
+        Enabled,
     }
 
     private void AddCommand(OleMenuCommandService commands, int id, Func<object?>? capture, Action<ClaudeChatControl> run) =>
         this.AddCommand<object?>(commands, id, capture ?? (() => null), (chat, _) => run(chat));
 
     /// <summary>Adds a command that captures something (on the UI thread, before anything changes focus), then shows the chat and acts on it.</summary>
-    private void AddCommand<T>(OleMenuCommandService commands, int id, Func<T> capture, Action<ClaudeChatControl, T> run)
-    {
-        commands.AddCommand(new MenuCommand(
-            (_, _) =>
+    /// <param name="available">Whether it applies just now; null if it always does.</param>
+    private void AddCommand<T>(OleMenuCommandService commands, int id, Func<T> capture, Action<ClaudeChatControl, T> run, Func<Availability>? available = null) =>
+        this.AddCommand(
+            commands,
+            id,
+            () =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
                 T captured = capture();
@@ -195,10 +238,38 @@ public sealed class ClaudePackage : AsyncPackage
                     }
                 }).Task.FileAndForget("ClaudeForVS/Command");
             },
-            new CommandID(CommandSet, id)));
-    }
+            available);
 
-    /// <summary>Edit with Claude (Alt+/): asks what to change at the caret and edits the code in place.</summary>
+    /// <summary>
+    /// Adds a command. Until the package has loaded, Visual Studio shows every command as the .vsct has it (visible and
+    /// enabled, so choosing one loads the package); after that, <paramref name="available"/> decides.
+    /// </summary>
+    private void AddCommand(OleMenuCommandService commands, int id, Action execute, Func<Availability>? available = null)
+    {
+        var command = new OleMenuCommand((_, _) => execute(), new CommandID(CommandSet, id));
+        if (available != null)
+        {
+            command.BeforeQueryStatus += (_, _) =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                Availability now;
+                try
+                {
+                    now = available();
+                }
+                catch (Exception ex) when (ex is COMException or InvalidOperationException or ArgumentException)
+                {
+                    now = Availability.Enabled; // when in doubt, let the command itself say what's wrong
+                }
+
+                command.Visible = now != Availability.Hidden;
+                command.Enabled = now == Availability.Enabled;
+            };
+        }
+
+        commands.AddCommand(command);
+    }
+    /// <summary>Edit with Claude (Ctrl+Alt+/): asks what to change at the caret and edits the code in place.</summary>
     private void EditInline()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -242,7 +313,10 @@ public sealed class ClaudePackage : AsyncPackage
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
         ClaudeChatControl? chat = await this.OpenChatWindowAsync();
         await this.JoinableTaskFactory.SwitchToMainThreadAsync(this.DisposalToken);
-        chat?.OpenBranch(info, prompt);
+        if (chat != null)
+        {
+            await chat.OpenBranchAsync(info, prompt);
+        }
     }
 
     /// <summary>
@@ -327,7 +401,7 @@ public sealed class ClaudePackage : AsyncPackage
         {
             await this.JoinableTaskFactory.SwitchToMainThreadAsync();
             statusBar?.SetText("Claude couldn't write a commit message: " + ex.Message);
-            System.Windows.MessageBox.Show("Claude couldn't write a commit message.\n\n" + ex.Message, "Claude", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            this.Vs.ShowWarning("Claude couldn't write a commit message.\n\n" + ex.Message);
         }
         finally
         {

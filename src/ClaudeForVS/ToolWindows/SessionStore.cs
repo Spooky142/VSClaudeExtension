@@ -159,7 +159,10 @@ internal static class SessionStore
     }
 
     // Each searched chat's transcript text, as of the chat's last update, so searching again doesn't re-read every file.
+    // Dropped once it holds more than SearchTextBudget characters, so years of chats don't stay in memory for good.
     private static readonly ConcurrentDictionary<string, (DateTimeOffset Updated, string Text)> SearchText = new(StringComparer.Ordinal);
+    private const long SearchTextBudget = 20_000_000;
+    private static long searchTextChars;
 
     /// <summary>True if the chat's saved transcript contains the text (case-insensitive). Safe to call off the UI thread.</summary>
     public static bool TranscriptContains(SessionInfo info, string text)
@@ -173,6 +176,12 @@ internal static class SessionStore
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 cached = (info.Updated, string.Empty);
+            }
+
+            if (System.Threading.Interlocked.Add(ref searchTextChars, cached.Text.Length) > SearchTextBudget)
+            {
+                SearchText.Clear();
+                System.Threading.Interlocked.Exchange(ref searchTextChars, cached.Text.Length);
             }
 
             SearchText[info.Id] = cached;

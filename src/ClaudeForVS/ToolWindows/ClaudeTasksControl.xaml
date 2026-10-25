@@ -26,10 +26,10 @@
               </Border>
               <ControlTemplate.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+                  <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
                 </Trigger>
                 <Trigger Property="IsSelected" Value="True">
-                  <Setter TargetName="Bd" Property="Background" Value="{StaticResource UserBubble}" />
+                  <Setter TargetName="Bd" Property="Background" Value="{DynamicResource UserBubble}" />
                 </Trigger>
               </ControlTemplate.Triggers>
             </ControlTemplate>
@@ -47,13 +47,13 @@
           </DataTrigger>
           <DataTrigger Binding="{Binding Activity}" Value="Failed">
             <Setter Property="Text" Value="&#xE7BA;" />
-            <Setter Property="Foreground" Value="{StaticResource Amber}" />
+            <Setter Property="Foreground" Value="{DynamicResource Amber}" />
           </DataTrigger>
           <DataTrigger Binding="{Binding Activity}" Value="Declined">
             <Setter Property="Text" Value="&#xE711;" />
           </DataTrigger>
           <DataTrigger Binding="{Binding IsRunning}" Value="True">
-            <Setter Property="Foreground" Value="{StaticResource Accent}" />
+            <Setter Property="Foreground" Value="{DynamicResource Accent}" />
           </DataTrigger>
         </Style.Triggers>
       </Style>
@@ -92,7 +92,7 @@
     </DockPanel>
 
     <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="Transparent"
-                  BorderThickness="1,0,0,0" BorderBrush="{StaticResource SubtleBorder}" ResizeBehavior="PreviousAndNext"
+                  BorderThickness="1,0,0,0" BorderBrush="{DynamicResource SubtleBorder}" ResizeBehavior="PreviousAndNext"
                   Visibility="{Binding HasItems, ElementName=List, Converter={StaticResource BoolToVis}}" />
 
     <!-- The selected task: what it is, how it's going, and its steps or output. -->
@@ -109,10 +109,24 @@
           <TextBlock Text="{Binding StatusText}" Style="{StaticResource Muted}" FontSize="11" Margin="20,2,0,0" />
         </StackPanel>
       </DockPanel>
-      <Border BorderThickness="0,1,0,0" BorderBrush="{StaticResource SubtleBorder}">
-        <ScrollViewer x:Name="Output" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" ScrollChanged="OnOutputScrollChanged">
-          <ItemsControl ItemsSource="{Binding DetailLines}" ItemTemplate="{StaticResource DiffLineTemplate}" Margin="4,6" />
-        </ScrollViewer>
+      <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource SubtleBorder}">
+        <!-- Virtualized: a command's output can run to thousands of lines, and only those on screen are laid out. -->
+        <ItemsControl x:Name="OutputLines" ItemsSource="{Binding DetailLines}" ItemTemplate="{StaticResource DiffLineTemplate}"
+                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel"
+                      ScrollViewer.ScrollChanged="OnOutputScrollChanged">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.Template>
+            <ControlTemplate TargetType="ItemsControl">
+              <ScrollViewer x:Name="Output" CanContentScroll="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="4,6">
+                <ItemsPresenter />
+              </ScrollViewer>
+            </ControlTemplate>
+          </ItemsControl.Template>
+        </ItemsControl>
       </Border>
     </DockPanel>
 

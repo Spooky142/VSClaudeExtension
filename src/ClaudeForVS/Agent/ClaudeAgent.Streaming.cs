@@ -18,14 +18,16 @@ namespace ClaudeForVS.Agent;
 /// <summary>Streaming one response from the Messages API.</summary>
 internal sealed partial class ClaudeAgent
 {
-    /// <param name="request">The request to stream; null for this chat's own next one.</param>
-    private async Task<StreamedTurn> StreamTurnAsync(IChatSink sink, long tokensBefore, CancellationToken cancellationToken, MessageCreateParams? request = null)
+    /// <param name="request">Builds the request to stream (again, if tool results had to be cut to fit); null for this chat's own next one.</param>
+    /// <param name="messages">The conversation <paramref name="request"/> is built from; null for this chat's own.</param>
+    private async Task<StreamedTurn> StreamTurnAsync(
+        IChatSink sink, long tokensBefore, CancellationToken cancellationToken, Func<MessageCreateParams>? request = null, List<MessageParam>? messages = null)
     {
         var blocks = new SortedDictionary<long, BlockBuilder>();
         var turn = new StreamedTurn();
         long streamedChars = 0; // output isn't counted until the response ends, so estimate it (~4 chars per token) meanwhile
 
-        await foreach (RawMessageStreamEvent ev in this.client.Messages.CreateStreaming(request ?? this.BuildRequest(), cancellationToken))
+        await foreach (RawMessageStreamEvent ev in this.StreamFittingAsync(messages ?? this.history, request ?? (() => this.BuildRequest()), cancellationToken))
         {
             if (ev.TryPickStart(out RawMessageStartEvent? start))
             {

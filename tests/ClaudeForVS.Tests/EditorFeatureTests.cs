@@ -5,7 +5,7 @@ using Xunit;
 
 namespace ClaudeForVS.Tests;
 
-/// <summary>The margin's marks for Claude's changes, and editing in place (Alt+/).</summary>
+/// <summary>The margin's marks for Claude's changes, and editing in place (Ctrl+Alt+/).</summary>
 public sealed class EditorFeatureTests
 {
     private const string Before = "one\ntwo\nthree\nfour\nfive\n";

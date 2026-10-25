@@ -187,10 +187,12 @@ internal sealed partial class ClaudeChatViewModel
         }
     }
 
-    /// <summary>Downloads the release and opens Visual Studio's installer on it, which finishes once Visual Studio closes.</summary>
-    private static async Task InstallExtensionUpdateAsync(ExtensionRelease release)
+    /// <summary>
+    /// Downloads the release and, once the user agrees, closes Visual Studio, installs it and opens Visual Studio again.
+    /// </summary>
+    private async Task InstallExtensionUpdateAsync(ExtensionRelease release)
     {
-        if (extensionUpdate is { State: ExtensionUpdateState.Downloading })
+        if (extensionUpdate is { State: ExtensionUpdateState.Downloading or ExtensionUpdateState.Installing })
         {
             return;
         }
@@ -199,8 +201,19 @@ internal sealed partial class ClaudeChatViewModel
         try
         {
             string vsix = await ExtensionUpdates.DownloadAsync(release, CancellationToken.None);
-            ExtensionUpdates.StartInstaller(vsix);
+            string? solution = this.GetSolutionFile();
+            string busy = Instances.Any(chat => chat.IsBusy) ? "\n\nClaude is still replying in a chat; closing stops it." : string.Empty;
+            if (!this.Confirm($"Visual Studio will close, install Claude for VS {release.Version} and open again"
+                + (solution is null ? "." : $" on {System.IO.Path.GetFileName(solution)}.")
+                + "\n\nIt asks to save any unsaved changes first." + busy))
+            {
+                SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Available, release));
+                return;
+            }
+
+            ExtensionUpdates.StartRestartingInstall(vsix, solution);
             SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Installing, release));
+            this.ExitVisualStudio();
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.IO.IOException
             or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -299,18 +312,18 @@ internal sealed partial class ClaudeChatViewModel
                     key,
                     $"Claude for VS {release.Version} is available (you have {ExtensionUpdates.InstalledVersion}).",
                     "Update",
-                    () => _ = InstallExtensionUpdateAsync(release)),
+                    () => _ = this.InstallExtensionUpdateAsync(release)),
                 ExtensionUpdateState.Downloading => new NoticeBanner(key, $"Downloading Claude for VS {release.Version}…"),
                 ExtensionUpdateState.Installing => new NoticeBanner(
                     key,
-                    $"Claude for VS {release.Version} is ready. Finish in the installer that opened; it completes once you close Visual Studio.",
-                    "Open again",
-                    () => _ = InstallExtensionUpdateAsync(release)),
+                    $"Claude for VS {release.Version} installs once Visual Studio closes.",
+                    "Close Visual Studio",
+                    () => this.ExitVisualStudio()),
                 _ => new NoticeBanner(
                     key,
-                    $"Couldn't download Claude for VS {release.Version}: {ours.Detail}",
+                    $"Couldn't update Claude for VS to {release.Version}: {ours.Detail}",
                     "Try again",
-                    () => _ = InstallExtensionUpdateAsync(release)),
+                    () => _ = this.InstallExtensionUpdateAsync(release)),
             });
         }
 

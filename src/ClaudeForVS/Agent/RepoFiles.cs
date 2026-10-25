@@ -77,9 +77,29 @@ internal sealed class RepoFiles
             throw new ToolInputException($"File not found: {relativePath}");
         }
 
+        long length = new FileInfo(full).Length;
+        if (length > MaxReadBytes)
+        {
+            throw new ToolInputException(
+                $"{relativePath} is {length / (1024.0 * 1024):0.#} MB, too large to read or edit here (the limit is {MaxReadBytes / (1024 * 1024)} MB). "
+                + "Use grep to find what you need in it, or run_command for anything else.");
+        }
+
         (string text, Encoding encoding) = Decode(File.ReadAllBytes(full), relativePath);
-        return new TextFile(full, text, encoding, text.Contains("\r\n") ? "\r\n" : "\n");
+
+        // A file being edited in Visual Studio is read as the editor has it, which is what an edit to it changes.
+        bool unsaved = false;
+        if (OpenDocuments.UnsavedText(full) is string editorText)
+        {
+            text = editorText;
+            unsaved = true;
+        }
+
+        return new TextFile(full, text, encoding, text.Contains("\r\n") ? "\r\n" : "\n", unsaved);
     }
+
+    // Beyond this a file is generated or data, not something to read whole into memory (and the conversation).
+    internal const long MaxReadBytes = 10 * 1024 * 1024;
 
     /// <summary>
     /// Decodes a text file, returning the encoding to write it back with. A BOM decides the encoding (UTF-16 files
@@ -121,11 +141,25 @@ internal sealed class RepoFiles
     private static bool StartsWith(byte[] bytes, params byte[] prefix)
         => bytes.Length >= prefix.Length && prefix.Select((b, i) => bytes[i] == b).All(match => match);
 
-    public void Write(string fullPath, string text, Encoding encoding)
+    /// <summary>
+    /// Writes a file. One open in Visual Studio is changed in its editor (see <see cref="OpenDocuments.WriteToEditor"/>),
+    /// so the user can undo it there and isn't asked to reload it; otherwise it's written through <see cref="AtomicFile"/>,
+    /// with the encoding's BOM if it has one, as the file was read.
+    /// </summary>
+    public EditorWrite Write(string fullPath, string text, Encoding encoding)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        File.WriteAllText(fullPath, text, encoding);
+        EditorWrite written = File.Exists(fullPath) ? OpenDocuments.WriteToEditor(fullPath, text) : EditorWrite.NotOpen;
+        if (written == EditorWrite.NotOpen)
+        {
+            AtomicFile.WriteAllBytes(fullPath, [.. encoding.GetPreamble(), .. encoding.GetBytes(text)]);
+        }
+
+        return written;
     }
+
+    /// <summary>What Claude is told when its change went into an editor with unsaved changes rather than to disk.</summary>
+    public static string LeftUnsavedNote(string relative) =>
+        $" {relative} had unsaved changes in Visual Studio, so the change is in its editor, not yet saved: builds, tests and git see the saved copy until the user saves it.";
 
     /// <summary>Converts \n line endings from Claude to the file's own convention.</summary>
     public static string NormalizeNewlines(string text, string newline)
@@ -134,5 +168,6 @@ internal sealed class RepoFiles
         return newline == "\n" ? lf : lf.Replace("\n", newline);
     }
 
-    internal sealed record TextFile(string FullPath, string Text, Encoding Encoding, string Newline);
+    /// <param name="Unsaved">True if <paramref name="Text"/> is the editor's, with changes not yet saved to disk.</param>
+    internal sealed record TextFile(string FullPath, string Text, Encoding Encoding, string Newline, bool Unsaved = false);
 }

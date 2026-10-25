@@ -144,6 +144,8 @@ internal static class ShellRunner
             throw new InvalidOperationException("Couldn't start powershell.exe: " + ex.Message, ex);
         }
 
+        Processes.CloseWithVisualStudio(process);
+
         // Output is read from the start, and the input is written in the background: a command that writes a lot
         // before it reads would otherwise block on a full pipe while this waits to write, and the timeout wouldn't apply.
         process.BeginOutputReadLine();

@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 namespace ClaudeForVS.Agent;
 
 /// <summary>
-/// Editing code in place from the editor (Alt+/): Claude rewrites some lines of a file as the user asks, and its
+/// Editing code in place from the editor (Ctrl+Alt+/): Claude rewrites some lines of a file as the user asks, and its
 /// reply replaces them. One request with no tools, so it's quick and never touches other files.
 /// </summary>
 internal static class InlineEdit

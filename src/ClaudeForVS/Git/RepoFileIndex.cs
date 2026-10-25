@@ -14,6 +14,7 @@ internal sealed class RepoFileIndex
     private string? repoRoot;
     private DateTime loadedAt;
     private IReadOnlyList<string> files = [];
+    private Dictionary<string, List<string>> byName = new(StringComparer.OrdinalIgnoreCase);
     private Task? loading;
 
     /// <summary>The files as last loaded; starts a background refresh if they're stale or for another repository.</summary>
@@ -23,6 +24,7 @@ internal sealed class RepoFileIndex
         {
             this.repoRoot = root;
             this.files = [];
+            this.byName = new(StringComparer.OrdinalIgnoreCase);
             this.loadedAt = DateTime.MinValue;
         }
 
@@ -32,6 +34,13 @@ internal sealed class RepoFileIndex
         }
 
         return this.files;
+    }
+
+    /// <summary>The files (as last loaded) whose file name is <paramref name="name"/>, ignoring case.</summary>
+    public IReadOnlyList<string> Named(string root, string name)
+    {
+        this.Get(root);
+        return this.byName.TryGetValue(name, out List<string>? named) ? named : [];
     }
 
     /// <summary>Waits for a refresh in progress, if any.</summary>
@@ -45,7 +54,27 @@ internal sealed class RepoFileIndex
                 root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], CancellationToken.None, includeStderr: false).ConfigureAwait(true);
             if (code == 0 && string.Equals(root, this.repoRoot, StringComparison.OrdinalIgnoreCase))
             {
-                this.files = output.Split(['\0'], StringSplitOptions.RemoveEmptyEntries).Distinct().ToList();
+                (List<string> files, Dictionary<string, List<string>> byName) = await Task.Run(() =>
+                {
+                    List<string> list = output.Split(['\0'], StringSplitOptions.RemoveEmptyEntries).Distinct().ToList();
+                    var names = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                    foreach (string file in list)
+                    {
+                        string name = file.Substring(file.LastIndexOf('/') + 1);
+                        if (!names.TryGetValue(name, out List<string>? named))
+                        {
+                            names[name] = named = [];
+                        }
+
+                        named.Add(file);
+                    }
+
+                    return (list, names);
+                }).ConfigureAwait(true);
+                if (string.Equals(root, this.repoRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    (this.files, this.byName) = (files, byName);
+                }
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)

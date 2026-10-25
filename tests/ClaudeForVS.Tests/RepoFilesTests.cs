@@ -41,6 +41,44 @@ public sealed class RepoFilesTests : IDisposable
         Assert.Throws<ToolInputException>(() => this.files.Resolve(path));
 
     [Fact]
+    public void AFileOpenInTheEditorIsReadAndWrittenThere()
+    {
+        string path = Path.Combine(this.root, "open.cs");
+        File.WriteAllText(path, "saved\n");
+        string? editor = "unsaved\n";
+
+        // Only this test's file is "open", so other tests running meanwhile see the defaults.
+        Func<string, string?> previousRead = OpenDocuments.UnsavedText;
+        Func<string, string, EditorWrite> previousWrite = OpenDocuments.WriteToEditor;
+        OpenDocuments.UnsavedText = p => p == path ? editor : previousRead(p);
+        OpenDocuments.WriteToEditor = (p, text) =>
+        {
+            if (p != path)
+            {
+                return previousWrite(p, text);
+            }
+
+            editor = text;
+            return EditorWrite.LeftUnsaved;
+        };
+        try
+        {
+            RepoFiles.TextFile file = this.files.Read("open.cs");
+            Assert.Equal("unsaved\n", file.Text);
+            Assert.True(file.Unsaved);
+
+            Assert.Equal(EditorWrite.LeftUnsaved, this.files.Write(path, "edited\n", file.Encoding));
+            Assert.Equal("edited\n", editor);
+            Assert.Equal("saved\n", File.ReadAllText(path)); // the editor has it; the disk waits for the user to save
+        }
+        finally
+        {
+            OpenDocuments.UnsavedText = previousRead;
+            OpenDocuments.WriteToEditor = previousWrite;
+        }
+    }
+
+    [Fact]
     public void PathsInsideTheRepositoryResolve() =>
         Assert.Equal(Path.Combine(this.root, "src", "a.cs"), this.files.Resolve(@"src\..\src\a.cs"));
 
@@ -100,6 +138,30 @@ public sealed class RepoFilesTests : IDisposable
         (string text, Encoding encoding) = RepoFiles.Decode(original, "legacy.cpp");
         Assert.DoesNotContain('\uFFFD', text);
         Assert.Equal(original, encoding.GetBytes(text));
+    }
+
+    [Fact]
+    public void WritesKeepTheBomAndLeaveNoTemporaryFile()
+    {
+        string path = Path.Combine(this.root, "sub", "bom.txt");
+        this.files.Write(path, "é", new UTF8Encoding(true));
+        Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF, 0xC3, 0xA9 }, File.ReadAllBytes(path));
+
+        this.files.Write(path, "e", new UTF8Encoding(false)); // replacing an existing file
+        Assert.Equal(new byte[] { (byte)'e' }, File.ReadAllBytes(path));
+        Assert.Equal(["bom.txt"], Directory.GetFiles(Path.GetDirectoryName(path)!).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public void FilesTooLargeToReadAreRefused()
+    {
+        using (var stream = new FileStream(Path.Combine(this.root, "huge.log"), FileMode.Create))
+        {
+            stream.SetLength(RepoFiles.MaxReadBytes + 1);
+        }
+
+        var ex = Assert.Throws<ToolInputException>(() => this.files.Read("huge.log"));
+        Assert.Contains("too large", ex.Message);
     }
 
     [Fact]

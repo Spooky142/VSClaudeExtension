@@ -79,10 +79,16 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     /// <summary>The name and text of the Output window's active pane (for /output); null if it can't be read.</summary>
     public Func<(string Name, string Text)?> ReadOutputWindow { get; set; } = () => null;
 
+    /// <summary>The open solution's file, to open again after an update; null if none. Set by the view.</summary>
+    public Func<string?> GetSolutionFile { get; set; } = () => null;
+
+    /// <summary>Closes Visual Studio as File > Exit does. Set by the view.</summary>
+    public Action ExitVisualStudio { get; set; } = () => { };
+
     /// <summary>The files open in the editor (for /openfiles).</summary>
     public Func<IReadOnlyList<(string Path, bool Unsaved)>> ListOpenDocuments { get; set; } = () => [];
 
-    public ObservableCollection<ChatEntry> Messages { get; } = [];
+    public BulkObservableCollection<ChatEntry> Messages { get; } = [];
 
     /// <summary>Prompts sent before, for Up/Down recall.</summary>
     public PromptHistory History { get; } = new();
@@ -99,7 +105,24 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     }
 
     /// <summary>The repository root for <see cref="RepoPath"/>, or null if it isn't inside one.</summary>
-    public string? RepoRoot => this.engine?.RepoRoot ?? GitRunner.FindRepoRoot(this.repoPath.Trim());
+    public string? RepoRoot => this.engine?.RepoRoot ?? this.FindRepoRoot();
+
+    // The last lookup of RepoPath's repository root. Links in replies ask for the root once per path they resolve, and
+    // looking it up walks the folders on disk; it's kept briefly, so a folder made into a repository is soon noticed.
+    private (string? Path, string? Root, DateTime At) repoRootLookup;
+
+    private string? FindRepoRoot()
+    {
+        string path = this.repoPath.Trim();
+        (string? Path, string? Root, DateTime At) lookup = this.repoRootLookup;
+        if (lookup.Path != path || DateTime.UtcNow - lookup.At > TimeSpan.FromSeconds(10))
+        {
+            lookup = (path, GitRunner.FindRepoRoot(path), DateTime.UtcNow);
+            this.repoRootLookup = lookup;
+        }
+
+        return lookup.Root;
+    }
 
     /// <summary>Short name shown in the header chip.</summary>
     public string RepoName
@@ -713,6 +736,11 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
 
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return; // nothing to redraw (status updates often repeat themselves)
+        }
+
         field = value;
         this.OnPropertyChanged(name);
     }

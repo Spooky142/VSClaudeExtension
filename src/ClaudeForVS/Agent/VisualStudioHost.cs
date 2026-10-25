@@ -64,7 +64,7 @@ internal static class ActiveDocumentReport
         }
 
         var sb = new StringBuilder();
-        sb.Append($"Active document: {Shown(document.FullPath, repoRoot)}{(document.HasUnsavedChanges ? " (unsaved changes; read_file shows the saved copy)" : string.Empty)}\n");
+        sb.Append($"Active document: {Shown(document.FullPath, repoRoot)}{(document.HasUnsavedChanges ? " (unsaved changes)" : string.Empty)}\n");
         sb.Append($"Caret: line {document.CaretLine}, column {document.CaretColumn}\n");
         if (document.FirstVisibleLine > 0 && document.LastVisibleLine >= document.FirstVisibleLine)
         {

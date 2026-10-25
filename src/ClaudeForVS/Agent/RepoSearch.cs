@@ -35,19 +35,29 @@ internal static class RepoSearch
     private const int MaxLineChars = 500;
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
 
+    // A grep pattern with any of these (a group with options or a lookaround, or \A, \z, \Z or \G) may match a line on
+    // its own yet not within the whole file, so files aren't checked whole first.
+    private static readonly Regex UnsafeForWholeText = new(@"\(\?(?!:)|\\[AzZG]", RegexOptions.CultureInvariant);
+
     /// <summary>The repository's files as repository-relative paths with forward slashes, sorted, skipping any deleted from disk.</summary>
     public static async Task<IReadOnlyList<string>> ListFilesAsync(string repoRoot, CancellationToken cancellationToken)
     {
-        (int code, string output) = await GitRunner.RunAsync(
-            repoRoot, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], cancellationToken, includeStderr: false).ConfigureAwait(false);
+        // git lists the tracked files deleted from disk too, rather than each file being looked for.
+        Task<(int ExitCode, string Output)> listing = GitRunner.RunAsync(
+            repoRoot, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], cancellationToken, includeStderr: false);
+        Task<(int ExitCode, string Output)> deleting = GitRunner.RunAsync(repoRoot, ["ls-files", "--deleted", "-z"], cancellationToken, includeStderr: false);
+        await Task.WhenAll(listing, deleting).ConfigureAwait(false);
+        (int code, string output) = await listing.ConfigureAwait(false);
         if (code != 0)
         {
             throw new InvalidOperationException("git couldn't list the repository's files.");
         }
 
+        (int deletedCode, string deletedOutput) = await deleting.ConfigureAwait(false);
+        var deleted = new HashSet<string>(deletedCode == 0 ? deletedOutput.Split(['\0'], StringSplitOptions.RemoveEmptyEntries) : [], StringComparer.Ordinal);
         return output.Split(['\0'], StringSplitOptions.RemoveEmptyEntries)
             .Distinct(StringComparer.Ordinal)
-            .Where(f => File.Exists(Path.Combine(repoRoot, f.Replace('/', Path.DirectorySeparatorChar))))
+            .Where(f => !deleted.Contains(f))
             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -176,6 +186,13 @@ internal static class RepoSearch
             throw new ToolInputException($"Invalid regular expression: {ex.Message}");
         }
 
+        // Most files have no match, so each is first checked whole, which is much quicker than line by line. That's only
+        // done when a match within a line is sure to be a match within the whole text too: not with lookarounds, inline
+        // options or anchors to the start or end of the text, which see past a line's ends there.
+        Regex? wholeText = UnsafeForWholeText.IsMatch(pattern)
+            ? null
+            : new Regex(pattern, regex.Options | RegexOptions.Multiline, RegexTimeout);
+
         var output = new StringBuilder();
         var linkFree = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         int results = 0;
@@ -192,10 +209,17 @@ internal static class RepoSearch
                 continue;
             }
 
-            string[] lines = text.Replace("\r\n", "\n").Split('\n');
+            text = text.Replace("\r\n", "\n");
             var hits = new List<int>();
+            string[] lines;
             try
             {
+                if (wholeText?.IsMatch(text) == false)
+                {
+                    continue;
+                }
+
+                lines = text.Split('\n');
                 for (int i = 0; i < lines.Length; i++)
                 {
                     if (regex.IsMatch(lines[i]))
@@ -216,11 +240,6 @@ internal static class RepoSearch
 
             matchedFiles++;
             totalMatches += hits.Count;
-            if (truncated)
-            {
-                continue; // keep counting for the summary
-            }
-
             switch (mode)
             {
                 case GrepOutput.FilesWithMatches:
@@ -270,7 +289,12 @@ internal static class RepoSearch
                     break;
             }
 
-            truncated = results >= maxResults || output.Length > MaxOutputChars;
+            // The rest of the files aren't read just to count their matches.
+            if (results >= maxResults || output.Length > MaxOutputChars)
+            {
+                truncated = true;
+                break;
+            }
         }
 
         if (matchedFiles == 0)
@@ -279,9 +303,10 @@ internal static class RepoSearch
         }
 
         string result = output.Length > MaxOutputChars ? output.ToString(0, MaxOutputChars) + "…\n" : output.ToString();
+        string atLeast = truncated ? "at least " : string.Empty;
         string summary = mode == GrepOutput.Content
-            ? $"{totalMatches} matching line{(totalMatches == 1 ? "" : "s")} in {matchedFiles} file{(matchedFiles == 1 ? "" : "s")}"
-            : $"{matchedFiles} file{(matchedFiles == 1 ? "" : "s")}";
+            ? $"{atLeast}{totalMatches} matching line{(totalMatches == 1 ? "" : "s")} in {atLeast}{matchedFiles} file{(matchedFiles == 1 ? "" : "s")}"
+            : $"{atLeast}{matchedFiles} file{(matchedFiles == 1 ? "" : "s")}";
         return truncated
             ? result + $"[{summary}; results were cut off. Narrow the search with path or glob, or raise max_results.]"
             : result + $"[{summary}]";

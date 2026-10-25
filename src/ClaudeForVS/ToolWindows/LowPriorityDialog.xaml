@@ -20,7 +20,7 @@
 
   <StackPanel Margin="22,18,22,18">
     <DockPanel>
-      <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE916;" FontSize="18" Foreground="{StaticResource Amber}"
+      <TextBlock DockPanel.Dock="Left" Style="{StaticResource Icon}" Text="&#xE916;" FontSize="18" Foreground="{DynamicResource Amber}"
                  VerticalAlignment="Center" Margin="0,0,10,0" />
       <TextBlock Text="5-hour limit reached" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
     </DockPanel>

@@ -179,6 +179,7 @@ internal sealed partial class ClaudeCodeEngine
             throw new InvalidOperationException("Couldn't start Claude Code.");
         }
 
+        Processes.CloseWithVisualStudio(started);
         this.process = started;
         this.processStderr = started.StandardError.ReadToEndAsync();
         return started;
@@ -252,7 +253,10 @@ internal sealed partial class ClaudeCodeEngine
         return await Task.WhenAny(exited.Task, Task.Delay(timeout)).ConfigureAwait(false) == exited.Task;
     }
 
-    /// <summary>Refreshes plan usage every so often while a prompt runs, so the bars move before the reply ends.</summary>
+    /// <summary>
+    /// Refreshes plan usage every so often while a prompt runs, so the bars move before the reply ends. Chats running at
+    /// the same time share one request rather than each asking.
+    /// </summary>
     private static async Task PollPlanUsageAsync(IChatSink chatSink, CancellationToken cancellationToken)
     {
         try
@@ -260,7 +264,17 @@ internal sealed partial class ClaudeCodeEngine
             while (true)
             {
                 await Task.Delay(PlanUsagePollInterval, cancellationToken);
-                foreach (PlanLimit limit in await PlanUsageClient.FetchAsync(cancellationToken))
+                // The shared request isn't cancelled with this prompt (other chats may be waiting for it), but the end of
+                // the prompt doesn't wait for it either.
+                Task<IReadOnlyList<PlanLimit>> fetch = PlanUsageClient.FetchSharedAsync(PlanUsagePollInterval);
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
+                {
+                    await Task.WhenAny(fetch, cancelled.Task);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (PlanLimit limit in await fetch)
                 {
                     chatSink.ReportPlanLimit(limit);
                 }

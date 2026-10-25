@@ -67,7 +67,8 @@ internal sealed partial class ClaudeAgent
         }
 
         sink.SetStatus($"Running {commandLine}");
-        (int exitCode, string output) = await GitRunner.RunAsync(this.RepoRoot, args, cancellationToken);
+        // Commands that change things include fetches, pushes and clones, which can take a while on a big repository.
+        (int exitCode, string output) = await GitRunner.RunAsync(this.RepoRoot, args, cancellationToken, timeout: readOnly ? null : GitRunner.LongTimeout);
         sink.ToolActivity(ActivityKind.Git, commandLine, output.Length == 0 ? "(no output)" : output);
         return exitCode == 0
             ? (output.Length == 0 ? "(no output)" : output)
@@ -271,15 +272,24 @@ internal sealed partial class ClaudeAgent
             throw new ToolInputException($"end_line ({endLine}) is before start_line ({startLine}).");
         }
 
+        // A minified file can be one line of megabytes, so each line is capped and the total is checked before
+        // a line goes in, not after.
         var sb = new StringBuilder();
         for (int i = startLine; i <= endLine; i++)
         {
-            sb.Append(i).Append('\t').Append(lines[i - 1]).Append('\n');
-            if (sb.Length > MaxFileChars)
+            string line = lines[i - 1];
+            if (line.Length > MaxLineChars)
             {
-                sb.Append($"[truncated at line {i} of {lines.Length}; use start_line/end_line to read more, or grep for what you need]\n");
+                line = line.Substring(0, MaxLineChars) + $" [line truncated: {line.Length:N0} characters; grep for what you need]";
+            }
+
+            if (sb.Length > 0 && sb.Length + line.Length > MaxFileChars)
+            {
+                sb.Append($"[truncated at line {i - 1} of {lines.Length}; use start_line/end_line to read more, or grep for what you need]\n");
                 break;
             }
+
+            sb.Append(i).Append('\t').Append(line).Append('\n');
         }
 
         sink.ToolActivity(ActivityKind.Read, $"Read {this.files.Relative(file.FullPath)}", $"lines {startLine}-{endLine} of {lines.Length}");
@@ -316,7 +326,6 @@ internal sealed partial class ClaudeAgent
         string updated = replaceAll ? file.Text.Replace(find, replace) : ReplaceFirst(file.Text, find, replace);
         string diff = UnifiedDiff.Create(file.Text, updated);
         var change = new FileChange(file.FullPath, file.Text, updated);
-        ThrowIfUnsaved(file.FullPath, relative);
         ApprovalResult approval = await this.ApproveEditAsync(ActivityKind.Edit, $"Edit {relative}", diff, change, sink, cancellationToken, [file.FullPath], canKeepSome: true);
         if (approval.Decision == Approval.Deny)
         {
@@ -327,14 +336,14 @@ internal sealed partial class ClaudeAgent
         this.ThrowIfChanged(path, file.Text);
         if (approval.PartialAfter is string partial)
         {
-            this.files.Write(file.FullPath, partial, file.Encoding);
+            EditorWrite partly = this.files.Write(file.FullPath, partial, file.Encoding);
             sink.ToolActivity(ActivityKind.Edit, $"Edited {relative} (some changes left out)", UnifiedDiff.Create(file.Text, partial), change with { After = partial });
-            return PartlyApplied(relative, partial, updated);
+            return PartlyApplied(relative, partial, updated) + Unsaved(partly, relative);
         }
 
-        this.files.Write(file.FullPath, updated, file.Encoding);
+        EditorWrite written = this.files.Write(file.FullPath, updated, file.Encoding);
         sink.ToolActivity(ActivityKind.Edit, $"Edited {relative}", diff, change);
-        return $"Edited {relative} ({count} replacement{(count == 1 ? "" : "s")}).";
+        return $"Edited {relative} ({count} replacement{(count == 1 ? "" : "s")})." + Unsaved(written, relative);
     }
 
     /// <summary>Tells Claude which parts of a change the user left out when they approved only some of it.</summary>
@@ -373,7 +382,6 @@ internal sealed partial class ClaudeAgent
         ActivityKind kind = action == "Create" ? ActivityKind.Create : ActivityKind.Edit;
         string preview = action == "Create" ? Preview(content) : UnifiedDiff.Create(before, after);
         var change = new FileChange(full, before, after);
-        ThrowIfUnsaved(full, relative);
         ApprovalResult approval = await this.ApproveEditAsync(kind, $"{action} {relative}", preview, change, sink, cancellationToken, [full], canKeepSome: action != "Create");
         if (approval.Decision == Approval.Deny)
         {
@@ -384,14 +392,14 @@ internal sealed partial class ClaudeAgent
         this.ThrowIfChanged(path, action == "Create" ? null : before);
         if (approval.PartialAfter is string partial)
         {
-            this.files.Write(full, partial, encoding);
+            EditorWrite partly = this.files.Write(full, partial, encoding);
             sink.ToolActivity(ActivityKind.Edit, $"Overwrote {relative} (some changes left out)", UnifiedDiff.Create(before, partial), change with { After = partial });
-            return PartlyApplied(relative, partial, after);
+            return PartlyApplied(relative, partial, after) + Unsaved(partly, relative);
         }
 
-        this.files.Write(full, after, encoding);
+        EditorWrite written = this.files.Write(full, after, encoding);
         sink.ToolActivity(kind, action == "Create" ? $"Created {relative}" : $"Overwrote {relative}", preview, change);
-        return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}.";
+        return $"{(action == "Create" ? "Created" : "Overwrote")} {relative}." + Unsaved(written, relative);
     }
 
     private async Task<string> DeleteFileAsync(IReadOnlyDictionary<string, JsonElement> input, IChatSink sink, CancellationToken cancellationToken)
@@ -428,13 +436,10 @@ internal sealed partial class ClaudeAgent
             return "The user declined to delete this file.";
         }
 
+        ThrowIfUnsaved(full, relative);
         if (before != null)
         {
             this.ThrowIfChanged(path, before);
-        }
-        else
-        {
-            ThrowIfUnsaved(full, relative);
         }
 
         File.Delete(full);
@@ -491,7 +496,13 @@ internal sealed partial class ClaudeAgent
         return $"Moved {title}.";
     }
 
-    /// <summary>Refuses to change a file the user is editing in Visual Studio, rather than racing their unsaved changes.</summary>
+    /// <summary>The note for Claude when a write went into an editor with unsaved changes; empty otherwise.</summary>
+    private static string Unsaved(EditorWrite written, string relative) => written == EditorWrite.LeftUnsaved ? RepoFiles.LeftUnsavedNote(relative) : string.Empty;
+
+    /// <summary>
+    /// Refuses to delete or move a file the user is editing in Visual Studio, rather than lose their unsaved changes.
+    /// (Edits are fine: they go into the editor.)
+    /// </summary>
     private static void ThrowIfUnsaved(string fullPath, string relative)
     {
         if (OpenDocuments.HasUnsavedChanges(fullPath))
@@ -508,7 +519,6 @@ internal sealed partial class ClaudeAgent
     private void ThrowIfChanged(string path, string? expected)
     {
         string full = this.files.Resolve(path);
-        ThrowIfUnsaved(full, this.files.Relative(full));
         string? now = File.Exists(full) ? this.files.Read(path).Text : null;
         if (!string.Equals(now, expected, StringComparison.Ordinal))
         {

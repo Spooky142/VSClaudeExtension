@@ -92,14 +92,31 @@ internal sealed class GitRunner
         };
     }
 
+    /// <summary>How long git gets unless the caller says otherwise; a command still running then is stopped.</summary>
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>For commands that can rightly take a while: talking to a remote, or hashing a whole large working tree.</summary>
+    public static readonly TimeSpan LongTimeout = TimeSpan.FromMinutes(10);
+
+    // Exit code returned when git was stopped for taking longer than its timeout.
+    public const int TimedOutExitCode = -1;
+
+    // Shown output past this many times the cap isn't worth waiting for, so a read-only command is stopped there.
+    private const int StopAtCapMultiple = 4;
+
     /// <param name="environment">Extra environment variables for git, e.g. GIT_INDEX_FILE.</param>
-    /// <param name="includeStderr">False to return only standard output (for output that's parsed rather than shown).</param>
+    /// <param name="includeStderr">
+    /// False to return only standard output (for output that's parsed rather than shown), all of it. True returns
+    /// both, cut to <see cref="MaxOutputChars"/>.
+    /// </param>
+    /// <param name="timeout">How long git may run (default <see cref="DefaultTimeout"/>); it then returns <see cref="TimedOutExitCode"/>.</param>
     public static async Task<(int ExitCode, string Output)> RunAsync(
         string repoRoot,
         IReadOnlyList<string> args,
         CancellationToken cancellationToken,
         IReadOnlyDictionary<string, string>? environment = null,
-        bool includeStderr = true)
+        bool includeStderr = true,
+        TimeSpan? timeout = null)
     {
         string git = GitPath ?? throw new InvalidOperationException("git.exe was not found on PATH or in the Visual Studio installation.");
 
@@ -131,25 +148,51 @@ internal sealed class GitRunner
         var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         process.Exited += (_, _) => exited.TrySetResult(true);
         process.Start();
+        Processes.CloseWithVisualStudio(process);
         process.StandardInput.Close();
 
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
-        Task<string> stderr = process.StandardError.ReadToEndAsync();
+        // Shown output is only kept up to the cap. Past several times that, a read-only command (a huge log or diff) is
+        // stopped rather than left to run on; anything else is drained to the end, since stopping it part way through
+        // could leave the repository half changed.
+        bool stoppedForSize = false;
+        void TooMuch()
+        {
+            if (!stoppedForSize && IsReadOnly(args))
+            {
+                stoppedForSize = true;
+                Processes.Kill(process);
+            }
+        }
 
+        int keep = includeStderr ? MaxOutputChars : int.MaxValue;
+        Task<(string Text, long Total)> stdout = ReadCappedAsync(process.StandardOutput, keep, TooMuch);
+        Task<(string Text, long Total)> stderr = ReadCappedAsync(process.StandardError, keep, TooMuch);
+
+        bool timedOut = false;
+        using var timer = new CancellationTokenSource(timeout ?? DefaultTimeout);
         using (cancellationToken.Register(() =>
         {
             Processes.Kill(process);
             exited.TrySetCanceled();
         }))
+        using (timer.Token.Register(() =>
+        {
+            if (!exited.Task.IsCompleted)
+            {
+                timedOut = true;
+                _ = Task.Run(() => Processes.KillTree(process)); // a fetch or push has helpers (git-remote-https) holding the pipes
+            }
+        }))
         {
             await exited.Task.ConfigureAwait(false);
         }
 
-        string output = await stdout.ConfigureAwait(false);
-        string err = await stderr.ConfigureAwait(false);
+        (string output, long outputChars) = await stdout.ConfigureAwait(false);
+        (string err, long errChars) = await stderr.ConfigureAwait(false);
+        int exitCode = timedOut ? TimedOutExitCode : stoppedForSize ? 0 : process.ExitCode;
         if (!includeStderr)
         {
-            return (process.ExitCode, output);
+            return (exitCode, output);
         }
 
         if (err.Length > 0)
@@ -157,12 +200,54 @@ internal sealed class GitRunner
             output += "\n[stderr]\n" + err;
         }
 
-        if (output.Length > MaxOutputChars)
+        output = Truncate(output, outputChars + errChars, stoppedForSize);
+        if (timedOut)
         {
-            output = output.Substring(0, MaxOutputChars) + $"\n[output truncated: {output.Length - MaxOutputChars} more characters. Narrow the command, e.g. with a path or -n.]";
+            output += $"\n[git was stopped after {(timeout ?? DefaultTimeout).TotalSeconds:0} seconds.]";
         }
 
-        return (process.ExitCode, output);
+        return (exitCode, output);
+    }
+
+    /// <summary>Cuts shown output to <see cref="MaxOutputChars"/>, saying how much more there was.</summary>
+    private static string Truncate(string output, long totalChars, bool stoppedEarly)
+    {
+        if (output.Length <= MaxOutputChars && totalChars <= MaxOutputChars)
+        {
+            return output;
+        }
+
+        long more = Math.Max(totalChars - MaxOutputChars, 1);
+        return output.Substring(0, Math.Min(output.Length, MaxOutputChars))
+            + $"\n[output truncated: {(stoppedEarly ? "at least " : string.Empty)}{more:N0} more characters. Narrow the command, e.g. with a path or -n.]";
+    }
+
+    /// <summary>
+    /// Reads a stream to its end in chunks, keeping at most <paramref name="keep"/> characters, and calls
+    /// <paramref name="tooMuch"/> once it has seen several times <see cref="MaxOutputChars"/> while keeping only that.
+    /// Returns what was kept and how many characters there were in all. Internal for tests.
+    /// </summary>
+    internal static async Task<(string Text, long Total)> ReadCappedAsync(TextReader reader, int keep, Action tooMuch)
+    {
+        var text = new StringBuilder();
+        char[] buffer = new char[8192];
+        long total = 0;
+        int read;
+        while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+        {
+            total += read;
+            if (text.Length < keep)
+            {
+                text.Append(buffer, 0, (int)Math.Min(read, keep - text.Length));
+            }
+
+            if (keep <= MaxOutputChars && total > (long)MaxOutputChars * StopAtCapMultiple)
+            {
+                tooMuch();
+            }
+        }
+
+        return (text.ToString(), total);
     }
 
     /// <summary>Walks up from <paramref name="start"/> to the directory containing .git.</summary>

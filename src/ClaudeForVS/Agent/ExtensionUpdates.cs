@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -115,20 +116,102 @@ internal static class ExtensionUpdates
         return path;
     }
 
+    // Run by a hidden PowerShell that outlives Visual Studio: waits for it to close, installs the .vsix and opens it again.
+    private const string RestartScript = """
+        param([int]$VsPid, [string]$Installer, [string]$Vsix, [string]$Devenv, [string]$Solution = '', [string]$RootSuffix = '')
+
+        # Install whenever Visual Studio closes (closing can be cancelled at the save prompt), but only open it again if
+        # that was soon after the update was asked for, not hours later.
+        $started = Get-Date
+        $vs = Get-Process -Id $VsPid -ErrorAction SilentlyContinue
+        if ($vs) { $vs.WaitForExit() }
+        $reopen = ((Get-Date) - $started).TotalMinutes -lt 10
+
+        # The installer can't run while another window of the same Visual Studio is open.
+        function Others { @(Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Devenv }) }
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Others).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+
+        $install = @()
+        if ($RootSuffix) { $install += "/rootSuffix:$RootSuffix" }
+        $install += "`"$Vsix`""
+        $code = 1
+        if ((Others).Count -eq 0) { $code = (Start-Process $Installer -ArgumentList (@('/quiet') + $install) -Wait -PassThru).ExitCode }
+
+        # 1001: it's already installed. Otherwise the installer's own window says what's in the way and lets it finish.
+        if ($code -ne 0 -and $code -ne 1001) { Start-Process $Installer -ArgumentList $install -Wait }
+
+        if ($reopen) {
+            $open = @()
+            if ($RootSuffix) { $open += '/rootsuffix', $RootSuffix }
+            if ($Solution) { $open += "`"$Solution`"" }
+            if ($open.Count -gt 0) { Start-Process $Devenv -ArgumentList $open } else { Start-Process $Devenv }
+        }
+        """;
+
     /// <summary>
-    /// Opens Visual Studio's own extension installer on the .vsix. It shows what it will install, and finishes once
-    /// Visual Studio has closed.
+    /// Starts a hidden helper that, once Visual Studio has closed, installs the .vsix with Visual Studio's own installer
+    /// and opens Visual Studio again on the solution. Close Visual Studio after calling this.
     /// </summary>
-    public static void StartInstaller(string vsixPath)
+    /// <param name="solution">The solution (or folder) to open again; null for none.</param>
+    public static void StartRestartingInstall(string vsixPath, string? solution)
     {
-        // The installer of the Visual Studio that's running sits beside devenv.exe; double-clicking a .vsix picks one too.
-        string? ide = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty);
-        string installer = ide is null ? string.Empty : Path.Combine(ide, "VSIXInstaller.exe");
-        ProcessStartInfo start = File.Exists(installer)
-            ? new ProcessStartInfo(installer, "\"" + vsixPath + "\"") { UseShellExecute = false }
-            : new ProcessStartInfo(vsixPath) { UseShellExecute = true };
-        using Process? _ = Process.Start(start);
+        using Process current = Process.GetCurrentProcess();
+        string devenv = current.MainModule?.FileName ?? throw new InvalidOperationException("Couldn't find Visual Studio's devenv.exe.");
+
+        // The installer of the Visual Studio that's running sits beside devenv.exe.
+        string installer = Path.Combine(Path.GetDirectoryName(devenv)!, "VSIXInstaller.exe");
+        if (!File.Exists(installer))
+        {
+            throw new InvalidOperationException("Couldn't find Visual Studio's VSIXInstaller.exe.");
+        }
+
+        string script = Path.Combine(Path.GetDirectoryName(vsixPath)!, "restart-and-install.ps1");
+        File.WriteAllText(script, RestartScript);
+
+        string powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+        string arguments = RestartArguments(script, current.Id, installer, vsixPath, devenv, solution, RootSuffix(Environment.GetCommandLineArgs()));
+        using Process? _ = Process.Start(new ProcessStartInfo(powershell, arguments) { UseShellExecute = false, CreateNoWindow = true });
     }
+
+    /// <summary>PowerShell's command line for the restart script.</summary>
+    internal static string RestartArguments(string script, int vsPid, string installer, string vsix, string devenv, string? solution, string? rootSuffix)
+    {
+        var args = new StringBuilder("-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden");
+        args.Append(" -File ").Append(Quote(script));
+        args.Append(" -VsPid ").Append(vsPid);
+        args.Append(" -Installer ").Append(Quote(installer));
+        args.Append(" -Vsix ").Append(Quote(vsix));
+        args.Append(" -Devenv ").Append(Quote(devenv));
+        if (!string.IsNullOrEmpty(solution))
+        {
+            args.Append(" -Solution ").Append(Quote(solution!));
+        }
+
+        if (!string.IsNullOrEmpty(rootSuffix))
+        {
+            args.Append(" -RootSuffix ").Append(Quote(rootSuffix!));
+        }
+
+        return args.ToString();
+    }
+
+    /// <summary>The hive Visual Studio was started with (e.g. "Exp" for the experimental instance), or null.</summary>
+    internal static string? RootSuffix(string[] commandLine)
+    {
+        for (int i = 0; i < commandLine.Length - 1; i++)
+        {
+            if (commandLine[i].TrimStart('/', '-').Equals("rootsuffix", StringComparison.OrdinalIgnoreCase))
+            {
+                return commandLine[i + 1];
+            }
+        }
+
+        return null;
+    }
+
+    // Paths can't contain quotes, and a trailing backslash would escape the closing one.
+    private static string Quote(string value) => "\"" + value.TrimEnd('\\') + "\"";
 
     private static string? Str(JsonElement element, string name) =>
         element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

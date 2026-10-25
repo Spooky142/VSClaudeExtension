@@ -126,6 +126,43 @@ internal static class PlanUsageClient
     /// <summary>When usage was last asked for (whether or not it came back), so idle refreshes from several windows don't repeat it.</summary>
     public static DateTime LastRequestedUtc => new(Interlocked.Read(ref lastRequestedTicks), DateTimeKind.Utc);
 
+    private static readonly object SharedLock = new();
+    private static Task<IReadOnlyList<PlanLimit>>? sharedFetch;
+    private static IReadOnlyList<PlanLimit> latest = [];
+
+    /// <summary>
+    /// For chats that each refresh usage while they run: joins a fetch already under way, and if usage was asked for
+    /// less than <paramref name="minInterval"/> ago, returns what came back last rather than asking again.
+    /// </summary>
+    public static Task<IReadOnlyList<PlanLimit>> FetchSharedAsync(TimeSpan minInterval)
+    {
+        lock (SharedLock)
+        {
+            if (sharedFetch is { IsCompleted: false })
+            {
+                return sharedFetch;
+            }
+
+            if (DateTime.UtcNow - LastRequestedUtc < minInterval)
+            {
+                return Task.FromResult(latest);
+            }
+
+            return sharedFetch = FetchAndKeepAsync();
+        }
+
+        static async Task<IReadOnlyList<PlanLimit>> FetchAndKeepAsync()
+        {
+            IReadOnlyList<PlanLimit> limits = await FetchAsync(CancellationToken.None).ConfigureAwait(false);
+            if (limits.Count > 0)
+            {
+                latest = limits;
+            }
+
+            return limits;
+        }
+    }
+
     public static async Task<IReadOnlyList<PlanLimit>> FetchAsync(CancellationToken cancellationToken)
     {
         if (ReadAccessToken() is not string token)

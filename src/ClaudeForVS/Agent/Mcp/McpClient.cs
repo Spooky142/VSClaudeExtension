@@ -30,11 +30,18 @@ internal sealed class McpClient : IDisposable
     private const string ProtocolVersion = "2025-06-18";
     private const int MaxResultChars = 30_000;
 
-    private readonly IMcpTransport transport;
+    // How long the server gets to answer: a tool can do real work; setting up and listing tools shouldn't take long.
+    private static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan SetupTimeout = TimeSpan.FromSeconds(30);
 
-    private McpClient(McpServerConfig config, IMcpTransport transport)
+    private readonly string repoRoot;
+    private readonly SemaphoreSlim restartGate = new(1, 1);
+    private IMcpTransport transport;
+
+    private McpClient(McpServerConfig config, string repoRoot, IMcpTransport transport)
     {
         this.Config = config;
+        this.repoRoot = repoRoot;
         this.transport = transport;
     }
 
@@ -45,23 +52,10 @@ internal sealed class McpClient : IDisposable
     /// <summary>Starts (or connects to) the server, initializes it and lists its tools.</summary>
     public static async Task<McpClient> StartAsync(McpServerConfig config, string repoRoot, CancellationToken cancellationToken)
     {
-        IMcpTransport transport = config.Type switch
-        {
-            "stdio" => StdioTransport.Start(config, repoRoot),
-            "http" => new HttpTransport(config),
-            _ => throw new InvalidOperationException($"The \"{config.Type}\" transport isn't supported; use stdio or http."),
-        };
-
-        var client = new McpClient(config, transport);
+        var client = new McpClient(config, repoRoot, OpenTransport(config, repoRoot));
         try
         {
-            await transport.RequestAsync("initialize", new JsonObject
-            {
-                ["protocolVersion"] = ProtocolVersion,
-                ["capabilities"] = new JsonObject { ["roots"] = new JsonObject() },
-                ["clientInfo"] = new JsonObject { ["name"] = "claude-for-visual-studio", ["version"] = "1.0" },
-            }, cancellationToken).ConfigureAwait(false);
-            await transport.NotifyAsync("notifications/initialized", cancellationToken).ConfigureAwait(false);
+            await client.InitializeAsync(cancellationToken).ConfigureAwait(false);
             client.Tools = await client.ListToolsAsync(cancellationToken).ConfigureAwait(false);
             return client;
         }
@@ -72,14 +66,86 @@ internal sealed class McpClient : IDisposable
         }
     }
 
+    private static IMcpTransport OpenTransport(McpServerConfig config, string repoRoot) => config.Type switch
+    {
+        "stdio" => StdioTransport.Start(config, repoRoot),
+        "http" => new HttpTransport(config),
+        _ => throw new InvalidOperationException($"The \"{config.Type}\" transport isn't supported; use stdio or http."),
+    };
+
+    private async Task InitializeAsync(CancellationToken cancellationToken)
+    {
+        await this.RequestAsync("initialize", new JsonObject
+        {
+            ["protocolVersion"] = ProtocolVersion,
+            ["capabilities"] = new JsonObject { ["roots"] = new JsonObject() },
+            ["clientInfo"] = new JsonObject { ["name"] = "claude-for-visual-studio", ["version"] = "1.0" },
+        }, SetupTimeout, cancellationToken).ConfigureAwait(false);
+        await this.transport.NotifyAsync("notifications/initialized", null, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<McpCallResult> CallToolAsync(string name, IReadOnlyDictionary<string, JsonElement> arguments, CancellationToken cancellationToken)
     {
-        JsonNode result = await this.transport.RequestAsync("tools/call", new JsonObject
+        await this.RestartIfExitedAsync(cancellationToken).ConfigureAwait(false);
+        JsonNode result = await this.RequestAsync("tools/call", new JsonObject
         {
             ["name"] = name,
             ["arguments"] = JsonNode.Parse(JsonSerializer.Serialize(arguments)),
-        }, cancellationToken).ConfigureAwait(false);
+        }, CallTimeout, cancellationToken).ConfigureAwait(false);
         return ToResult(result);
+    }
+
+    /// <summary>
+    /// Starts a stdio server again if it has exited (crashed, or stopped itself) since the last call, and initializes
+    /// it. Its tools were listed when the chat started and stay as they were.
+    /// </summary>
+    private async Task RestartIfExitedAsync(CancellationToken cancellationToken)
+    {
+        if (!this.transport.HasExited)
+        {
+            return;
+        }
+
+        await this.restartGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!this.transport.HasExited)
+            {
+                return;
+            }
+
+            IMcpTransport fresh = OpenTransport(this.Config, this.repoRoot);
+            this.transport.Dispose();
+            this.transport = fresh;
+            try
+            {
+                await this.InitializeAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                fresh.Dispose(); // counts as exited, so the next call tries again
+                throw;
+            }
+        }
+        finally
+        {
+            this.restartGate.Release();
+        }
+    }
+
+    /// <summary>A request that fails with a <see cref="TimeoutException"/> if the server doesn't answer in time.</summary>
+    private async Task<JsonNode> RequestAsync(string method, JsonNode? parameters, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        using var timer = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timer.CancelAfter(timeout);
+        try
+        {
+            return await this.transport.RequestAsync(method, parameters, timer.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The MCP server \"{this.Config.Name}\" didn't answer {method} within {(timeout.TotalMinutes >= 1 ? $"{timeout.TotalMinutes:0} minutes" : $"{timeout.TotalSeconds:0} seconds")}.");
+        }
     }
 
     public void Dispose() => this.transport.Dispose();
@@ -140,7 +206,7 @@ internal sealed class McpClient : IDisposable
         for (int page = 0; page < 20; page++)
         {
             JsonObject parameters = cursor is null ? new JsonObject() : new JsonObject { ["cursor"] = cursor };
-            JsonNode result = await this.transport.RequestAsync("tools/list", parameters, cancellationToken).ConfigureAwait(false);
+            JsonNode result = await this.RequestAsync("tools/list", parameters, SetupTimeout, cancellationToken).ConfigureAwait(false);
             if (result["tools"] is JsonArray list)
             {
                 foreach (JsonNode? tool in list)
@@ -177,9 +243,27 @@ internal sealed class McpClient : IDisposable
 
     private interface IMcpTransport : IDisposable
     {
+        /// <summary>True once a server process has exited (or been stopped); always false over HTTP.</summary>
+        bool HasExited { get; }
+
         Task<JsonNode> RequestAsync(string method, JsonNode? parameters, CancellationToken cancellationToken);
 
-        Task NotifyAsync(string method, CancellationToken cancellationToken);
+        Task NotifyAsync(string method, JsonNode? parameters, CancellationToken cancellationToken);
+    }
+
+    /// <summary>
+    /// Tells the server a request was given up on (by the user, or for taking too long), so it can stop working on it.
+    /// Best effort: the server may have gone. Initialize is never cancelled this way, as the protocol asks.
+    /// </summary>
+    private static void SendCancelled(IMcpTransport transport, string method, long id)
+    {
+        if (method == "initialize")
+        {
+            return;
+        }
+
+        _ = transport.NotifyAsync("notifications/cancelled", new JsonObject { ["requestId"] = id, ["reason"] = "The request was cancelled." }, CancellationToken.None)
+            .ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
     }
 
     /// <summary>Thrown when the server answers a request with a JSON-RPC error.</summary>
@@ -204,6 +288,7 @@ internal sealed class McpClient : IDisposable
         private readonly string repoRoot;
         private readonly StringBuilder stderr = new();
         private long nextId;
+        private volatile bool exited;
 
         private StdioTransport(Process process, string repoRoot)
         {
@@ -243,8 +328,11 @@ internal sealed class McpClient : IDisposable
                 throw new InvalidOperationException($"Couldn't run {config.Command}: {ex.Message}");
             }
 
+            Processes.CloseWithVisualStudio(process);
             return new StdioTransport(process, repoRoot);
         }
+
+        public bool HasExited => this.exited;
 
         /// <summary>
         /// The program to start and its arguments. Commands like npx and uvx are batch files on Windows, which only
@@ -303,7 +391,15 @@ internal sealed class McpClient : IDisposable
                 await this.SendAsync(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method, ["params"] = parameters }, cancellationToken).ConfigureAwait(false);
                 using (cancellationToken.Register(() => tcs.TrySetCanceled()))
                 {
-                    return ResultOrThrow(await tcs.Task.ConfigureAwait(false));
+                    try
+                    {
+                        return ResultOrThrow(await tcs.Task.ConfigureAwait(false));
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        SendCancelled(this, method, id);
+                        throw;
+                    }
                 }
             }
             finally
@@ -312,11 +408,14 @@ internal sealed class McpClient : IDisposable
             }
         }
 
-        public Task NotifyAsync(string method, CancellationToken cancellationToken) =>
-            this.SendAsync(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method }, cancellationToken);
+        public Task NotifyAsync(string method, JsonNode? parameters, CancellationToken cancellationToken) =>
+            this.SendAsync(parameters is null
+                ? new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method }
+                : new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method, ["params"] = parameters }, cancellationToken);
 
         public void Dispose()
         {
+            this.exited = true;
             try
             {
                 this.process.StandardInput.Close();
@@ -360,29 +459,14 @@ internal sealed class McpClient : IDisposable
                 string? line;
                 while ((line = await this.process.StandardOutput.ReadLineAsync().ConfigureAwait(false)) != null)
                 {
-                    JsonNode? message;
+                    // One odd message (a number where a string belongs, say) is skipped, rather than ending the
+                    // connection and leaving every call after it waiting.
                     try
                     {
-                        message = JsonNode.Parse(line);
+                        await this.HandleMessageAsync(line).ConfigureAwait(false);
                     }
-                    catch (JsonException)
+                    catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or ArgumentException or KeyNotFoundException)
                     {
-                        continue; // servers sometimes log to stdout
-                    }
-
-                    if (message is not JsonObject obj)
-                    {
-                        continue;
-                    }
-
-                    bool hasMethod = obj["method"] is JsonValue;
-                    if (!hasMethod && obj["id"] is JsonValue idValue && idValue.TryGetValue(out long id) && this.pending.TryGetValue(id, out var tcs))
-                    {
-                        tcs.TrySetResult(obj);
-                    }
-                    else if (hasMethod && obj["id"] is JsonNode requestId)
-                    {
-                        await this.AnswerServerRequestAsync(obj["method"]!.GetValue<string>(), requestId.DeepClone()).ConfigureAwait(false);
                     }
                 }
             }
@@ -390,7 +474,36 @@ internal sealed class McpClient : IDisposable
             {
             }
 
+            this.exited = true;
             this.Fail("The MCP server exited." + this.ErrorTail());
+        }
+
+        private async Task HandleMessageAsync(string line)
+        {
+            JsonNode? message;
+            try
+            {
+                message = JsonNode.Parse(line);
+            }
+            catch (JsonException)
+            {
+                return; // servers sometimes log to stdout
+            }
+
+            if (message is not JsonObject obj)
+            {
+                return;
+            }
+
+            bool hasMethod = obj["method"] is JsonValue;
+            if (!hasMethod && obj["id"] is JsonValue idValue && idValue.TryGetValue(out long id) && this.pending.TryGetValue(id, out var tcs))
+            {
+                tcs.TrySetResult(obj);
+            }
+            else if (hasMethod && obj["id"] is JsonNode requestId)
+            {
+                await this.AnswerServerRequestAsync(obj["method"]!.GetValue<string>(), requestId.DeepClone()).ConfigureAwait(false);
+            }
         }
 
         /// <summary>Answers the few requests a server may send: ping, and the workspace roots (the repository).</summary>
@@ -471,9 +584,24 @@ internal sealed class McpClient : IDisposable
             this.config = config;
         }
 
+        public bool HasExited => false;
+
         public async Task<JsonNode> RequestAsync(string method, JsonNode? parameters, CancellationToken cancellationToken)
         {
             long id = Interlocked.Increment(ref this.nextId);
+            try
+            {
+                return await this.SendRequestAsync(id, method, parameters, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                SendCancelled(this, method, id);
+                throw;
+            }
+        }
+
+        private async Task<JsonNode> SendRequestAsync(long id, string method, JsonNode? parameters, CancellationToken cancellationToken)
+        {
             var message = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["method"] = method, ["params"] = parameters };
             using HttpResponseMessage response = await this.PostAsync(message, cancellationToken).ConfigureAwait(false);
             if (method == "initialize")
@@ -535,9 +663,12 @@ internal sealed class McpClient : IDisposable
             return ResultOrThrow(reply ?? throw new InvalidOperationException("The MCP server sent a reply that isn't JSON."));
         }
 
-        public async Task NotifyAsync(string method, CancellationToken cancellationToken)
+        public async Task NotifyAsync(string method, JsonNode? parameters, CancellationToken cancellationToken)
         {
-            using HttpResponseMessage _ = await this.PostAsync(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method }, cancellationToken).ConfigureAwait(false);
+            JsonObject message = parameters is null
+                ? new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method }
+                : new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method, ["params"] = parameters };
+            using HttpResponseMessage _ = await this.PostAsync(message, cancellationToken).ConfigureAwait(false);
         }
 
         public void Dispose()

@@ -8,6 +8,7 @@
   <SolidColorBrush x:Key="Accent" Color="#D97757" />
   <SolidColorBrush x:Key="AccentHover" Color="#C7684A" />
   <SolidColorBrush x:Key="AccentPressed" Color="#B05A3E" />
+  <SolidColorBrush x:Key="OnAccent" Color="White" />
   <SolidColorBrush x:Key="UserBubble" Color="#24D97757" />
   <SolidColorBrush x:Key="UserBubbleBorder" Color="#50D97757" />
   <SolidColorBrush x:Key="HoverTint" Color="#1F808080" />
@@ -50,10 +51,10 @@
     </Border>
     <DataTemplate.Triggers>
       <DataTrigger Binding="{Binding Kind}" Value="Added">
-        <Setter TargetName="Bg" Property="Background" Value="{StaticResource AddedTint}" />
+        <Setter TargetName="Bg" Property="Background" Value="{DynamicResource AddedTint}" />
       </DataTrigger>
       <DataTrigger Binding="{Binding Kind}" Value="Removed">
-        <Setter TargetName="Bg" Property="Background" Value="{StaticResource RemovedTint}" />
+        <Setter TargetName="Bg" Property="Background" Value="{DynamicResource RemovedTint}" />
       </DataTrigger>
       <DataTrigger Binding="{Binding Kind}" Value="Hunk">
         <Setter TargetName="LineText" Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.GrayTextKey}}" />
@@ -79,10 +80,10 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PressTint}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.4" />
@@ -110,11 +111,11 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
               <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PressTint}" />
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -140,7 +141,7 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PressTint}" />
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -152,7 +153,7 @@
   <Style x:Key="OutlineButton" TargetType="Button">
     <Setter Property="Foreground" Value="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}" />
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderBrush" Value="{StaticResource SubtleBorder}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource SubtleBorder}" />
     <Setter Property="Padding" Value="12,5" />
     <Setter Property="Margin" Value="6,0,0,0" />
     <Setter Property="Cursor" Value="Hand" />
@@ -165,10 +166,10 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource PressTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource PressTint}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.4" />
@@ -181,9 +182,9 @@
 
   <!-- Filled accent button (primary action). -->
   <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource OutlineButton}">
-    <Setter Property="Foreground" Value="White" />
-    <Setter Property="Background" Value="{StaticResource Accent}" />
-    <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+    <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
+    <Setter Property="Background" Value="{DynamicResource Accent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="Button">
@@ -193,10 +194,10 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHover}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentHover}" />
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentPressed}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentPressed}" />
             </Trigger>
             <Trigger Property="IsEnabled" Value="False">
               <Setter Property="Opacity" Value="0.4" />
@@ -213,8 +214,8 @@
     <Setter Property="FontSize" Value="13" />
     <Setter Property="Width" Value="32" />
     <Setter Property="Height" Value="32" />
-    <Setter Property="Foreground" Value="White" />
-    <Setter Property="Background" Value="{StaticResource Accent}" />
+    <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
+    <Setter Property="Background" Value="{DynamicResource Accent}" />
     <Setter Property="Cursor" Value="Hand" />
     <Setter Property="Template">
       <Setter.Value>
@@ -224,10 +225,10 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHover}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentHover}" />
             </Trigger>
             <Trigger Property="IsPressed" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentPressed}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentPressed}" />
             </Trigger>
           </ControlTemplate.Triggers>
         </ControlTemplate>
@@ -238,12 +239,12 @@
   <!-- Rounded input boxes for the settings panel. -->
   <ControlTemplate x:Key="FieldTemplate" TargetType="Control">
     <Border x:Name="Bd" Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}"
-            BorderBrush="{StaticResource SubtleBorder}" BorderThickness="1" CornerRadius="6" Padding="6,4">
+            BorderBrush="{DynamicResource SubtleBorder}" BorderThickness="1" CornerRadius="6" Padding="6,4">
       <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
     </Border>
     <ControlTemplate.Triggers>
       <Trigger Property="IsKeyboardFocusWithin" Value="True">
-        <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+        <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
       </Trigger>
     </ControlTemplate.Triggers>
   </ControlTemplate>
@@ -268,12 +269,12 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ToggleButton">
-          <Border x:Name="Bd" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+          <Border x:Name="Bd" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
                   Background="{DynamicResource {x:Static vsshell:VsBrushes.WindowKey}}" Padding="10,7">
             <DockPanel>
               <Border x:Name="Indicator" DockPanel.Dock="Left" Width="14" Height="14" CornerRadius="7" BorderThickness="1.5"
-                      BorderBrush="{StaticResource SubtleBorder}" VerticalAlignment="Top" Margin="0,2,10,0">
-                <Border x:Name="Fill" Width="6" Height="6" CornerRadius="3" Background="{StaticResource Accent}" Visibility="Collapsed" />
+                      BorderBrush="{DynamicResource SubtleBorder}" VerticalAlignment="Top" Margin="0,2,10,0">
+                <Border x:Name="Fill" Width="6" Height="6" CornerRadius="3" Background="{DynamicResource Accent}" Visibility="Collapsed" />
               </Border>
               <ContentPresenter VerticalAlignment="Center" />
             </DockPanel>
@@ -284,12 +285,12 @@
               <Setter TargetName="Fill" Property="CornerRadius" Value="1" />
             </DataTrigger>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
-              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource UserBubble}" />
-              <Setter TargetName="Indicator" Property="BorderBrush" Value="{StaticResource Accent}" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource UserBubble}" />
+              <Setter TargetName="Indicator" Property="BorderBrush" Value="{DynamicResource Accent}" />
               <Setter TargetName="Fill" Property="Visibility" Value="Visible" />
             </Trigger>
           </ControlTemplate.Triggers>
@@ -303,12 +304,12 @@
     <Setter Property="Height" Value="4" />
     <Setter Property="Minimum" Value="0" />
     <Setter Property="Maximum" Value="100" />
-    <Setter Property="Foreground" Value="{StaticResource Accent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Accent}" />
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ProgressBar">
           <Grid>
-            <Border x:Name="PART_Track" CornerRadius="2" Background="{StaticResource SubtleBorder}" />
+            <Border x:Name="PART_Track" CornerRadius="2" Background="{DynamicResource SubtleBorder}" />
             <Border x:Name="PART_Indicator" CornerRadius="2" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" />
           </Grid>
         </ControlTemplate>
@@ -324,24 +325,24 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="RadioButton">
-          <Border x:Name="Bd" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource SubtleBorder}"
+          <Border x:Name="Bd" CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource SubtleBorder}"
                   Background="Transparent" Padding="12,9">
             <DockPanel>
               <Border x:Name="Dot" DockPanel.Dock="Left" Width="16" Height="16" CornerRadius="8" BorderThickness="1.5"
-                      BorderBrush="{StaticResource SubtleBorder}" VerticalAlignment="Center" Margin="0,0,12,0">
-                <Ellipse x:Name="Fill" Width="8" Height="8" Fill="{StaticResource Accent}" Visibility="Collapsed" />
+                      BorderBrush="{DynamicResource SubtleBorder}" VerticalAlignment="Center" Margin="0,0,12,0">
+                <Ellipse x:Name="Fill" Width="8" Height="8" Fill="{DynamicResource Accent}" Visibility="Collapsed" />
               </Border>
               <ContentPresenter VerticalAlignment="Center" />
             </DockPanel>
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
-              <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Accent}" />
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource UserBubble}" />
-              <Setter TargetName="Dot" Property="BorderBrush" Value="{StaticResource Accent}" />
+              <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource UserBubble}" />
+              <Setter TargetName="Dot" Property="BorderBrush" Value="{DynamicResource Accent}" />
               <Setter TargetName="Fill" Property="Visibility" Value="Visible" />
             </Trigger>
           </ControlTemplate.Triggers>
@@ -363,11 +364,11 @@
           </Border>
           <ControlTemplate.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource HoverTint}" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverTint}" />
             </Trigger>
             <Trigger Property="IsChecked" Value="True">
-              <Setter TargetName="Bd" Property="Background" Value="{StaticResource Accent}" />
-              <Setter Property="Foreground" Value="White" />
+              <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Accent}" />
+              <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
               <Setter Property="TextElement.FontWeight" Value="SemiBold" />
             </Trigger>
           </ControlTemplate.Triggers>

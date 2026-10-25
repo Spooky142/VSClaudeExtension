@@ -19,7 +19,7 @@ namespace ClaudeForVS.Tests;
 internal sealed class FakeAnthropic : IDisposable
 {
     private readonly HttpListener listener;
-    private readonly Queue<Func<JsonElement, string>> script = new();
+    private readonly Queue<Func<JsonElement, (int Status, string Body)>> script = new();
     private readonly CancellationTokenSource stop = new();
     private readonly Task loop;
 
@@ -59,11 +59,19 @@ internal sealed class FakeAnthropic : IDisposable
     /// <summary>Queues the next response: a function of the request, returning the response's server-sent events.</summary>
     public FakeAnthropic Reply(Func<JsonElement, string> response)
     {
-        this.script.Enqueue(response);
+        this.script.Enqueue(request => (200, response(request)));
         return this;
     }
 
     public FakeAnthropic Reply(string events) => this.Reply(_ => events);
+
+    /// <summary>Queues an API error: the status code and a JSON error body, as the real API sends them.</summary>
+    public FakeAnthropic ReplyError(int status, string type, string message)
+    {
+        string body = JsonSerializer.Serialize(new { type = "error", error = new { type, message } });
+        this.script.Enqueue(_ => (status, body));
+        return this;
+    }
 
     public void Dispose()
     {
@@ -99,18 +107,19 @@ internal sealed class FakeAnthropic : IDisposable
             }
 
             JsonDocument request = JsonDocument.Parse(body);
-            string events;
+            (int status, string events) reply;
             lock (this.Requests)
             {
                 this.Requests.Add(request);
                 this.Betas.Add(context.Request.Headers["anthropic-beta"]);
-                events = this.script.Count > 0
+                reply = this.script.Count > 0
                     ? this.script.Dequeue()(request.RootElement)
-                    : Sse.Turn(Sse.Text("(the fake API had nothing more scripted)"));
+                    : (200, Sse.Turn(Sse.Text("(the fake API had nothing more scripted)")));
             }
 
-            byte[] bytes = new UTF8Encoding(false).GetBytes(events);
-            context.Response.ContentType = "text/event-stream";
+            byte[] bytes = new UTF8Encoding(false).GetBytes(reply.events);
+            context.Response.StatusCode = reply.status;
+            context.Response.ContentType = reply.status == 200 ? "text/event-stream" : "application/json";
             context.Response.ContentLength64 = bytes.Length;
             await context.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
             context.Response.Close();

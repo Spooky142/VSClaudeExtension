@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using ClaudeForVS.Markdown;
 
 namespace ClaudeForVS.ToolWindows;
@@ -65,13 +66,32 @@ public partial class ClaudeChatControl
 
     private void CloseFind()
     {
+        this.findDelay?.Stop();
         this.ClearFindSelection();
         this.currentMatch = null;
         this.FindBar.Visibility = Visibility.Collapsed;
         this.PromptBox.Focus();
     }
 
+    // Searching a long chat on every keystroke would lag behind the typing, so it waits for a short pause.
+    private DispatcherTimer? findDelay;
+
     private void OnFindTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (this.findDelay is null)
+        {
+            this.findDelay = new DispatcherTimer(TimeSpan.FromMilliseconds(150), DispatcherPriority.Input, (_, _) =>
+            {
+                this.findDelay!.Stop();
+                this.FindAsTyped();
+            }, this.Dispatcher);
+        }
+
+        this.findDelay.Stop();
+        this.findDelay.Start();
+    }
+
+    private void FindAsTyped()
     {
         // Start again from the match at (or just after) the current one, so typing narrows it down in place.
         if (this.currentMatch is (int view, int offset))
@@ -100,6 +120,7 @@ public partial class ClaudeChatControl
     /// <summary>Moves to the next (or previous) match, wrapping around, and shows how many there are.</summary>
     private void FindStep(bool forward)
     {
+        this.findDelay?.Stop(); // e.g. Enter pressed before the pause after typing: this search covers it
         string query = this.FindBox.Text;
         this.ClearFindSelection();
         if (query.Length == 0)
@@ -200,18 +221,25 @@ public partial class ClaudeChatControl
     /// <summary>Case-insensitive matches within each run of text (a match split by formatting isn't found).</summary>
     private static IEnumerable<(int Offset, TextPointer Start, TextPointer End)> FindIn(FlowDocument document, string query)
     {
-        for (TextPointer? pointer = document.ContentStart; pointer != null; pointer = pointer.GetNextContextPosition(LogicalDirection.Forward))
+        // The pointer's offset from the start is kept as it moves along, since working it out from the start for each
+        // match takes longer the further into the document it is.
+        int pointerOffset = 0;
+        TextPointer? next;
+        for (TextPointer? pointer = document.ContentStart; pointer != null; pointer = next)
         {
-            if (pointer.GetPointerContext(LogicalDirection.Forward) != TextPointerContext.Text)
+            next = pointer.GetNextContextPosition(LogicalDirection.Forward);
+            if (pointer.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.Text)
             {
-                continue;
+                string run = pointer.GetTextInRun(LogicalDirection.Forward);
+                for (int at = run.IndexOf(query, StringComparison.CurrentCultureIgnoreCase); at >= 0; at = run.IndexOf(query, at + query.Length, StringComparison.CurrentCultureIgnoreCase))
+                {
+                    yield return (pointerOffset + at, pointer.GetPositionAtOffset(at), pointer.GetPositionAtOffset(at + query.Length));
+                }
             }
 
-            string run = pointer.GetTextInRun(LogicalDirection.Forward);
-            for (int at = run.IndexOf(query, StringComparison.CurrentCultureIgnoreCase); at >= 0; at = run.IndexOf(query, at + query.Length, StringComparison.CurrentCultureIgnoreCase))
+            if (next != null)
             {
-                TextPointer start = pointer.GetPositionAtOffset(at);
-                yield return (document.ContentStart.GetOffsetToPosition(start), start, pointer.GetPositionAtOffset(at + query.Length));
+                pointerOffset += pointer.GetOffsetToPosition(next);
             }
         }
     }

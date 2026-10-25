@@ -497,6 +497,71 @@ public sealed class AgentLoopTests : IDisposable
     }
 
     [Fact]
+    public async Task AMinifiedFileIsReadAPartAtATime()
+    {
+        // One line of half a megabyte, then ordinary lines.
+        File.WriteAllText(Path.Combine(this.repo, "app.min.js"), new string('x', 500_000) + "\n" + string.Join("\n", Enumerable.Range(1, 5_000).Select(i => $"line {i}")));
+        this.api.Reply(ToolTurn("toolu_1", "read_file", new { path = "app.min.js" })).Reply(Sse.Turn(Sse.Text("Read it.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        await this.SendAsync(agent, "Read app.min.js");
+
+        string result = this.ToolResult(1);
+        Assert.True(result.Length < 41_000, $"{result.Length} characters");
+        Assert.Contains("[line truncated: 500,000 characters", result);
+        Assert.Contains("line 1\n", result);
+        Assert.Contains("use start_line/end_line to read more", result);
+    }
+
+    private static string BigFile() => string.Join("\n", Enumerable.Range(1, 2_000).Select(i => $"line {i} of a file that's big enough to matter"));
+
+    [Fact]
+    public async Task APromptTooLongForTheWindowLosesItsLargestToolResultAndIsSentAgain()
+    {
+        File.WriteAllText(Path.Combine(this.repo, "big.txt"), BigFile());
+        this.api
+            .Reply(Sse.Turn(Sse.ToolUse("toolu_1", "read_file", new { path = "big.txt" }) + Sse.ToolUse("toolu_2", "read_file", new { path = "hello.txt" }, 1), stopReason: "tool_use"))
+            .ReplyError(400, "invalid_request_error", "prompt is too long: 201000 tokens > 200000 maximum")
+            .Reply(ToolTurn("toolu_3", "read_file", new { path = "big.txt" }))
+            .Reply(Sse.Turn(Sse.Text("Done.")));
+        using ClaudeAgent agent = this.NewAgent();
+
+        await this.SendAsync(agent, "Read big.txt and hello.txt");
+
+        Assert.Equal(4, this.api.Requests.Count);
+        JsonElement messages = this.api.Requests[2].RootElement.GetProperty("messages");
+        JsonElement[] results = messages[messages.GetArrayLength() - 1].GetProperty("content").EnumerateArray().ToArray();
+        Assert.Equal(ClaudeAgent.RemovedResult, results[0].GetProperty("content").GetString());
+        Assert.Contains("line two", results[1].GetProperty("content").GetString()); // the small one stays
+        Assert.Contains("line 100 of a file", this.ToolResult(3)); // read again in full, not "hasn't changed"
+        Assert.Equal("Done.", this.sink.Text.ToString());
+    }
+
+    [Fact]
+    public async Task ToolResultsSentSinceTheLastResponseCountTowardsCompacting()
+    {
+        File.WriteAllText(Path.Combine(this.repo, "big.txt"), BigFile());
+        this.api
+            .Reply(ToolTurn("toolu_1", "read_file", new { path = "big.txt" })) // 100 input tokens, as far as the API said
+            .Reply(Sse.Turn(Sse.Text("Summary of it all.")))
+            .Reply(Sse.Turn(Sse.Text("Carried on.")));
+        using ClaudeAgent agent = this.NewAgent();
+        agent.CompactAtTokens = 4_000; // the read is about 10K tokens
+
+        await this.SendAsync(agent, "Read big.txt");
+
+        Assert.Equal(3, this.api.Requests.Count);
+        JsonElement compact = this.api.Requests[1].RootElement.GetProperty("messages");
+        Assert.Contains("replaced by a summary", compact[compact.GetArrayLength() - 1].GetProperty("content").GetString());
+        Assert.Contains("Summary of it all.", this.api.Requests[2].RootElement.GetProperty("messages")[0].GetProperty("content").GetString());
+    }
+
+    [Theory]
+    [InlineData("prompt is too long: 215000 tokens > 200000 maximum", (15_000 + 8_000) * 4)]
+    [InlineData("prompt is too long", 0)]
+    public void TheExcessIsReadFromTheError(string error, long chars) => Assert.Equal(chars, ClaudeAgent.ExcessChars(error));
+
+    [Fact]
     public async Task CodeTheWebToolsRanGoesBackWithTheTurn()
     {
         this.api.Reply(Sse.Turn(

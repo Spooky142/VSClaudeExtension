@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -32,19 +34,24 @@ internal sealed class InlineEditLayer
 }
 
 /// <summary>
-/// Editing code in place (Alt+/): asks what to change, sends the lines to Claude, and replaces them with its reply as
-/// one edit, which Undo here (or Ctrl+Z) takes back. The selection is edited, or else the member the caret is in, or
-/// else the caret's line. One at a time in each editor.
+/// Editing code in place (Ctrl+Alt+/): asks what to change, sends the lines to Claude, and shows its reply as a diff
+/// beside them. Apply replaces the lines as one edit (Ctrl+Z takes it back); Discard leaves them. The selection is
+/// edited, or else the member the caret is in, or else the caret's line. One at a time in each editor.
 /// </summary>
 internal sealed class InlineEditSession
 {
     // A type or member longer than this is too much to rewrite for a small request; the caret's line is used instead.
     private const int MaxMemberLines = 200;
 
-    private static readonly Brush Highlight = Frozen(new SolidColorBrush(Color.FromArgb(0x1C, 0xD9, 0x77, 0x57)));
-    private static readonly Brush Accent = Frozen(new SolidColorBrush(Color.FromRgb(0xD9, 0x77, 0x57)));
+    // The most diff lines shown beside the code; the rest can be seen with Open diff.
+    private const int MaxPreviewLines = 40;
+
+    private static readonly Brush Highlight = HighContrast.Frozen(new SolidColorBrush(Color.FromArgb(0x1C, 0xD9, 0x77, 0x57)));
+    private static readonly Brush AddedTint = HighContrast.Frozen(new SolidColorBrush(Color.FromArgb(0x33, 0x2E, 0xA0, 0x43)));
+    private static readonly Brush RemovedTint = HighContrast.Frozen(new SolidColorBrush(Color.FromArgb(0x33, 0xF8, 0x51, 0x49)));
 
     private readonly IWpfTextView view;
+    private readonly string filePath;
     private readonly IAdornmentLayer layer;
     private readonly ITrackingSpan span;
     private readonly string original;
@@ -52,28 +59,37 @@ internal sealed class InlineEditSession
     private readonly Border marker;
     private readonly TextBlock status;
     private readonly StackPanel buttons;
-    private ITextSnapshot? appliedSnapshot;
+    private readonly Border preview;
+
+    // Claude's replacement for the lines, while it's shown for the user to apply or discard.
+    private string? proposed;
 
     // True while Claude is working on the edit; afterwards the marker only shows the result or an error.
     private bool working = true;
 
-    private InlineEditSession(IWpfTextView view, ITrackingSpan span)
+    private InlineEditSession(IWpfTextView view, string filePath, ITrackingSpan span)
     {
         this.view = view;
+        this.filePath = filePath;
         this.layer = view.GetAdornmentLayer(InlineEditLayer.Name);
         this.span = span;
         this.original = span.GetText(view.TextSnapshot);
         this.status = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         this.status.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
         this.buttons = new StackPanel { Orientation = Orientation.Horizontal };
-        var content = new StackPanel { Orientation = Orientation.Horizontal };
-        content.Children.Add(new TextBlock { Text = "✻ ", Foreground = Accent, VerticalAlignment = VerticalAlignment.Center });
-        content.Children.Add(this.status);
-        content.Children.Add(this.buttons);
+        var header = new StackPanel { Orientation = Orientation.Horizontal };
+        header.Children.Add(new TextBlock { Text = "✻ ", Foreground = HighContrast.EditorAccent, VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(this.status);
+        header.Children.Add(this.buttons);
+        this.preview = new Border { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 4, 4, 1), BorderThickness = new Thickness(0, 1, 0, 0) };
+        this.preview.SetResourceReference(Border.BorderBrushProperty, VsBrushes.GrayTextKey);
+        var content = new StackPanel();
+        content.Children.Add(header);
+        content.Children.Add(this.preview);
         this.marker = new Border
         {
             Child = content,
-            BorderBrush = Accent,
+            BorderBrush = HighContrast.EditorAccent,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
             Padding = new Thickness(8, 3, 4, 3),
@@ -97,7 +113,7 @@ internal sealed class InlineEditSession
                 return; // still waiting for Claude; one at a time
             }
 
-            running.Finish(); // a new edit keeps the last one, or closes the last one's message
+            running.Finish(); // a new edit discards the last one's diff, or closes its message
         }
 
         (int startLine, int endLine) = await ChooseLinesAsync(view);
@@ -111,7 +127,7 @@ internal sealed class InlineEditSession
             return;
         }
 
-        var session = new InlineEditSession(view, snapshot.CreateTrackingSpan(lines, SpanTrackingMode.EdgeInclusive));
+        var session = new InlineEditSession(view, filePath, snapshot.CreateTrackingSpan(lines, SpanTrackingMode.EdgeInclusive));
         view.Properties[typeof(InlineEditSession)] = session;
         session.Show("Claude is editing…", ("Cancel", session.cancel.Cancel));
         view.LayoutChanged += session.OnLayoutChanged;
@@ -142,7 +158,7 @@ internal sealed class InlineEditSession
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Anything else (Claude Code missing, a network or API error) is shown; otherwise the session would stay
-            // "editing" and block Alt+/ in this editor.
+            // "editing" and block Ctrl+Alt+/ in this editor.
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             session.working = false;
             session.Show("Claude couldn't edit this: " + OneLine(ex.Message), ("Close", session.Finish));
@@ -151,10 +167,11 @@ internal sealed class InlineEditSession
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         session.working = false;
-        session.Apply(code);
+        session.Propose(code);
     }
 
-    private void Apply(string code)
+    /// <summary>Shows Claude's change to the lines as a diff, for the user to apply or discard.</summary>
+    private void Propose(string code)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         ITextSnapshot now = this.view.TextBuffer.CurrentSnapshot;
@@ -172,34 +189,107 @@ internal sealed class InlineEditSession
             return;
         }
 
-        using (ITextEdit edit = this.view.TextBuffer.CreateEdit())
-        {
-            edit.Replace(this.span.GetSpan(now), replacement);
-            this.appliedSnapshot = edit.Apply();
-        }
-
-        this.view.TextBuffer.Changed += this.OnBufferChanged;
-        this.Show("Edited. Keep it?", ("Keep", this.Finish), ("Undo", this.Undo));
+        this.proposed = replacement;
+        this.preview.Child = this.DiffView(this.original, replacement);
+        this.preview.Visibility = Visibility.Visible;
+        this.Show("Claude's edit:", ("Apply", this.Accept), ("Open diff", this.OpenDiff), ("Discard", this.Finish));
     }
 
-    /// <summary>Puts the lines back as they were, if they haven't been changed again since.</summary>
-    private void Undo()
+    /// <summary>Replaces the lines with Claude's, as one edit that Ctrl+Z takes back, unless they've changed since.</summary>
+    private void Accept()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         ITextSnapshot now = this.view.TextBuffer.CurrentSnapshot;
-        if (now == this.appliedSnapshot)
+        if (this.proposed is not string replacement || this.view.IsClosed || this.span.GetText(now) != this.original)
         {
-            this.view.TextBuffer.Changed -= this.OnBufferChanged;
-            using ITextEdit edit = this.view.TextBuffer.CreateEdit();
-            edit.Replace(this.span.GetSpan(now), this.original);
+            this.preview.Visibility = Visibility.Collapsed;
+            this.Show("The code changed since Claude's edit, so it was left as it is.", ("Close", this.Finish));
+            return;
+        }
+
+        using (ITextEdit edit = this.view.TextBuffer.CreateEdit())
+        {
+            edit.Replace(this.span.GetSpan(now), replacement);
             edit.Apply();
         }
 
         this.Finish();
     }
 
-    // Typing anything after the edit keeps it, and Ctrl+Z still takes it back.
-    private void OnBufferChanged(object sender, TextContentChangedEventArgs e) => this.Finish();
+    /// <summary>Opens the whole file, as it is and with Claude's edit, in Visual Studio's diff viewer.</summary>
+    private void OpenDiff()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.proposed is not string replacement || this.view.IsClosed || ClaudePackage.Instance is not ClaudePackage package)
+        {
+            return;
+        }
+
+        ITextSnapshot now = this.view.TextBuffer.CurrentSnapshot;
+        SnapshotSpan lines = this.span.GetSpan(now);
+        string text = now.GetText();
+        string after = text.Substring(0, lines.Start.Position) + replacement + text.Substring(lines.End.Position);
+        package.Vs.ShowDiff(new FileChange(this.filePath, text, after), $"{Path.GetFileName(this.filePath)}: Claude's edit");
+    }
+
+    /// <summary>The changed lines with a line of context around them, in the editor's font, removed lines tinted red and added green.</summary>
+    private FrameworkElement DiffView(string before, string after)
+    {
+        var lines = new StackPanel();
+        System.Windows.Media.TextFormatting.TextRunProperties text = this.view.FormattedLineSource.DefaultTextProperties;
+        IReadOnlyList<ReviewLine> review = ChangeBlocks.Compute(before, after, context: 1)?.Lines ?? [];
+        int shown = 0;
+        foreach (ReviewLine line in review)
+        {
+            if (line.Op == '@')
+            {
+                if (lines.Children.Count > 0)
+                {
+                    lines.Children.Add(Line("⋯", null, text)); // lines left out between two changes
+                }
+
+                continue;
+            }
+
+            if (shown++ == MaxPreviewLines)
+            {
+                lines.Children.Add(Line($"… {review.Count(l => l.Op != '@') - MaxPreviewLines} more lines: Open diff shows them all", null, text));
+                break;
+            }
+
+            // In a high-contrast theme the tints would vanish, so the "+" and "-" alone say which is which.
+            Brush? tint = HighContrast.IsOn ? null : line.Op switch { '+' => AddedTint, '-' => RemovedTint, _ => null };
+            lines.Children.Add(Line(line.Display, tint, text));
+        }
+
+        if (review.Count == 0)
+        {
+            lines.Children.Add(Line("The change is too large to show here: Open diff shows it.", null, text));
+        }
+
+        return new ScrollViewer
+        {
+            Content = lines,
+            MaxWidth = Math.Max(240, this.view.ViewportWidth * 0.6),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Focusable = false,
+        };
+    }
+
+    private static TextBlock Line(string content, Brush? tint, System.Windows.Media.TextFormatting.TextRunProperties text)
+    {
+        var line = new TextBlock
+        {
+            Text = content.Replace("\t", "    "),
+            Background = tint,
+            FontFamily = text.Typeface.FontFamily,
+            FontSize = text.FontRenderingEmSize,
+            Padding = new Thickness(4, 0, 8, 0),
+        };
+        line.SetResourceReference(TextBlock.ForegroundProperty, VsBrushes.ToolWindowTextKey);
+        return line;
+    }
 
     private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e) => this.Place();
 
@@ -214,7 +304,6 @@ internal sealed class InlineEditSession
     {
         this.view.LayoutChanged -= this.OnLayoutChanged;
         this.view.Closed -= this.OnClosed;
-        this.view.TextBuffer.Changed -= this.OnBufferChanged;
         this.layer.RemoveAllAdornments();
         if (Current(this.view) == this)
         {
@@ -229,6 +318,7 @@ internal sealed class InlineEditSession
         foreach ((string label, Action click) in actions)
         {
             var button = new Button { Content = label, Margin = new Thickness(2, 0, 0, 0), Padding = new Thickness(8, 1, 8, 1), Focusable = false, Cursor = System.Windows.Input.Cursors.Hand };
+            HighContrast.UseVsStyle(button); // the editor has none of the chat's styles, so it would otherwise be drawn light in a dark theme
             button.Click += (_, _) => click();
             this.buttons.Children.Add(button);
         }
@@ -249,7 +339,18 @@ internal sealed class InlineEditSession
         if (this.view.TextViewLines.GetMarkerGeometry(current.Length > 0 ? current : new SnapshotSpan(current.Start, 0)) is Geometry geometry)
         {
             Rect bounds = geometry.Bounds;
-            var tint = new System.Windows.Shapes.Rectangle { Width = Math.Max(this.view.ViewportWidth, bounds.Width), Height = Math.Max(bounds.Height, this.view.LineHeight), Fill = Highlight, IsHitTestVisible = false };
+            var tint = new System.Windows.Shapes.Rectangle { Width = Math.Max(this.view.ViewportWidth, bounds.Width), Height = Math.Max(bounds.Height, this.view.LineHeight), IsHitTestVisible = false };
+            if (HighContrast.IsOn)
+            {
+                // A faint tint vanishes in a high-contrast theme; an outline in the theme's highlight colour doesn't.
+                tint.Stroke = HighContrast.EditorAccent;
+                tint.StrokeThickness = 1;
+            }
+            else
+            {
+                tint.Fill = Highlight;
+            }
+
             Canvas.SetLeft(tint, this.view.ViewportLeft);
             Canvas.SetTop(tint, bounds.Top);
             this.layer.AddAdornment(AdornmentPositioningBehavior.TextRelative, current, null, tint, null);
@@ -262,9 +363,19 @@ internal sealed class InlineEditSession
         }
 
         this.marker.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        double top = first.Top - this.marker.DesiredSize.Height - 2;
         Canvas.SetLeft(this.marker, Math.Max(this.view.ViewportLeft, this.view.ViewportRight - this.marker.DesiredSize.Width - 24));
-        Canvas.SetTop(this.marker, top >= this.view.ViewportTop ? top : first.Bottom + 2);
+        double above = first.Top - this.marker.DesiredSize.Height - 2;
+        if (this.preview.Visibility == Visibility.Visible
+            && this.view.TextViewLines.GetTextViewLineContainingBufferPosition(current.End) is ITextViewLine last
+            && last.VisibilityState != VisibilityState.Unattached
+            && (last.Bottom + this.marker.DesiredSize.Height <= this.view.ViewportBottom || above < this.view.ViewportTop))
+        {
+            Canvas.SetTop(this.marker, last.Bottom + 2); // the diff goes below the lines, so they stay in sight beside it
+        }
+        else
+        {
+            Canvas.SetTop(this.marker, above >= this.view.ViewportTop ? above : first.Bottom + 2);
+        }
         this.layer.AddAdornment(AdornmentPositioningBehavior.OwnerControlled, null, null, this.marker, null);
     }
 
@@ -340,11 +451,5 @@ internal sealed class InlineEditSession
     {
         string line = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
         return line.Length > 160 ? line.Substring(0, 160) + "…" : line;
-    }
-
-    private static Brush Frozen(Brush brush)
-    {
-        brush.Freeze();
-        return brush;
     }
 }

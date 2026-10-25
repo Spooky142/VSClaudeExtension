@@ -137,6 +137,46 @@ internal sealed class ChangeBlocks
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The change from <paramref name="before"/> to <paramref name="after"/> as replacements of whole lines, each at a
+    /// character offset into <paramref name="before"/>, in order. An editor applying them leaves the lines between them
+    /// (and anything marked there, like the caret) where they were.
+    /// </summary>
+    public static IReadOnlyList<(int Start, int Length, string Text)> Replacements(string before, string after)
+    {
+        List<(char Op, string Text)> ops = UnifiedDiff.Diff(SplitKeepingEndings(before), SplitKeepingEndings(after));
+        var replacements = new List<(int Start, int Length, string Text)>();
+        int position = 0;
+        int i = 0;
+        while (i < ops.Count)
+        {
+            if (ops[i].Op == ' ')
+            {
+                position += ops[i].Text.Length;
+                i++;
+                continue;
+            }
+
+            int start = position;
+            var inserted = new StringBuilder();
+            for (; i < ops.Count && ops[i].Op != ' '; i++)
+            {
+                if (ops[i].Op == '-')
+                {
+                    position += ops[i].Text.Length;
+                }
+                else
+                {
+                    inserted.Append(ops[i].Text);
+                }
+            }
+
+            replacements.Add((start, position - start, inserted.ToString()));
+        }
+
+        return replacements;
+    }
+
     /// <summary>Lines with their endings ("a\r\n", "b\n", "c"), so the text can be put back together exactly.</summary>
     private static string[] SplitKeepingEndings(string text)
     {

@@ -34,6 +34,7 @@ public partial class McpServersDialog : DialogWindow
         this.repoRoot = repoRoot;
         this.jtf = jtf;
         this.InitializeComponent();
+        HighContrast.Follow(this);
 
         McpConfiguration config = McpConfig.Load(repoRoot);
         IReadOnlyCollection<string> disabled = McpDisabledServers.Default.For(repoRoot);

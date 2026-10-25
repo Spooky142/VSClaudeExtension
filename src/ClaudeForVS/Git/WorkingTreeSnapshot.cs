@@ -60,7 +60,8 @@ internal static class WorkingTreeSnapshot
                 addArgs = ["add", "-A", $"--pathspec-from-file={pathspecFile}", "--pathspec-file-nul"];
             }
 
-            (int code, _) = await GitRunner.RunAsync(repoRoot, addArgs, cancellationToken, env, includeStderr: false).ConfigureAwait(false);
+            // The first snapshot of a large working tree hashes every file, which can take a while.
+            (int code, _) = await GitRunner.RunAsync(repoRoot, addArgs, cancellationToken, env, includeStderr: false, GitRunner.LongTimeout).ConfigureAwait(false);
             if (code != 0)
             {
                 return null;
@@ -228,12 +229,29 @@ internal static class WorkingTreeSnapshot
         List<string> restore = changes.Where(c => c.Status != 'A').Select(c => c.Path).ToList();
         if (restore.Count > 0)
         {
-            var args = new List<string> { "restore", $"--source={tree}", "--worktree", "--" };
-            args.AddRange(restore);
-            (int code, string output) = await GitRunner.RunAsync(repoRoot, args, cancellationToken).ConfigureAwait(false);
-            if (code != 0)
+            // Through a file, since there could be too many to fit on a command line; literal, so a name with * or [ in
+            // it is just that file.
+            string pathspecFile = Path.Combine(Path.GetTempPath(), "ClaudeForVS", $"restore-{Guid.NewGuid():N}.pathspec");
+            try
             {
-                return output.Trim();
+                Directory.CreateDirectory(Path.GetDirectoryName(pathspecFile)!);
+                File.WriteAllText(pathspecFile, string.Join("\0", restore.Select(p => ":(literal)" + p)));
+                string[] args = ["restore", $"--source={tree}", "--worktree", $"--pathspec-from-file={pathspecFile}", "--pathspec-file-nul"];
+                (int code, string output) = await GitRunner.RunAsync(repoRoot, args, cancellationToken, timeout: GitRunner.LongTimeout).ConfigureAwait(false);
+                if (code != 0)
+                {
+                    return output.Trim();
+                }
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(pathspecFile);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
             }
         }
 

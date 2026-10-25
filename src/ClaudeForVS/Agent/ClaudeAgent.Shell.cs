@@ -246,7 +246,7 @@ internal sealed partial class ClaudeAgent
             if (summary is null)
             {
                 // No results file: most likely it didn't build, or the target has no tests.
-                string text = output.Length == 0 ? "(no output)" : output;
+                string text = output.Length == 0 ? "(no output)" : CapCommandOutput(output);
                 sink.ToolActivity(ActivityKind.Failed, title, $"No test results were produced (exit code {exitCode}).\n{text}");
                 return $"No test results were produced (exit code {exitCode}); the build probably failed or the target has no tests. Output:\n{text}";
             }

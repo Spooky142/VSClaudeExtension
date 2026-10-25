@@ -4,10 +4,13 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using Anthropic;
+using Anthropic.Exceptions;
 using Anthropic.Models.Messages;
 using ClaudeForVS.Agent.Mcp;
 using ClaudeForVS.Git;
@@ -32,16 +35,25 @@ internal sealed partial class ClaudeAgent
             threshold = Math.Min(threshold, this.CompactAtTokens);
         }
 
-        if ((!force && this.contextTokens < threshold) || this.history.Count == 0)
+        // The latest response's count doesn't include the tool results sent since, which can be large.
+        long context = this.contextTokens + PendingTokens(this.history);
+        if ((!force && context < threshold) || this.history.Count == 0)
         {
             return 0;
         }
 
         sink.SetStatus(force ? "Summarizing the conversation…" : "Context is getting long · summarizing the conversation…");
 
+        // The summary is asked for after those tool results, so if they'd leave too little room for it they're cut first.
+        const long MinSummaryTokens = 4_000;
+        if (context > window - MinSummaryTokens - 2_000)
+        {
+            this.TrimLatestToolResults(this.history, (context - (window - MinSummaryTokens - 2_000)) * 4);
+            context = this.contextTokens + PendingTokens(this.history);
+        }
+
         // The reply has to fit in what's left of the window.
-        long maxTokens = Math.Max(4_000, Math.Min(16_000, window - this.contextTokens - 2_000));
-        MessageCreateParams request = this.BuildRequest(new() { Role = Role.User, Content = CompactInstruction }, maxTokens);
+        long maxTokens = Math.Max(MinSummaryTokens, Math.Min(16_000, window - context - 2_000));
 
         var summary = new StringBuilder();
         long newTokens = 0;
@@ -50,7 +62,8 @@ internal sealed partial class ClaudeAgent
         TokenUsage used = default;
         try
         {
-            await foreach (RawMessageStreamEvent ev in this.client.Messages.CreateStreaming(request, cancellationToken))
+            await foreach (RawMessageStreamEvent ev in this.StreamFittingAsync(
+                this.history, () => this.BuildRequest(new() { Role = Role.User, Content = CompactInstruction }, maxTokens), cancellationToken))
             {
                 if (ev.TryPickStart(out RawMessageStartEvent? start))
                 {
@@ -120,6 +133,196 @@ internal sealed partial class ClaudeAgent
 
     private static ToolResultBlockParam Error(string id, string message)
         => new() { ToolUseID = id, Content = message, IsError = true };
+
+    /// <summary>What a tool result too large for the context window is replaced with. Internal for tests.</summary>
+    internal const string RemovedResult = "[result removed: too large for the context window; ask for a narrower range]";
+
+    /// <summary>
+    /// Streams a request built from <paramref name="messages"/>. If the API says the prompt is too long, the largest tool
+    /// results in the latest round are replaced with <see cref="RemovedResult"/> and the request is sent once more.
+    /// </summary>
+    private async IAsyncEnumerable<RawMessageStreamEvent> StreamFittingAsync(
+        List<MessageParam> messages, Func<MessageCreateParams> request, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        // The API refuses a prompt before streaming anything, so the retry can only come before the first event.
+        IAsyncEnumerator<RawMessageStreamEvent> events = this.client.Messages.CreateStreaming(request(), cancellationToken).GetAsyncEnumerator(cancellationToken);
+        bool more;
+        try
+        {
+            more = await events.MoveNextAsync();
+        }
+        catch (AnthropicBadRequestException ex) when (IsPromptTooLong(ex))
+        {
+            await events.DisposeAsync();
+            if (!this.TrimLatestToolResults(messages, ExcessChars(ex)))
+            {
+                throw;
+            }
+
+            events = this.client.Messages.CreateStreaming(request(), cancellationToken).GetAsyncEnumerator(cancellationToken);
+            more = await events.MoveNextAsync();
+        }
+
+        try
+        {
+            while (more)
+            {
+                yield return events.Current;
+                more = await events.MoveNextAsync();
+            }
+        }
+        finally
+        {
+            await events.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// <see cref="ShrinkLatestToolResults"/>, then for the chat's own conversation, forgets the reads whose results were
+    /// in that message, so reading those files again sends their text rather than a note pointing back to it.
+    /// </summary>
+    private bool TrimLatestToolResults(List<MessageParam> messages, long charsToFree)
+    {
+        if (!ShrinkLatestToolResults(messages, charsToFree))
+        {
+            return false;
+        }
+
+        if (messages == this.history)
+        {
+            lock (this.reads)
+            {
+                foreach (string file in this.reads.Where(r => r.Value.Index >= messages.Count - 1).Select(r => r.Key).ToList())
+                {
+                    this.reads.Remove(file);
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsPromptTooLong(AnthropicBadRequestException ex) =>
+        (ex.ResponseBody ?? string.Empty).IndexOf("prompt is too long", StringComparison.OrdinalIgnoreCase) >= 0
+        || ex.Message.IndexOf("prompt is too long", StringComparison.OrdinalIgnoreCase) >= 0;
+
+    /// <summary>
+    /// Roughly how many characters have to go, from the API's "prompt is too long: 215000 tokens &gt; 200000 maximum"
+    /// (with some to spare); 0 if it doesn't say, meaning every large result goes.
+    /// </summary>
+    internal static long ExcessChars(AnthropicBadRequestException ex) => ExcessChars((ex.ResponseBody ?? string.Empty) + " " + ex.Message);
+
+    internal static long ExcessChars(string error)
+    {
+        Match counts = Regex.Match(error, @"(\d+)\s*tokens\s*>\s*(\d+)");
+        return counts.Success && long.TryParse(counts.Groups[1].Value, out long sent) && long.TryParse(counts.Groups[2].Value, out long allowed) && sent > allowed
+            ? (sent - allowed + CompactHeadroom) * 4
+            : 0;
+    }
+
+    /// <summary>
+    /// Estimated tokens in the messages after the latest response, which its token count doesn't include: the tool
+    /// results (and any text) sent since, at about 4 characters a token. Internal for tests.
+    /// </summary>
+    internal static long PendingTokens(List<MessageParam> messages)
+    {
+        long chars = 0;
+        for (int i = messages.Count - 1; i >= 0 && RoleOf(messages[i]) != "assistant"; i--)
+        {
+            chars += messages[i].RawData.TryGetValue("content", out JsonElement content) ? ContentChars(content) : 0;
+        }
+
+        return chars / 4;
+    }
+
+    private static string RoleOf(MessageParam message) =>
+        message.RawData.TryGetValue("role", out JsonElement role) && role.ValueKind == JsonValueKind.String ? role.GetString()! : string.Empty;
+
+    /// <summary>The characters of text and tool results in a message's content; images and the like aren't counted.</summary>
+    private static long ContentChars(JsonElement content)
+    {
+        if (content.ValueKind == JsonValueKind.String)
+        {
+            return content.GetString()!.Length;
+        }
+
+        if (content.ValueKind != JsonValueKind.Array)
+        {
+            return 0;
+        }
+
+        long chars = 0;
+        foreach (JsonElement block in content.EnumerateArray())
+        {
+            string type = block.ValueKind == JsonValueKind.Object && block.TryGetProperty("type", out JsonElement t) && t.ValueKind == JsonValueKind.String ? t.GetString()! : string.Empty;
+            if (type == "text" && block.TryGetProperty("text", out JsonElement text) && text.ValueKind == JsonValueKind.String)
+            {
+                chars += text.GetString()!.Length;
+            }
+            else if (type == "tool_result" && block.TryGetProperty("content", out JsonElement result))
+            {
+                chars += ContentChars(result);
+            }
+        }
+
+        return chars;
+    }
+
+    /// <summary>
+    /// Replaces the largest tool results in the last message (the latest round's) with <see cref="RemovedResult"/>,
+    /// biggest first, until about <paramref name="charsToFree"/> characters have gone (all but small ones when it's 0).
+    /// Returns false if there was nothing to replace. Internal for tests.
+    /// </summary>
+    internal static bool ShrinkLatestToolResults(List<MessageParam> messages, long charsToFree)
+    {
+        const int MinRemovedChars = 1_000;
+        if (messages.Count == 0 || RoleOf(messages[messages.Count - 1]) != "user"
+            || !messages[messages.Count - 1].RawData.TryGetValue("content", out JsonElement content) || content.ValueKind != JsonValueKind.Array
+            || JsonNode.Parse(content.GetRawText()) is not JsonArray blocks)
+        {
+            return false;
+        }
+
+        var largest = blocks
+            .Select((block, index) => (Index: index, Block: block, Chars: block?["type"]?.GetValueKind() == JsonValueKind.String && block["type"]!.GetValue<string>() == "tool_result"
+                ? ContentChars(JsonSerializer.SerializeToElement(block["content"]))
+                : 0))
+            .Where(r => r.Chars >= MinRemovedChars)
+            .OrderByDescending(r => r.Chars)
+            .ToList();
+        if (largest.Count == 0)
+        {
+            return false;
+        }
+
+        long freed = 0;
+        foreach ((int index, JsonNode? block, long chars) in largest)
+        {
+            if (charsToFree > 0 && freed >= charsToFree)
+            {
+                break;
+            }
+
+            blocks[index] = new JsonObject
+            {
+                ["type"] = "tool_result",
+                ["tool_use_id"] = block!["tool_use_id"]?.DeepClone(),
+                ["content"] = RemovedResult,
+                ["is_error"] = true,
+            };
+            freed += chars;
+        }
+
+        var raw = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, JsonElement> pair in messages[messages.Count - 1].RawData)
+        {
+            raw[pair.Key] = pair.Value;
+        }
+
+        raw["content"] = JsonSerializer.SerializeToElement(blocks);
+        messages[messages.Count - 1] = MessageParam.FromRawUnchecked(raw);
+        return true;
+    }
 
     /// <summary>
     /// If the effort has changed since the conversation last heard, adds a message to the history that changes it from

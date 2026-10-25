@@ -25,6 +25,8 @@ internal sealed partial class ClaudeAgent : IChatEngine
     private const int MaxToolRounds = 40;
     // The most of a file one read_file returns (about 10K tokens); beyond it Claude reads by line range or greps.
     private const int MaxFileChars = 40_000;
+    // The most of one line read_file returns, so a minified file's single line doesn't take the whole read.
+    private const int MaxLineChars = 2_000;
     private const int PreviewLines = 60;
     private const int DefaultCommandSeconds = 300;
     private const int MaxCommandSeconds = 1800;

@@ -43,4 +43,39 @@ public class ExtensionUpdatesTests
         Assert.True(ExtensionUpdates.IsNewer(new ExtensionRelease("999.0.0", "https://x/a.vsix", "https://x")));
         Assert.False(ExtensionUpdates.IsNewer(new ExtensionRelease("0.0.1", "https://x/a.vsix", "https://x")));
     }
+
+    [Fact]
+    public void TheRestartScriptGetsEveryPathQuoted()
+    {
+        string args = ExtensionUpdates.RestartArguments(
+            @"C:\Temp\restart-and-install.ps1", 1234, @"C:\VS\Common7\IDE\VSIXInstaller.exe", @"C:\Temp\ClaudeForVS-1.0.0.vsix",
+            @"C:\VS\Common7\IDE\devenv.exe", @"D:\My Repos\App.sln", "Exp");
+
+        Assert.Equal(
+            "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File \"C:\\Temp\\restart-and-install.ps1\" -VsPid 1234"
+            + " -Installer \"C:\\VS\\Common7\\IDE\\VSIXInstaller.exe\" -Vsix \"C:\\Temp\\ClaudeForVS-1.0.0.vsix\""
+            + " -Devenv \"C:\\VS\\Common7\\IDE\\devenv.exe\" -Solution \"D:\\My Repos\\App.sln\" -RootSuffix \"Exp\"",
+            args);
+    }
+
+    [Fact]
+    public void WithoutASolutionOrHiveThoseAreLeftOut()
+    {
+        string args = ExtensionUpdates.RestartArguments(@"C:\s.ps1", 1, @"C:\i.exe", @"C:\a.vsix", @"C:\devenv.exe", null, null);
+
+        Assert.DoesNotContain("-Solution", args);
+        Assert.DoesNotContain("-RootSuffix", args);
+    }
+
+    [Fact]
+    public void AFolderKeepsItsClosingQuote() =>
+        Assert.EndsWith("-Solution \"D:\\Repos\\App\"", ExtensionUpdates.RestartArguments(@"C:\s.ps1", 1, @"C:\i.exe", @"C:\a.vsix", @"C:\devenv.exe", @"D:\Repos\App\", null));
+
+    [Theory]
+    [InlineData("Exp", @"C:\VS\devenv.exe", "/rootsuffix", "Exp")]
+    [InlineData("Exp", @"C:\VS\devenv.exe", "/RootSuffix", "Exp", @"D:\App.sln")]
+    [InlineData(null, @"C:\VS\devenv.exe", @"D:\App.sln")]
+    [InlineData(null, @"C:\VS\devenv.exe", "/rootsuffix")]
+    public void TheHiveComesFromTheCommandLine(string? expected, params string[] commandLine) =>
+        Assert.Equal(expected, ExtensionUpdates.RootSuffix(commandLine));
 }

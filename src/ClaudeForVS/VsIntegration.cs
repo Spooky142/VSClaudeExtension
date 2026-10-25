@@ -173,6 +173,122 @@ internal sealed class VsIntegration : IVisualStudioHost
         }
     }
 
+    /// <summary>Asks a yes or no question in Visual Studio's own message box, in front of its main window. No is the default.</summary>
+    public bool AskYesNo(string message, bool warning = false)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        return VsShellUtilities.ShowMessageBox(
+            this.services, message, "Claude", warning ? OLEMSGICON.OLEMSGICON_WARNING : OLEMSGICON.OLEMSGICON_QUERY,
+            OLEMSGBUTTON.OLEMSGBUTTON_YESNO, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND) == (int)VSConstants.MessageBoxResult.IDYES;
+    }
+
+    /// <summary>Shows a warning in Visual Studio's own message box, in front of its main window.</summary>
+    public void ShowWarning(string message)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        VsShellUtilities.ShowMessageBox(this.services, message, "Claude", OLEMSGICON.OLEMSGICON_WARNING, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+    }
+
+    /// <summary>The editor's text for a file open with unsaved changes, or null. Can be called on any thread.</summary>
+    public string? GetUnsavedText(string fullPath) => ThreadHelper.JoinableTaskFactory.Run(async () =>
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        return this.FindOpenBuffer(fullPath) is (Microsoft.VisualStudio.Text.ITextBuffer buffer, true, _) ? buffer.CurrentSnapshot.GetText() : null;
+    });
+
+    /// <summary>
+    /// Changes a file open in a text editor to <paramref name="text"/>, as one undoable edit that only replaces the lines
+    /// that differ (so the caret and anything marked elsewhere stay put), then saves it unless it already had unsaved
+    /// changes. Can be called on any thread.
+    /// </summary>
+    public EditorWrite WriteToEditor(string fullPath, string text) => ThreadHelper.JoinableTaskFactory.Run(async () =>
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (this.FindOpenBuffer(fullPath) is not (Microsoft.VisualStudio.Text.ITextBuffer buffer, bool dirty, IVsPersistDocData persist))
+        {
+            return EditorWrite.NotOpen;
+        }
+
+        Microsoft.VisualStudio.Text.ITextSnapshot snapshot = buffer.CurrentSnapshot;
+        IReadOnlyList<(int Start, int Length, string Text)> replacements = ChangeBlocks.Replacements(snapshot.GetText(), text);
+        if (replacements.Count > 0)
+        {
+            Microsoft.VisualStudio.Text.Operations.ITextUndoTransaction? transaction = null;
+            if (this.services.GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel)) is Microsoft.VisualStudio.ComponentModelHost.IComponentModel components
+                && components.GetService<Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry>().TryGetHistory(buffer, out Microsoft.VisualStudio.Text.Operations.ITextUndoHistory history))
+            {
+                transaction = history.CreateTransaction("Claude's edit");
+            }
+
+            try
+            {
+                using (Microsoft.VisualStudio.Text.ITextEdit edit = buffer.CreateEdit())
+                {
+                    foreach ((int start, int length, string inserted) in replacements)
+                    {
+                        edit.Replace(start, length, inserted);
+                    }
+
+                    edit.Apply();
+                    if (edit.Canceled)
+                    {
+                        throw new ToolInputException($"Visual Studio didn't let {Path.GetFileName(fullPath)} be changed in its editor (it may be read-only there), so it wasn't changed.");
+                    }
+                }
+
+                transaction?.Complete();
+            }
+            finally
+            {
+                transaction?.Dispose();
+            }
+        }
+
+        if (dirty)
+        {
+            return EditorWrite.LeftUnsaved;
+        }
+
+        // Saved by Visual Studio itself, so it doesn't then see the file change on disk and offer to reload it.
+        ErrorHandler.ThrowOnFailure(persist.SaveDocData(VSSAVEFLAGS.VSSAVE_SilentSave, out _, out int cancelled));
+        if (cancelled != 0)
+        {
+            throw new ToolInputException($"{Path.GetFileName(fullPath)} was changed in its editor, but saving it was cancelled, so it isn't saved yet.");
+        }
+
+        return EditorWrite.Saved;
+    });
+
+    /// <summary>The text buffer of a file open in a text editor, whether it has unsaved changes, and its document data; null if it isn't open in one.</summary>
+    private (Microsoft.VisualStudio.Text.ITextBuffer Buffer, bool Dirty, IVsPersistDocData Persist)? FindOpenBuffer(string fullPath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.services.GetService(typeof(SVsRunningDocumentTable)) is not IVsRunningDocumentTable table
+            || ErrorHandler.Failed(table.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock, fullPath, out _, out _, out IntPtr docData, out _))
+            || docData == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            object data = Marshal.GetObjectForIUnknown(docData);
+            // Designers and other editors that aren't a text buffer are left alone: the file is written to disk instead.
+            if (data is not Microsoft.VisualStudio.TextManager.Interop.IVsTextBuffer vsBuffer || data is not IVsPersistDocData persist
+                || this.services.GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel)) is not Microsoft.VisualStudio.ComponentModelHost.IComponentModel components
+                || components.GetService<Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService>().GetDocumentBuffer(vsBuffer) is not Microsoft.VisualStudio.Text.ITextBuffer buffer)
+            {
+                return null;
+            }
+
+            return (buffer, ErrorHandler.Succeeded(persist.IsDocDataDirty(out int dirty)) && dirty != 0, persist);
+        }
+        finally
+        {
+            Marshal.Release(docData);
+        }
+    }
+
     /// <summary>
     /// Opens Visual Studio's side-by-side diff for a change. When the file on disk already matches the "after"
     /// side, the real file is shown on the right so it can be edited there.
@@ -422,6 +538,18 @@ internal sealed class VsIntegration : IVisualStudioHost
     }
 
     /// <summary>The debugger's state; when paused, the exception, call stack and the current frame's arguments and locals.</summary>
+    /// <summary>Whether the debugger is running, paused or not in use; quick enough for a menu to ask as it opens.</summary>
+    public DebugMode GetDebugMode()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        return this.Dte?.Debugger?.CurrentMode switch
+        {
+            dbgDebugMode.dbgBreakMode => DebugMode.Paused,
+            dbgDebugMode.dbgRunMode => DebugMode.Running,
+            _ => DebugMode.NotDebugging,
+        };
+    }
+
     public DebugState GetDebugState()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -659,6 +787,28 @@ internal sealed class VsIntegration : IVisualStudioHost
         }
 
         return result.Distinct().ToList();
+    }
+
+    /// <summary>The open solution's file (or the open folder), or null when nothing is open.</summary>
+    public string? GetSolutionFile()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return this.Dte?.Solution?.FullName is { Length: > 0 } path ? path : null;
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Closes Visual Studio as File > Exit does, asking to save changes first (which can cancel it).</summary>
+    public async System.Threading.Tasks.Task ExitAsync()
+    {
+        // Let the button click that asked for it finish first.
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(alwaysYield: true);
+        this.Dte?.ExecuteCommand("File.Exit");
     }
 
     /// <summary>

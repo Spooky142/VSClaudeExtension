@@ -55,6 +55,7 @@ public partial class SettingsDialog : DialogWindow
         this.getSolutionDirectory = getSolutionDirectory;
         this.browseForFolder = browseForFolder;
         this.InitializeComponent();
+        HighContrast.Follow(this);
 
         (settings.Engine == ChatEngineKind.ClaudeCode ? this.CodeEngineRadio : this.ApiEngineRadio).IsChecked = true;
         this.RepoBox.Text = repoPath;

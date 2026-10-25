@@ -24,6 +24,33 @@ public class ChangeBlocksTests
         Assert.StartsWith("@@ -1,", blocks.Lines[0].Text);
     }
 
+    [Theory]
+    [InlineData(Before, After)]
+    [InlineData("", "new file\n")]
+    [InlineData("gone\n", "")]
+    [InlineData("a\nb\nc", "a\nB\nc")]
+    [InlineData("a\nb\n", "x\na\nb\ny\n")]
+    [InlineData("same\n", "same\n")]
+    public void ReplacementsTurnTheOldTextIntoTheNew(string before, string after)
+    {
+        var text = new System.Text.StringBuilder(before);
+        foreach ((int start, int length, string inserted) in ChangeBlocks.Replacements(before, after).Reverse())
+        {
+            text.Remove(start, length).Insert(start, inserted);
+        }
+
+        Assert.Equal(after, text.ToString());
+    }
+
+    [Fact]
+    public void ReplacementsOnlyCoverTheChangedLines()
+    {
+        var replacements = ChangeBlocks.Replacements(Before, After);
+        Assert.Equal(2, replacements.Count);
+        Assert.Equal((Before.IndexOf("two"), "two\r\n".Length, "TWO\r\n"), replacements[0]);
+        Assert.Equal(Before.IndexOf("nine"), replacements[1].Start);
+    }
+
     [Fact]
     public void KeepingEverythingOrNothingGivesTheOriginalTexts()
     {

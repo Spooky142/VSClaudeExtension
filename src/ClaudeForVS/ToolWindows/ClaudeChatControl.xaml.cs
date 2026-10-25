@@ -39,6 +39,7 @@ public partial class ClaudeChatControl : UserControl
         this.package = package;
         this.Pane = pane;
         this.InitializeComponent();
+        HighContrast.Follow(this);
         this.DataContext = this.viewModel;
         this.viewModel.PromptSent += (_, _) =>
         {
@@ -65,13 +66,19 @@ public partial class ClaudeChatControl : UserControl
             }
         }).Task.FileAndForget("ClaudeForVS/LowPriority");
         this.viewModel.Confirm = message =>
-            MessageBox.Show(message, "Claude", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            return this.package.Vs.AskYesNo(message);
+        };
         this.viewModel.ChooseExportPath = ChooseExportPath;
         this.viewModel.BranchRequested += (_, branch) =>
             this.package.JoinableTaskFactory.RunAsync(() => this.package.OpenBranchAsync(branch.Info, branch.Prompt)).Task.FileAndForget("ClaudeForVS/Branch");
         this.viewModel.TasksWindowRequested += (_, request) => this.package.ShowTasksWindow(this, request);
         this.viewModel.ReadOutputWindow = () => this.package.Vs.GetOutputWindowText();
         this.viewModel.ListOpenDocuments = () => this.package.Vs.GetOpenDocuments();
+        this.viewModel.GetSolutionFile = () => this.package.Vs.GetSolutionFile();
+        this.viewModel.ExitVisualStudio = () =>
+            this.package.JoinableTaskFactory.RunAsync(() => this.package.Vs.ExitAsync()).Task.FileAndForget("ClaudeForVS/Exit");
         this.viewModel.CopyText = text =>
         {
             try
@@ -85,17 +92,16 @@ public partial class ClaudeChatControl : UserControl
             }
         };
 
-        // Replies link file paths to the editor, and colour code to suit the theme. With several chat windows open, paths
-        // resolve against the repository of the one in use.
-        FileLinks.Resolve = path => (package.LastActiveChat ?? this).ResolveFile(path);
-        FileLinks.Open = target =>
+        // Replies link file paths to the editor, and colour code to suit the theme. Each chat window's messages inherit its
+        // own links, so paths resolve against that window's repository.
+        FileLinks.SetHandler(this, new FileLinkHandler(this.ResolveFile, target =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (!this.package.Vs.OpenFile(target.FullPath, target.Line, target.EndLine))
             {
                 this.viewModel.ShowStatus($"Couldn't open {target.FullPath}.");
             }
-        };
+        }));
         MarkdownRenderer.IsDarkTheme = this.IsDarkTheme;
 
         // Theme colours follow a theme change by themselves, but code blocks are coloured for a light or dark theme when
@@ -116,13 +122,17 @@ public partial class ClaudeChatControl : UserControl
 
         // Keep the usage strip's "resets in" countdowns current, and plan usage fresh while no prompt is running. Each chat
         // window checks for updates when it's shown; past that, one tick a day checks again for Claude Code, model and extension updates.
+        // A hidden window's strip isn't redrawn; it catches up when it's shown again.
         this.usageTimer = new DispatcherTimer(TimeSpan.FromSeconds(15), DispatcherPriority.Background, (_, _) =>
         {
-            this.viewModel.RefreshUsage();
-            this.viewModel.RefreshLowPriority();
-            if (this.IsVisible && this.viewModel.PlanUsageDue)
+            if (this.IsVisible)
             {
-                this.viewModel.RefreshPlanUsageAsync().FileAndForget("ClaudeForVS/PlanUsage");
+                this.viewModel.RefreshUsage();
+                this.viewModel.RefreshLowPriority();
+                if (this.viewModel.PlanUsageDue)
+                {
+                    this.viewModel.RefreshPlanUsageAsync().FileAndForget("ClaudeForVS/PlanUsage");
+                }
             }
 
             if (this.viewModel.UpdateCheckDue)
@@ -130,6 +140,14 @@ public partial class ClaudeChatControl : UserControl
                 this.viewModel.CheckForUpdatesAsync().FileAndForget("ClaudeForVS/CheckForUpdates");
             }
         }, this.Dispatcher);
+        this.IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true)
+            {
+                this.viewModel.RefreshUsage();
+                this.viewModel.RefreshLowPriority();
+            }
+        };
 
         // Coming back to the chat picks up whatever is now open in the editor, and makes this the window that
         // commands from the editor, Error List, Test Explorer and Solution Explorer go to.
@@ -173,7 +191,7 @@ public partial class ClaudeChatControl : UserControl
             this.viewModel.CheckForUpdatesAsync(shown: true).FileAndForget("ClaudeForVS/CheckForUpdates");
 
             this.RefreshEditorContext();
-            this.viewModel.WarmFileIndex();
+            this.LinkFilesOnceListedAsync().FileAndForget("ClaudeForVS/FileIndex");
             this.PromptBox.Focus();
             if (this.viewModel.Settings.Engine == ChatEngineKind.ClaudeCode && this.viewModel.CodeStatus is null)
             {
@@ -202,10 +220,9 @@ public partial class ClaudeChatControl : UserControl
     internal void StartFresh() => this.viewModel.NewChat();
 
     /// <summary>Opens a branch of another chat here, with the message it was branched from waiting in the prompt box.</summary>
-    internal void OpenBranch(SessionInfo info, string prompt)
+    internal async Task OpenBranchAsync(SessionInfo info, string prompt)
     {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        this.viewModel.OpenSession(new SessionItem(info, isCurrent: false));
+        await this.viewModel.OpenSessionAsync(new SessionItem(info, isCurrent: false));
         this.SetPromptText(prompt);
         this.PromptBox.Focus();
     }
@@ -414,7 +431,20 @@ public partial class ClaudeChatControl : UserControl
         return this.viewModel.FindRepoFile(path);
     }
 
-    private void OnThemeChanged()
+    /// <summary>Loads the repository's file list, then renders the messages again if they were shown before it was there.</summary>
+    private async Task LinkFilesOnceListedAsync()
+    {
+        if (await this.viewModel.WarmFileIndexAsync() && this.viewModel.Messages.Count > 0)
+        {
+            await this.package.JoinableTaskFactory.SwitchToMainThreadAsync();
+            FileLinks.GetHandler(this)?.Forget();
+            this.RerenderMessages();
+        }
+    }
+
+    private void OnThemeChanged() => this.RerenderMessages();
+
+    private void RerenderMessages()
     {
         this.ClearFindSelection(); // rendering replaces the documents the selection was in
         foreach (MarkdownView view in this.MessageViews())
@@ -873,7 +903,7 @@ public partial class ClaudeChatControl : UserControl
     {
         if (ContextOf<SessionItem>(sender) is SessionItem item)
         {
-            this.viewModel.OpenSession(item);
+            this.viewModel.OpenSessionAsync(item).FileAndForget("ClaudeForVS/OpenSession");
             this.PromptBox.Focus();
         }
     }
@@ -953,6 +983,7 @@ public partial class ClaudeChatControl : UserControl
 
     private void OnDeleteAllSessions(object sender, RoutedEventArgs e)
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
         int count = this.viewModel.Sessions.Count(s => !s.IsPinned);
         if (count == 0)
         {
@@ -965,7 +996,7 @@ public partial class ClaudeChatControl : UserControl
         string question = this.viewModel.IsSessionListFiltered
             ? $"Delete the {count} {chats} shown? Chats hidden by the search or filter are kept.{kept} This can't be undone."
             : $"Delete all {count} saved {chats}?{kept} This can't be undone.";
-        if (MessageBox.Show(question, "Claude", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes)
+        if (this.package.Vs.AskYesNo(question, warning: true))
         {
             this.viewModel.DeleteShownSessions();
         }
