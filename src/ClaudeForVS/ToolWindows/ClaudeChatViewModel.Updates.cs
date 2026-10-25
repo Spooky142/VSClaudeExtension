@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using ClaudeForVS.Agent;
@@ -46,11 +45,13 @@ internal sealed partial class ClaudeChatViewModel
     {
         Available,
         Downloading,
+        Ready,
         Installing,
         Failed,
     }
 
-    private sealed record ExtensionUpdate(ExtensionUpdateState State, ExtensionRelease Release, string Detail = "");
+    /// <param name="VsixPath">The downloaded .vsix, once it's <see cref="ExtensionUpdateState.Ready"/>.</param>
+    private sealed record ExtensionUpdate(ExtensionUpdateState State, ExtensionRelease Release, string Detail = "", string? VsixPath = null);
 
     // Shared by every chat window: a check when one is shown and then daily, one update at a time, and a banner dismissed in one window goes from all.
     private static DateTime lastUpdateCheckUtc = DateTime.MinValue;
@@ -178,7 +179,7 @@ internal sealed partial class ClaudeChatViewModel
     {
         if (!AgentSettings.Load().CheckForExtensionUpdates || extensionUpdate is { State: not ExtensionUpdateState.Available })
         {
-            return; // or one is already being downloaded or installed
+            return; // or one is already downloaded or being installed
         }
 
         if (await ExtensionUpdates.GetLatestAsync(CancellationToken.None) is ExtensionRelease release && ExtensionUpdates.IsNewer(release))
@@ -188,9 +189,10 @@ internal sealed partial class ClaudeChatViewModel
     }
 
     /// <summary>
-    /// Downloads the release and, once the user agrees, closes Visual Studio, installs it and opens Visual Studio again.
+    /// Opens the update window, which downloads the release (unless it already has been) and asks to restart; if the
+    /// user agrees, closes Visual Studio, installs it and opens Visual Studio again.
     /// </summary>
-    private async Task InstallExtensionUpdateAsync(ExtensionRelease release)
+    private void InstallExtensionUpdate(ExtensionRelease release, string? downloaded = null)
     {
         if (extensionUpdate is { State: ExtensionUpdateState.Downloading or ExtensionUpdateState.Installing })
         {
@@ -198,27 +200,36 @@ internal sealed partial class ClaudeChatViewModel
         }
 
         SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Downloading, release));
+        string? solution = this.GetSolutionFile();
+        ExtensionUpdateResult result = this.ShowExtensionUpdate(new ExtensionUpdateRequest(
+            release, downloaded, solution is null ? null : System.IO.Path.GetFileName(solution), () => Instances.Any(chat => chat.IsBusy)));
+        if (result.Error is string error)
+        {
+            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Failed, release, error));
+            return;
+        }
+
+        if (result.VsixPath is not string vsix)
+        {
+            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Available, release)); // cancelled while downloading
+            return;
+        }
+
+        if (!result.Restart)
+        {
+            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Ready, release, VsixPath: vsix));
+            return;
+        }
+
         try
         {
-            string vsix = await ExtensionUpdates.DownloadAsync(release, CancellationToken.None);
-            string? solution = this.GetSolutionFile();
-            string busy = Instances.Any(chat => chat.IsBusy) ? "\n\nClaude is still replying in a chat; closing stops it." : string.Empty;
-            if (!this.Confirm($"Visual Studio will close, install Claude for VS {release.Version} and open again"
-                + (solution is null ? "." : $" on {System.IO.Path.GetFileName(solution)}.")
-                + "\n\nIt asks to save any unsaved changes first." + busy))
-            {
-                SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Available, release));
-                return;
-            }
-
-            ExtensionUpdates.StartRestartingInstall(vsix, solution);
+            ExtensionUpdates.StartRestartingInstall(vsix, release.Version, solution);
             SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Installing, release));
             this.ExitVisualStudio();
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.IO.IOException
-            or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is InvalidOperationException or System.IO.IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
-            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Failed, release, ex is TaskCanceledException ? "it took too long." : ex.Message));
+            SetExtensionUpdate(new ExtensionUpdate(ExtensionUpdateState.Failed, release, ex.Message));
         }
     }
 
@@ -312,18 +323,23 @@ internal sealed partial class ClaudeChatViewModel
                     key,
                     $"Claude for VS {release.Version} is available (you have {ExtensionUpdates.InstalledVersion}).",
                     "Update",
-                    () => _ = this.InstallExtensionUpdateAsync(release)),
+                    () => this.InstallExtensionUpdate(release)),
                 ExtensionUpdateState.Downloading => new NoticeBanner(key, $"Downloading Claude for VS {release.Version}…"),
+                ExtensionUpdateState.Ready => new NoticeBanner(
+                    key,
+                    $"Claude for VS {release.Version} has downloaded. Restart Visual Studio to install it.",
+                    "Restart and install",
+                    () => this.InstallExtensionUpdate(release, ours.VsixPath)),
                 ExtensionUpdateState.Installing => new NoticeBanner(
                     key,
-                    $"Claude for VS {release.Version} installs once Visual Studio closes.",
+                    $"Claude for VS {release.Version} will install when Visual Studio closes.",
                     "Close Visual Studio",
                     () => this.ExitVisualStudio()),
                 _ => new NoticeBanner(
                     key,
                     $"Couldn't update Claude for VS to {release.Version}: {ours.Detail}",
                     "Try again",
-                    () => _ = this.InstallExtensionUpdateAsync(release)),
+                    () => this.InstallExtensionUpdate(release)),
             });
         }
 

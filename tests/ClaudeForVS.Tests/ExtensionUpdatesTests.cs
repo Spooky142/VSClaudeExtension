@@ -68,6 +68,10 @@ public class ExtensionUpdatesTests
     }
 
     [Fact]
+    public void TheVersionGoesLastForTheProgressWindow() =>
+        Assert.EndsWith("-Version \"1.2.3\"", ExtensionUpdates.RestartArguments(@"C:\s.ps1", 1, @"C:\i.exe", @"C:\a.vsix", @"C:\devenv.exe", null, "Exp", "1.2.3"));
+
+    [Fact]
     public void AFolderKeepsItsClosingQuote() =>
         Assert.EndsWith("-Solution \"D:\\Repos\\App\"", ExtensionUpdates.RestartArguments(@"C:\s.ps1", 1, @"C:\i.exe", @"C:\a.vsix", @"C:\devenv.exe", @"D:\Repos\App\", null));
 

@@ -89,7 +89,8 @@ internal static class ExtensionUpdates
     public static bool IsNewer(ExtensionRelease release) => ClaudeCodeCli.CompareVersions(release.Version, InstalledVersion) > 0;
 
     /// <summary>Downloads the release's .vsix to a temporary folder and returns its path.</summary>
-    public static async Task<string> DownloadAsync(ExtensionRelease release, CancellationToken cancellationToken)
+    /// <param name="progress">Told the bytes received so far and the size of the file (null if GitHub doesn't say).</param>
+    public static async Task<string> DownloadAsync(ExtensionRelease release, IProgress<(long Received, long? Total)>? progress, CancellationToken cancellationToken)
     {
         string dir = Path.Combine(Path.GetTempPath(), "ClaudeForVS", "updates");
         Directory.CreateDirectory(dir);
@@ -107,7 +108,17 @@ internal static class ExtensionUpdates
         using (Stream body = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
         using (FileStream file = File.Create(partial))
         {
-            await body.CopyToAsync(file, 81920, cancellationToken).ConfigureAwait(false);
+            long? total = response.Content.Headers.ContentLength;
+            long received = 0;
+            var buffer = new byte[81920];
+            progress?.Report((0, total));
+            int read;
+            while ((read = await body.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                await file.WriteAsync(buffer, 0, read, cancellationToken).ConfigureAwait(false);
+                received += read;
+                progress?.Report((received, total));
+            }
         }
 
         // Only a complete download takes the final name, so a half-written one is never installed.
@@ -118,7 +129,7 @@ internal static class ExtensionUpdates
 
     // Run by a hidden PowerShell that outlives Visual Studio: waits for it to close, installs the .vsix and opens it again.
     private const string RestartScript = """
-        param([int]$VsPid, [string]$Installer, [string]$Vsix, [string]$Devenv, [string]$Solution = '', [string]$RootSuffix = '')
+        param([int]$VsPid, [string]$Installer, [string]$Vsix, [string]$Devenv, [string]$Solution = '', [string]$RootSuffix = '', [string]$Version = '')
 
         # Install whenever Visual Studio closes (closing can be cancelled at the save prompt), but only open it again if
         # that was soon after the update was asked for, not hours later.
@@ -127,34 +138,102 @@ internal static class ExtensionUpdates
         if ($vs) { $vs.WaitForExit() }
         $reopen = ((Get-Date) - $started).TotalMinutes -lt 10
 
+        # A small window saying what's happening while Visual Studio is closed. Closing it only hides it; the update carries on.
+        Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+        [System.Windows.Forms.Application]::EnableVisualStyles()
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = 'Claude for VS'
+        $form.FormBorderStyle = 'FixedDialog'
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+        $form.StartPosition = 'CenterScreen'
+        $form.TopMost = $true
+        $form.ClientSize = New-Object System.Drawing.Size(440, 116)
+        $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+        $heading = New-Object System.Windows.Forms.Label
+        $heading.Text = if ($Version) { "Updating Claude for VS to $Version" } else { 'Updating Claude for VS' }
+        $heading.Font = New-Object System.Drawing.Font('Segoe UI', 12)
+        $heading.AutoSize = $true
+        $heading.Location = New-Object System.Drawing.Point(18, 14)
+        $status = New-Object System.Windows.Forms.Label
+        $status.AutoSize = $false
+        $status.Location = New-Object System.Drawing.Point(18, 48)
+        $status.Size = New-Object System.Drawing.Size(404, 20)
+        $bar = New-Object System.Windows.Forms.ProgressBar
+        $bar.Style = 'Marquee'
+        $bar.MarqueeAnimationSpeed = 30
+        $bar.Location = New-Object System.Drawing.Point(18, 78)
+        $bar.Size = New-Object System.Drawing.Size(404, 14)
+        $form.Controls.AddRange(@($heading, $status, $bar))
+        $done = $false
+        $form.add_FormClosing({ if (-not $done) { $_.Cancel = $true; $form.Hide() } })
+
+        function Pump([int]$Milliseconds) {
+            $until = (Get-Date).AddMilliseconds($Milliseconds)
+            do { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 } while ((Get-Date) -lt $until)
+        }
+        function Say([string]$Text) { $status.Text = $Text; Pump 0 }
+        function Run([string]$File, [string[]]$Arguments) {
+            $process = Start-Process $File -ArgumentList $Arguments -PassThru
+            $null = $process.Handle # without this, ExitCode stays empty
+            while (-not $process.HasExited) { Pump 100 }
+            $process.ExitCode
+        }
+
+        $form.Show()
+        $form.Activate()
+        Say 'Visual Studio has closed.'
+
         # The installer can't run while another window of the same Visual Studio is open.
         function Others { @(Get-Process devenv -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Devenv }) }
         $deadline = (Get-Date).AddSeconds(30)
-        while ((Others).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+        while ((Others).Count -gt 0 -and (Get-Date) -lt $deadline) {
+            Say 'Waiting for the other Visual Studio windows to close...'
+            Pump 1000
+        }
 
         $install = @()
         if ($RootSuffix) { $install += "/rootSuffix:$RootSuffix" }
         $install += "`"$Vsix`""
         $code = 1
-        if ((Others).Count -eq 0) { $code = (Start-Process $Installer -ArgumentList (@('/quiet') + $install) -Wait -PassThru).ExitCode }
+        if ((Others).Count -eq 0) {
+            Say 'Installing the update. This can take a minute...'
+            $code = Run $Installer (@('/quiet') + $install)
+        }
 
         # 1001: it's already installed. Otherwise the installer's own window says what's in the way and lets it finish.
-        if ($code -ne 0 -and $code -ne 1001) { Start-Process $Installer -ArgumentList $install -Wait }
+        if ($code -ne 0 -and $code -ne 1001) {
+            $form.Hide()
+            $code = Run $Installer $install
+        }
 
         if ($reopen) {
+            if ($form.Visible) { Say 'Opening Visual Studio again...' }
             $open = @()
             if ($RootSuffix) { $open += '/rootsuffix', $RootSuffix }
             if ($Solution) { $open += "`"$Solution`"" }
             if ($open.Count -gt 0) { Start-Process $Devenv -ArgumentList $open } else { Start-Process $Devenv }
+            Pump 3000
+        } elseif ($form.Visible) {
+            # Visual Studio was closed long after the update was asked for, so it isn't opened again unasked.
+            $bar.Style = 'Continuous'
+            $bar.Value = 100
+            Say $(if ($code -eq 0 -or $code -eq 1001) { 'Done. The update is ready for the next time you open Visual Studio.' } else { "The update didn't install." })
+            while ($form.Visible) { Pump 100 }
         }
+
+        $done = $true
+        $form.Close()
+        $form.Dispose()
         """;
 
     /// <summary>
-    /// Starts a hidden helper that, once Visual Studio has closed, installs the .vsix with Visual Studio's own installer
-    /// and opens Visual Studio again on the solution. Close Visual Studio after calling this.
+    /// Starts a helper that, once Visual Studio has closed, installs the .vsix with Visual Studio's own installer (in a
+    /// small window saying how it's going) and opens Visual Studio again on the solution. Close Visual Studio after calling this.
     /// </summary>
+    /// <param name="version">The version being installed, for that window.</param>
     /// <param name="solution">The solution (or folder) to open again; null for none.</param>
-    public static void StartRestartingInstall(string vsixPath, string? solution)
+    public static void StartRestartingInstall(string vsixPath, string version, string? solution)
     {
         using Process current = Process.GetCurrentProcess();
         string devenv = current.MainModule?.FileName ?? throw new InvalidOperationException("Couldn't find Visual Studio's devenv.exe.");
@@ -170,12 +249,12 @@ internal static class ExtensionUpdates
         File.WriteAllText(script, RestartScript);
 
         string powershell = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-        string arguments = RestartArguments(script, current.Id, installer, vsixPath, devenv, solution, RootSuffix(Environment.GetCommandLineArgs()));
+        string arguments = RestartArguments(script, current.Id, installer, vsixPath, devenv, solution, RootSuffix(Environment.GetCommandLineArgs()), version);
         using Process? _ = Process.Start(new ProcessStartInfo(powershell, arguments) { UseShellExecute = false, CreateNoWindow = true });
     }
 
     /// <summary>PowerShell's command line for the restart script.</summary>
-    internal static string RestartArguments(string script, int vsPid, string installer, string vsix, string devenv, string? solution, string? rootSuffix)
+    internal static string RestartArguments(string script, int vsPid, string installer, string vsix, string devenv, string? solution, string? rootSuffix, string? version = null)
     {
         var args = new StringBuilder("-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden");
         args.Append(" -File ").Append(Quote(script));
@@ -191,6 +270,11 @@ internal static class ExtensionUpdates
         if (!string.IsNullOrEmpty(rootSuffix))
         {
             args.Append(" -RootSuffix ").Append(Quote(rootSuffix!));
+        }
+
+        if (!string.IsNullOrEmpty(version))
+        {
+            args.Append(" -Version ").Append(Quote(version!));
         }
 
         return args.ToString();

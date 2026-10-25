@@ -77,6 +77,12 @@ public partial class ClaudeChatControl : UserControl
         this.viewModel.ReadOutputWindow = () => this.package.Vs.GetOutputWindowText();
         this.viewModel.ListOpenDocuments = () => this.package.Vs.GetOpenDocuments();
         this.viewModel.GetSolutionFile = () => this.package.Vs.GetSolutionFile();
+        this.viewModel.ShowExtensionUpdate = request =>
+        {
+            var dialog = new ExtensionUpdateDialog(request, this.package.JoinableTaskFactory);
+            dialog.ShowModal();
+            return dialog.Result;
+        };
         this.viewModel.ExitVisualStudio = () =>
             this.package.JoinableTaskFactory.RunAsync(() => this.package.Vs.ExitAsync()).Task.FileAndForget("ClaudeForVS/Exit");
         this.viewModel.CopyText = text =>

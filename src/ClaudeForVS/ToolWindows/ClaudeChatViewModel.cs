@@ -82,6 +82,9 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
     /// <summary>The open solution's file, to open again after an update; null if none. Set by the view.</summary>
     public Func<string?> GetSolutionFile { get; set; } = () => null;
 
+    /// <summary>Shows the window that downloads an update of this extension and asks to restart. Set by the view.</summary>
+    internal Func<ExtensionUpdateRequest, ExtensionUpdateResult> ShowExtensionUpdate { get; set; } = _ => new ExtensionUpdateResult(false, null, null);
+
     /// <summary>Closes Visual Studio as File > Exit does. Set by the view.</summary>
     public Action ExitVisualStudio { get; set; } = () => { };
 
