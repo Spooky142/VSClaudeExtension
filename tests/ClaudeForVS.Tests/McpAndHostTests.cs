@@ -221,6 +221,7 @@ public class CommitMessageTests
     {
         string prompt = CommitMessageWriter.BuildPrompt("diff --git a/x b/x", staged: true, "Added X.\nFixed Y.", "Use past tense.");
         Assert.Contains("staged changes", prompt);
+        Assert.Contains("bullet points", prompt);
         Assert.Contains("<recent commit subjects>\nAdded X.\nFixed Y.\n</recent commit subjects>", prompt);
         Assert.Contains("<project instructions>\nUse past tense.\n</project instructions>", prompt);
         Assert.Contains("<diff>\ndiff --git a/x b/x\n</diff>", prompt);

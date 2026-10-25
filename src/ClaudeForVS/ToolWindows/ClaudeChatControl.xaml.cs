@@ -834,7 +834,7 @@ public partial class ClaudeChatControl : UserControl
         Item("Resolve merge conflicts", "/conflicts", "Resolve the conflicts from the current merge, rebase or cherry-pick, without staging or committing");
         Item("Review staged changes", "/review-staged", "Review only what's staged in git, without changing any files");
         Item("Review this branch", "/review-branch", "Review every change on this branch since it left its base branch, without changing any files");
-        Item("Write a commit message", "/commit-message", "A very short commit message for your changes, in plain text");
+        Item("Write a commit message", "/commit-message", "A short commit message for your changes: a summary line, then bullet points");
         Item("Write a pull request message", "/pr-message", "A very short pull request message for this branch, in Markdown");
         Item("What came in with my last pull", "/pulled", "Summarize the commits your last pull brought in and what they might affect");
         menu.IsOpen = true;

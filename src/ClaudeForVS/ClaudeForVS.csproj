@@ -6,8 +6,8 @@
     <LangVersion>12</LangVersion>
     <Nullable>enable</Nullable>
     <RootNamespace>ClaudeForVS</RootNamespace>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <FileVersion>1.0.1.0</FileVersion>
 
     <!-- VSIX packaging -->
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>

@@ -176,7 +176,8 @@ public class SlashCommandTests
         Assert.EndsWith("Focus on: tests", SlashCommands.ReviewStagedPrompt("tests"));
         Assert.Contains("git merge-base", SlashCommands.ReviewBranchPrompt(string.Empty));
         Assert.EndsWith("Focus on: security", SlashCommands.ReviewBranchPrompt("security"));
-        Assert.Contains("no Markdown", SlashCommands.CommitMessagePrompt);
+        Assert.Contains("no other Markdown", SlashCommands.CommitMessagePrompt);
+        Assert.Contains("bullet points", SlashCommands.CommitMessagePrompt);
         Assert.Equal(["/review ", "/review-staged ", "/review-branch "], SlashCommands.Suggest("/rev").Select(s => s.Insert));
     }
 

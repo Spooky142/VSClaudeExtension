@@ -175,8 +175,8 @@ internal static class SlashCommands
         "Write a very short, concise commit message for the current changes on this branch. Use the uncommitted changes "
         + "(`git status` and `git diff HEAD`, including new files); if there are none, use the commits on this branch that "
         + "aren't on the branch it was made from. Match the style of the recent history in `git log`. Reply with just the "
-        + "message as plain text, ready to paste into git, with no Markdown formatting: a one-line summary, then a few "
-        + "short bullet points only if the changes need them. Don't change any files, and don't stage or commit anything.";
+        + "message as plain text, ready to paste into git, with no other Markdown formatting: a one-line summary, a blank "
+        + "line, then short bullet points starting with \"- \", one per change, only as many as the changes need. Don't change any files, and don't stage or commit anything.";
 
     /// <summary>What <c>/pr-message</c> asks Claude to do.</summary>
     public const string PrMessagePrompt =

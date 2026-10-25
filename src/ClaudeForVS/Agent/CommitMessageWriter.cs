@@ -63,8 +63,9 @@ internal static class CommitMessageWriter
         sb.Append("Write a git commit message for the ").Append(staged ? "staged changes" : "uncommitted changes").Append(" below.\n\n");
         sb.Append("Match the style of the repository's recent commit subjects (tense, length, punctuation, prefixes) and follow any ");
         sb.Append("commit message conventions in the project instructions, but don't bump versions or run anything. ");
-        sb.Append("Summarize what changed and why in a short subject line; add a body after a blank line only if it helps. ");
-        sb.Append("Reply with the commit message only: no preamble, no quotes and no code fences.\n");
+        sb.Append("Summarize what changed in a short subject line, then a blank line, then short bullet points starting with \"- \", ");
+        sb.Append("one per change, only as many as the changes need. ");
+        sb.Append("Reply with the commit message only: no preamble, no quotes, no code fences and no other Markdown.\n");
         if (recentSubjects.Trim().Length > 0)
         {
             sb.Append("\n<recent commit subjects>\n").Append(recentSubjects.Trim()).Append("\n</recent commit subjects>\n");
