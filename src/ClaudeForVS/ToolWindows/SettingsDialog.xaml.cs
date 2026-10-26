@@ -61,6 +61,7 @@ public partial class SettingsDialog : DialogWindow
         this.RepoBox.Text = repoPath;
         this.RunHooksBox.IsChecked = settings.RunHooks;
         this.FormatChangedBox.IsChecked = settings.FormatChangedFiles;
+        this.VisualStudioToolsBox.IsChecked = settings.ClaudeCodeVisualStudioTools;
         this.NotificationsBox.IsChecked = settings.ShowNotifications;
         this.ExtensionUpdatesBox.IsChecked = settings.CheckForExtensionUpdates;
         this.ExtensionUpdatesHint.Text =
@@ -108,7 +109,7 @@ public partial class SettingsDialog : DialogWindow
 
     private void UpdateEngineUi()
     {
-        if (this.CodePanel is null || this.ApiKeySection is null || this.ApiOptionsSection is null)
+        if (this.CodePanel is null || this.ApiKeySection is null || this.ApiOptionsSection is null || this.CodeOptionsSection is null)
         {
             return;
         }
@@ -117,6 +118,7 @@ public partial class SettingsDialog : DialogWindow
         this.CodePanel.Visibility = code ? Visibility.Visible : Visibility.Collapsed;
         this.ApiKeySection.Visibility = code ? Visibility.Collapsed : Visibility.Visible;
         this.ApiOptionsSection.Visibility = code ? Visibility.Collapsed : Visibility.Visible;
+        this.CodeOptionsSection.Visibility = code ? Visibility.Visible : Visibility.Collapsed;
         this.UpdateNewestModelsHint();
 
         ClaudeCodeStatus? status = this.codeStatus;
@@ -320,6 +322,7 @@ public partial class SettingsDialog : DialogWindow
             PinnedRepoPath = follows ? null : root ?? text,
             RunHooks = this.RunHooksBox.IsChecked == true,
             FormatChangedFiles = this.FormatChangedBox.IsChecked == true,
+            ClaudeCodeVisualStudioTools = this.VisualStudioToolsBox.IsChecked == true,
             ShowNotifications = this.NotificationsBox.IsChecked == true,
             CheckForExtensionUpdates = this.ExtensionUpdatesBox.IsChecked == true,
             UseNewestApiModels = this.NewestModelsBox.IsChecked == true,

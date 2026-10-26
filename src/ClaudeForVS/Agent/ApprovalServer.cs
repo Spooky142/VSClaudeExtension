@@ -98,6 +98,12 @@ internal sealed class ApprovalServer : IDisposable
 
     public string Url { get; } = string.Empty;
 
+    /// <summary>
+    /// Whether tools/list offers the Visual Studio tools alongside <c>approve</c>. Each tool's definition is sent with
+    /// every request Claude Code makes, so leaving them out saves usage. Claude Code lists the tools when it starts.
+    /// </summary>
+    public bool OfferVisualStudioTools { get; set; } = true;
+
     public void Dispose()
     {
         try
@@ -178,7 +184,7 @@ internal sealed class ApprovalServer : IDisposable
                         ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = "1.0.0" },
                     },
                     "ping" => new JsonObject(),
-                    "tools/list" => new JsonObject { ["tools"] = new JsonArray([ToolDefinition(), .. VisualStudioTools.Definitions()]) },
+                    "tools/list" => new JsonObject { ["tools"] = this.OfferVisualStudioTools ? new JsonArray([ToolDefinition(), .. VisualStudioTools.Definitions()]) : new JsonArray(ToolDefinition()) },
                     "tools/call" => await this.CallToolAsync(request?["params"]).ConfigureAwait(false),
                     _ => null,
                 };
@@ -223,11 +229,15 @@ internal sealed class ApprovalServer : IDisposable
         string called = parameters?["name"] is JsonValue n && n.TryGetValue(out string? calledName) ? calledName! : ToolName;
         if (called != ToolName)
         {
-            (string text, bool isError) result;
+            (string text, bool isError) result = ($"Unknown tool: {called}", true);
             try
             {
-                using JsonDocument argsDoc = JsonDocument.Parse(args?.ToJsonString() ?? "{}");
-                result = await this.runTool(called, argsDoc.RootElement.Clone()).ConfigureAwait(false);
+                // Turned off, the Visual Studio tools aren't listed, so Claude Code shouldn't call them; if it does, they don't run.
+                if (this.OfferVisualStudioTools)
+                {
+                    using JsonDocument argsDoc = JsonDocument.Parse(args?.ToJsonString() ?? "{}");
+                    result = await this.runTool(called, argsDoc.RootElement.Clone()).ConfigureAwait(false);
+                }
             }
             catch (Exception ex) when (ex is InvalidOperationException or ToolInputException or IOException or OperationCanceledException or System.Runtime.InteropServices.COMException)
             {

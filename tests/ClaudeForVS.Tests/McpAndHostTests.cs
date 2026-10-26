@@ -111,14 +111,14 @@ public sealed class McpConfigTests : IDisposable
     [Fact]
     public void TurnedOffServersAreRememberedPerRepository()
     {
-        var store = new McpDisabledServers(Path.Combine(this.root, "mcp-servers.json"));
+        var store = new DisabledNames(Path.Combine(this.root, "mcp-servers.json"));
         string other = Path.Combine(this.root, "other");
         store.Set(this.Repo, "github", enabled: false);
         store.Set(this.Repo, "files", enabled: false);
         store.Set(this.Repo, "files", enabled: true);
 
         Assert.Equal(["github"], store.For(this.Repo));
-        Assert.True(new McpDisabledServers(Path.Combine(this.root, "mcp-servers.json")).IsDisabled(this.Repo.ToUpperInvariant() + "\\", "github"));
+        Assert.True(new DisabledNames(Path.Combine(this.root, "mcp-servers.json")).IsDisabled(this.Repo.ToUpperInvariant() + "\\", "github"));
         Assert.Empty(store.For(other));
 
         store.Set(this.Repo, "github", enabled: true);
@@ -128,8 +128,10 @@ public sealed class McpConfigTests : IDisposable
     [Fact]
     public void TurnedOffServersBecomeClaudeCodeDenyRules()
     {
-        Assert.Equal("mcp__github", McpDisabledServers.ToolRule("github"));
-        Assert.Equal("mcp__my_server_v2", McpDisabledServers.ToolRule("my server.v2"));
+        Assert.Equal("mcp__github", DisabledNames.ToolRule("github"));
+        Assert.Equal("mcp__my_server_v2", DisabledNames.ToolRule("my server.v2"));
+        Assert.Equal("mcp__claude_ai_Google_Drive", DisabledNames.ToolRule("claude.ai Google Drive"));
+        Assert.Equal("Skill(anthropic-skills:pdf)", DisabledNames.SkillRule("anthropic-skills:pdf"));
     }
 
     [Fact]
@@ -269,5 +271,115 @@ public class TestExplorerTextTests
         Assert.Contains("Test Explorer", one.Context);
 
         Assert.Equal("2 tests", Attachment.ForTests(Copied).Label);
+    }
+}
+
+public class ApprovalServerTests
+{
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async System.Threading.Tasks.Task ListsTheVisualStudioToolsOnlyWhenOffered(bool offered)
+    {
+        using var server = new ApprovalServer(
+            (_, _, _) => System.Threading.Tasks.Task.FromResult(new PermissionDecision(true)),
+            (_, _) => System.Threading.Tasks.Task.FromResult(("ran", false)))
+        {
+            OfferVisualStudioTools = offered,
+        };
+        using var http = new System.Net.Http.HttpClient();
+
+        async System.Threading.Tasks.Task<JsonNode> CallAsync(string method, JsonObject? parameters = null)
+        {
+            var request = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = method, ["params"] = parameters ?? new JsonObject() };
+            using var content = new System.Net.Http.StringContent(request.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+            using System.Net.Http.HttpResponseMessage response = await http.PostAsync(server.Url, content);
+            return JsonNode.Parse(await response.Content.ReadAsStringAsync())!["result"]!;
+        }
+
+        List<string> names = (await CallAsync("tools/list"))["tools"]!.AsArray().Select(t => t!["name"]!.GetValue<string>()).ToList();
+        Assert.Contains(ApprovalServer.ToolName, names);
+        Assert.Equal(offered, names.Contains("get_diagnostics"));
+
+        JsonNode called = await CallAsync("tools/call", new JsonObject { ["name"] = "get_diagnostics", ["arguments"] = new JsonObject() });
+        Assert.Equal(!offered, called["isError"]!.GetValue<bool>());
+    }
+}
+
+public class McpServerListTests
+{
+    [Fact]
+    public void ReadsClaudeCodesServerList()
+    {
+        const string Output = "Checking MCP server health…\r\n\r\n" +
+            "claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - √ Connected\r\n" +
+            "claude.ai Slack: https://mcp.slack.com/mcp - ! Needs authentication\r\n" +
+            "github: npx -y @modelcontextprotocol/server-github - ✗ Failed to connect\r\n" +
+            "plugin:tools:db: node server.js --port 3000 - ✓ Connected\r\n";
+
+        IReadOnlyList<ReportedMcpServer> servers = McpServerList.Parse(Output);
+
+        Assert.Equal(["claude.ai Gmail", "claude.ai Slack", "github", "plugin:tools:db"], servers.Select(s => s.Name));
+        Assert.Equal([McpHealth.Connected, McpHealth.NeedsAuthentication, McpHealth.Failed, McpHealth.Connected], servers.Select(s => s.Health));
+        Assert.Equal("npx -y @modelcontextprotocol/server-github", servers[2].Target);
+        Assert.Equal("Failed to connect", servers[2].StatusText);
+        Assert.True(servers[0].IsConnector);
+        Assert.True(servers[3].IsPlugin);
+    }
+
+    [Fact]
+    public void ConnectorRowsTurnOffByClaudeCodesName()
+    {
+        var row = new McpServerRow(new ReportedMcpServer("claude.ai Gmail", "https://example.com", McpHealth.Connected, "Connected"), isEnabled: true);
+        Assert.Equal("Gmail", row.Name);
+        Assert.Equal("claude.ai Gmail", row.ToolName);
+        Assert.Equal(McpServerState.Connected, row.State);
+        Assert.False(row.CanCheck);
+    }
+}
+
+public sealed class SkillCatalogTests : IDisposable
+{
+    private readonly string root = Path.Combine(Path.GetTempPath(), "ClaudeForVS.Tests", Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(this.root))
+        {
+            Directory.Delete(this.root, recursive: true);
+        }
+    }
+
+    private void WriteSkill(string folder, string text)
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "SKILL.md"), text);
+    }
+
+    [Fact]
+    public void ReadsFrontMatter()
+    {
+        Assert.Equal(("pdf", "Work with PDFs."), SkillCatalog.ParseFrontMatter("---\nname: pdf\ndescription: \"Work with PDFs.\"\n---\n# PDF"));
+        Assert.Equal(("x", "Line one line two"), SkillCatalog.ParseFrontMatter("---\r\nname: x\r\ndescription: >\r\n  Line one\r\n  line two\r\nlicense: MIT\r\n---\r\n"));
+        Assert.Equal((null, null), SkillCatalog.ParseFrontMatter("# No front matter"));
+    }
+
+    [Fact]
+    public void ListsSkillsOnDiskAndReportedByClaudeCode()
+    {
+        string home = Path.Combine(this.root, "home"), repo = Path.Combine(this.root, "repo");
+        this.WriteSkill(Path.Combine(home, "skills", "notes"), "---\nname: notes\ndescription: Personal notes.\n---\n");
+        this.WriteSkill(Path.Combine(home, "skills", "shared"), "---\nname: shared\ndescription: Mine.\n---\n");
+        this.WriteSkill(Path.Combine(repo, ".claude", "skills", "shared"), "---\nname: shared\ndescription: The repository's.\n---\n");
+        this.WriteSkill(Path.Combine(repo, ".claude", "skills", "unnamed"), "No front matter.");
+
+        IReadOnlyList<SkillInfo> skills = SkillCatalog.List(repo, home, reported: ["notes", "simplify", "tools:pdf"], alsoInclude: ["gone"]);
+
+        Assert.Equal(["notes", "shared", "unnamed", "tools:pdf", "gone", "simplify"], skills.Select(s => s.Name));
+        Assert.Equal("Personal notes.", skills[0].Description);
+        Assert.Equal(SkillSource.Personal, skills[0].Source);
+        Assert.Equal(("The repository's.", SkillSource.Project), (skills[1].Description, skills[1].Source));
+        Assert.Equal(SkillSource.Plugin, skills[3].Source);
+        Assert.Equal(SkillSource.ClaudeCode, skills[5].Source);
     }
 }

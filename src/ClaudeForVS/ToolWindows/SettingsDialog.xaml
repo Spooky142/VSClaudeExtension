@@ -158,6 +158,15 @@
                  Text="Every request re-reads the whole conversation, so summarizing it earlier keeps long chats cheaper. Leave it empty to summarize only when the 1M-token window is nearly full." />
     </StackPanel>
 
+    <!-- Claude Code engine's extras: the Visual Studio tools offered through the extension's MCP server -->
+    <StackPanel x:Name="CodeOptionsSection" Visibility="Collapsed">
+      <TextBlock Style="{StaticResource SectionTitle}" Text="Claude Code options" />
+      <CheckBox x:Name="VisualStudioToolsBox" Content="Give Claude Code Visual Studio's tools"
+                AutomationProperties.Name="Give Claude Code Visual Studio's tools" />
+      <TextBlock Style="{StaticResource CardNote}" Margin="22,2,0,0"
+                 Text="The Error List, building the solution, the debugger, Roslyn navigation and rename, code fixes and NuGet packages, through the extension's &quot;visualstudio&quot; MCP server. Their descriptions are sent with every request, so turning them off uses less of your plan; Claude Code then uses its own tools, such as grep and dotnet build. Approvals still go through the server either way." />
+    </StackPanel>
+
     <!-- API key (Claude API engine only) -->
     <StackPanel x:Name="ApiKeySection">
       <TextBlock Style="{StaticResource SectionTitle}" Text="Anthropic API key" />

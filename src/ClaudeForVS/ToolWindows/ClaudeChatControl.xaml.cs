@@ -903,6 +903,18 @@ public partial class ClaudeChatControl : UserControl
         new McpServersDialog(repoRoot, this.viewModel.Settings.Engine, this.package.JoinableTaskFactory).ShowModal();
     }
 
+    private void OnOpenSkills(object sender, RoutedEventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (this.viewModel.RepoRoot is not string repoRoot)
+        {
+            this.viewModel.ShowStatus("Choose a folder inside a git repository in Settings first.");
+            return;
+        }
+
+        new SkillsDialog(repoRoot, this.viewModel.Settings.Engine).ShowModal();
+    }
+
     // ===== History tab =====
 
     private void OnOpenSession(object sender, RoutedEventArgs e)

@@ -8,17 +8,20 @@ using System.Text.RegularExpressions;
 namespace ClaudeForVS.Agent.Mcp;
 
 /// <summary>
-/// MCP servers the user turned off in a repository, by name, in %LOCALAPPDATA%\ClaudeForVS\mcp-servers.json.
-/// The Claude API engine doesn't start them; Claude Code is told not to use their tools.
+/// Names the user turned off in a repository, in a JSON file under %LOCALAPPDATA%\ClaudeForVS: MCP servers (the
+/// Claude API engine doesn't start them; Claude Code is told not to use their tools) and Claude Code's skills.
 /// </summary>
-internal sealed class McpDisabledServers(string file)
+internal sealed class DisabledNames(string file)
 {
-    public static readonly McpDisabledServers Default = new(Path.Combine(
+    public static readonly DisabledNames McpServers = new(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClaudeForVS", "mcp-servers.json"));
+
+    public static readonly DisabledNames Skills = new(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClaudeForVS", "skills.json"));
 
     private readonly object gate = new();
 
-    /// <summary>The names of the servers turned off in this repository.</summary>
+    /// <summary>The names turned off in this repository.</summary>
     public IReadOnlyCollection<string> For(string repoRoot)
     {
         lock (this.gate)
@@ -27,9 +30,9 @@ internal sealed class McpDisabledServers(string file)
         }
     }
 
-    public bool IsDisabled(string repoRoot, string server) => this.For(repoRoot).Contains(server, StringComparer.Ordinal);
+    public bool IsDisabled(string repoRoot, string name) => this.For(repoRoot).Contains(name, StringComparer.Ordinal);
 
-    public void Set(string repoRoot, string server, bool enabled)
+    public void Set(string repoRoot, string name, bool enabled)
     {
         lock (this.gate)
         {
@@ -39,10 +42,10 @@ internal sealed class McpDisabledServers(string file)
                 all[Key(repoRoot)] = names = [];
             }
 
-            names.Remove(server);
+            names.Remove(name);
             if (!enabled)
             {
-                names.Add(server);
+                names.Add(name);
             }
 
             if (names.Count == 0)
@@ -65,6 +68,9 @@ internal sealed class McpDisabledServers(string file)
     /// cleans it for tool names.
     /// </summary>
     public static string ToolRule(string server) => "mcp__" + Regex.Replace(server, "[^A-Za-z0-9_-]", "_");
+
+    /// <summary>Claude Code's deny rule for a skill, e.g. "Skill(pdf)" or "Skill(anthropic-skills:docx)".</summary>
+    public static string SkillRule(string skill) => "Skill(" + skill + ")";
 
     private static string Key(string repoRoot) => repoRoot.Trim().TrimEnd('\\', '/').ToLowerInvariant();
 

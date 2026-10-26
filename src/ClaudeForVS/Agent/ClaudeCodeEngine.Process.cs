@@ -93,8 +93,10 @@ internal sealed partial class ClaudeCodeEngine
     private async Task<Process> EnsureProcessAsync(IChatSink chatSink)
     {
         // MCP servers turned off in the MCP servers window: Claude Code still loads them, but can't use their tools.
-        string disabledMcp = string.Join(",", McpDisabledServers.Default.For(this.RepoRoot).Select(McpDisabledServers.ToolRule));
-        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort, this.SubagentModel, disabledMcp, LowPriorityMode.IsActive))
+        // Skills turned off in the Skills window are denied the same way.
+        string disallowed = string.Join(",", DisabledNames.McpServers.For(this.RepoRoot).Select(DisabledNames.ToolRule)
+            .Concat(DisabledNames.Skills.For(this.RepoRoot).Select(DisabledNames.SkillRule)));
+        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort, this.SubagentModel, disallowed, LowPriorityMode.IsActive, this.VisualStudioTools))
         {
             chatSink.SetStatus("Claude Code is working…");
             return running;
@@ -102,7 +104,10 @@ internal sealed partial class ClaudeCodeEngine
 
         await this.StopProcessAsync();
         this.restartNeeded = false;
-        this.processSettings = (this.Mode, this.Effort, this.SubagentModel, disabledMcp, LowPriorityMode.IsActive);
+        this.processSettings = (this.Mode, this.Effort, this.SubagentModel, disallowed, LowPriorityMode.IsActive, this.VisualStudioTools);
+
+        // Claude Code lists the server's tools as it starts.
+        this.approvalServer.OfferVisualStudioTools = this.VisualStudioTools;
 
         var args = new List<string>
         {
@@ -115,7 +120,7 @@ internal sealed partial class ClaudeCodeEngine
             "--permission-mode", this.Mode == AgentMode.Plan ? "plan" : "default",
             "--mcp-config", this.mcpConfigPath,
             "--permission-prompt-tool", ApprovalServer.QualifiedToolName,
-            "--append-system-prompt", ExtraSystemPrompt + " " + AgentSettings.ModeInstructions(this.Mode),
+            "--append-system-prompt", ExtraSystemPrompt + " " + (this.VisualStudioTools ? VisualStudioToolsPrompt + " " : string.Empty) + AgentSettings.ModeInstructions(this.Mode),
             "--effort", AgentSettings.EffortApiName(this.Effort),
         };
 
@@ -127,10 +132,10 @@ internal sealed partial class ClaudeCodeEngine
             args.Add(JsonSerializer.Serialize(new { env = new Dictionary<string, string> { ["CLAUDE_CODE_SUBAGENT_MODEL"] = AgentSettings.ClaudeCodeAlias(subagentModel) } }));
         }
 
-        if (disabledMcp.Length > 0)
+        if (disallowed.Length > 0)
         {
             args.Add("--disallowedTools");
-            args.Add(disabledMcp);
+            args.Add(disallowed);
         }
 
         if (this.SessionId != null)

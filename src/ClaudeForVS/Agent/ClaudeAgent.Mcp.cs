@@ -33,7 +33,7 @@ internal sealed partial class ClaudeAgent
         var list = BuiltInTools(this.permissions, this.Model);
         var mcpList = new List<(string Name, string Description, IReadOnlyDictionary<string, JsonElement> Schema)>();
         McpConfiguration config = McpConfig.Load(this.RepoRoot);
-        IReadOnlyCollection<string> disabled = McpDisabledServers.Default.For(this.RepoRoot);
+        IReadOnlyCollection<string> disabled = DisabledNames.McpServers.For(this.RepoRoot);
         List<McpServerConfig> servers = config.Servers.Where(s => !disabled.Contains(s.Name)).ToList();
         List<McpServerConfig> needApproval = servers.Where(s => !config.IsPreApproved(s) && !McpApprovals.IsApproved(this.RepoRoot, s)).ToList();
         List<McpServerConfig> toStart = servers.Except(needApproval).ToList();

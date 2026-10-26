@@ -1,0 +1,68 @@
+<platform:DialogWindow x:Class="ClaudeForVS.ToolWindows.SkillsDialog"
+                       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                       xmlns:vsshell="clr-namespace:Microsoft.VisualStudio.Shell;assembly=Microsoft.VisualStudio.Shell.15.0"
+                       xmlns:platform="clr-namespace:Microsoft.VisualStudio.PlatformUI;assembly=Microsoft.VisualStudio.Shell.15.0"
+                       Title="Skills"
+                       Width="560" SizeToContent="Height" ResizeMode="NoResize" ShowInTaskbar="False"
+                       WindowStartupLocation="CenterOwner"
+                       Background="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowBackgroundKey}}"
+                       Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                       FontFamily="{DynamicResource {x:Static vsshell:VsFonts.EnvironmentFontFamilyKey}}"
+                       FontSize="12">
+  <platform:DialogWindow.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Theme.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+      <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    </ResourceDictionary>
+  </platform:DialogWindow.Resources>
+
+  <StackPanel Margin="22,16,22,18">
+    <TextBlock Text="Skills" FontSize="20" FontWeight="SemiBold" />
+    <TextBlock x:Name="RepoText" Style="{StaticResource Muted}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+    <TextBlock x:Name="EngineNote" Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,10,0,12" />
+
+    <!-- One card per skill: name, where it comes from, what it's for; the on/off box. -->
+    <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <ItemsControl x:Name="SkillList">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border Margin="0,0,0,6" Padding="10,8" CornerRadius="8" BorderThickness="1"
+                    BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
+              <DockPanel>
+                <CheckBox DockPanel.Dock="Right" Content="On" IsChecked="{Binding IsEnabled, Mode=TwoWay}" VerticalAlignment="Center" Margin="10,0,0,0"
+                          Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
+                          AutomationProperties.Name="{Binding Name, StringFormat=Use the {0} skill}"
+                          ToolTip="Whether Claude can use this skill in this repository" />
+                <StackPanel>
+                  <DockPanel>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding SourceText}" Style="{StaticResource Muted}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                  </DockPanel>
+                  <TextBlock Text="{Binding Description}" ToolTip="{Binding Description}" Style="{StaticResource Muted}" FontSize="11.5"
+                             TextWrapping="Wrap" MaxHeight="48" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"
+                             Visibility="{Binding HasDescription, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+              </DockPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <TextBlock x:Name="ListNote" Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed" />
+
+    <Border x:Name="EmptyNote" Padding="12,10" CornerRadius="8" BorderThickness="1" Visibility="Collapsed"
+            BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
+      <TextBlock TextWrapping="Wrap" Style="{StaticResource Muted}"
+                 Text="No skills found. Add one as a SKILL.md file in a folder under ~/.claude/skills or the repository's .claude/skills, then open this window again." />
+    </Border>
+
+    <DockPanel Margin="0,16,0,0">
+      <Button DockPanel.Dock="Right" Style="{StaticResource PrimaryButton}" Content="Close" IsCancel="True" IsDefault="True" MinWidth="80" Click="OnClose" />
+      <TextBlock x:Name="ApplyNote" Style="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0" />
+    </DockPanel>
+  </StackPanel>
+</platform:DialogWindow>

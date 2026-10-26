@@ -23,6 +23,10 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     private const string ExtraSystemPrompt =
         "You are running inside a Visual Studio extension's chat window, which renders your replies as Markdown. " +
         "Keep answers concise and reference files by repository-relative paths. " +
+        "The user may approve only some of the changes in an edit; you're then told what was left out.";
+
+    /// <summary>Added to <see cref="ExtraSystemPrompt"/> when the Visual Studio tools are offered.</summary>
+    private const string VisualStudioToolsPrompt =
         "The " + ApprovalServer.DiagnosticsTool + " tool lists Visual Studio's Error List (build errors and live IntelliSense errors in open files); " +
         "check it after changing code. " + ApprovalServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
         "projects `dotnet build` can't build. " + ApprovalServer.DebugTool + " reads Visual Studio's debugger (the exception, call stack and locals when the " +
@@ -33,8 +37,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
         " use Visual Studio's code model (Roslyn) for C# and Visual Basic, which knows what a name really refers to; prefer them to grep for " +
         "\"where is this declared\" or \"what calls this\", and " + ApprovalServer.RenameTool + " to rename a symbol everywhere with one approval. " +
         ApprovalServer.ListPackagesTool + ", " + ApprovalServer.AddPackageTool + " and " + ApprovalServer.RemovePackageTool + " manage NuGet packages " +
-        "through Visual Studio so the project is restored; prefer them to editing a project file or `dotnet add package`. " +
-        "The user may approve only some of the changes in an edit; you're then told what was left out.";
+        "through Visual Studio so the project is restored; prefer them to editing a project file or `dotnet add package`.";
 
     private static readonly TimeSpan PlanUsagePollInterval = TimeSpan.FromSeconds(15);
 
@@ -58,10 +61,11 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
 
     // One Claude Code process answers every message in the chat, reading them from stdin, so each message doesn't
     // pay for starting it and reconnecting the approval server. It's replaced when something on its command line
-    // changes (mode, effort, subagent model, MCP servers turned off, lower priority), after a rewind, or after it was stopped.
+    // changes (mode, effort, subagent model, MCP servers or skills turned off, lower priority, the Visual Studio tools),
+    // after a rewind, or after it was stopped.
     private Process? process;
     private Task<string>? processStderr;
-    private (AgentMode Mode, EffortLevel Effort, ClaudeModel? SubagentModel, string DisabledMcp, bool LowPriority) processSettings;
+    private (AgentMode Mode, EffortLevel Effort, ClaudeModel? SubagentModel, string Disallowed, bool LowPriority, bool VisualStudioTools) processSettings;
     private bool restartNeeded;
 
     // Its output is read between messages too (see DrainIdleOutputAsync). The read in progress then is handed to the
@@ -105,6 +109,9 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
 
     /// <summary>The model Claude Code's subagents run on; null leaves it to Claude Code. Used from the next message on.</summary>
     public ClaudeModel? SubagentModel { get; set; }
+
+    /// <summary>Whether Claude Code is offered the Visual Studio tools. Used from the next message on (Claude Code is restarted for it).</summary>
+    public bool VisualStudioTools { get; set; } = true;
 
     /// <summary>The model ID Claude Code reported running for <see cref="Model"/>'s alias, e.g. "claude-opus-5-5"; null before it starts.</summary>
     public string? ResolvedModelId { get; private set; }

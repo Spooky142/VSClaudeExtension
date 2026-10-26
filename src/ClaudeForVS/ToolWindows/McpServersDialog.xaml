@@ -79,6 +79,9 @@
       </ItemsControl>
     </ScrollViewer>
 
+    <!-- While `claude mcp list` runs, or why it couldn't -->
+    <TextBlock x:Name="ListNote" Style="{StaticResource Muted}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0" Visibility="Collapsed" />
+
     <Border x:Name="EmptyNote" Padding="12,10" CornerRadius="8" BorderThickness="1" Visibility="Collapsed"
             BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
       <TextBlock TextWrapping="Wrap" Style="{StaticResource Muted}"

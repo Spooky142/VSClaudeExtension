@@ -424,6 +424,7 @@
         <Button Style="{StaticResource IconButton}" Content="&#xE710;" AutomationProperties.Name="New chat" ToolTip="New chat" Click="OnNewChat" />
         <Button Style="{StaticResource IconButton}" Content="&#xE78B;" AutomationProperties.Name="New chat window" ToolTip="Open another chat window, to work on something else alongside this chat" Click="OnNewChatWindow" />
         <Button Style="{StaticResource IconButton}" Content="&#xE703;" AutomationProperties.Name="MCP servers" ToolTip="MCP servers: turn them on or off and see whether they work" Click="OnOpenMcpServers" />
+        <Button Style="{StaticResource IconButton}" Content="&#xE8F1;" AutomationProperties.Name="Skills" ToolTip="Skills: turn Claude Code's skills on or off" Click="OnOpenSkills" />
         <Button Style="{StaticResource IconButton}" Content="&#xE713;" AutomationProperties.Name="Settings" ToolTip="Settings" Click="OnOpenSettings" />
       </StackPanel>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">

@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using ClaudeForVS.Agent.Mcp;
 using ClaudeForVS.Git;
 
 namespace ClaudeForVS.Agent;
@@ -219,10 +220,21 @@ internal static class ClaudeCodeCli
         return await RunAsync(exe, ["update"], timeout.Token, includeStderr: true).ConfigureAwait(false);
     }
 
-    private static async Task<(int ExitCode, string Output)> RunAsync(string exe, IReadOnlyList<string> args, CancellationToken cancellationToken, bool includeStderr = false)
+    /// <summary>
+    /// Every MCP server Claude Code connects to in the repository, with its health: the configured ones plus claude.ai
+    /// connectors and plugins' servers, as `claude mcp list` prints them. It starts or connects to each, so it takes a while.
+    /// </summary>
+    public static async Task<IReadOnlyList<ReportedMcpServer>> ListMcpServersAsync(string exe, string repoRoot, CancellationToken cancellationToken)
+    {
+        (int exitCode, string output) = await RunAsync(exe, ["mcp", "list"], cancellationToken, workingDirectory: repoRoot).ConfigureAwait(false);
+        return exitCode == 0 ? McpServerList.Parse(output) : throw new InvalidOperationException(output.Trim() is { Length: > 0 } o ? o : $"claude mcp list exited with code {exitCode}.");
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunAsync(string exe, IReadOnlyList<string> args, CancellationToken cancellationToken, bool includeStderr = false, string? workingDirectory = null)
     {
         var psi = new ProcessStartInfo(exe, string.Join(" ", args.Select(GitRunner.QuoteArgument)))
         {
+            WorkingDirectory = workingDirectory ?? string.Empty,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,

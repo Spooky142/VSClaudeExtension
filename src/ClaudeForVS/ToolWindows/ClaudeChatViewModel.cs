@@ -374,6 +374,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             else if (this.engine is ClaudeCodeEngine code)
             {
                 code.SubagentModel = newSettings.SubagentModel;
+                code.VisualStudioTools = newSettings.ClaudeCodeVisualStudioTools;
             }
         }
 
@@ -499,6 +500,7 @@ internal sealed partial class ClaudeChatViewModel : INotifyPropertyChanged, ICha
             return new ClaudeCodeEngine(exe, root, this.settings.Model, this.settings.Effort, this.settings.Mode)
             {
                 SubagentModel = this.settings.SubagentModel,
+                VisualStudioTools = this.settings.ClaudeCodeVisualStudioTools,
             };
         }
 

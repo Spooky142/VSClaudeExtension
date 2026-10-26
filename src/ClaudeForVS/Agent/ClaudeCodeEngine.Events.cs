@@ -34,6 +34,12 @@ internal sealed partial class ClaudeCodeEngine
                         if (isTopLevel)
                         {
                             this.ResolvedModelId = Str(ev, "model") ?? this.ResolvedModelId;
+
+                            // For the Skills window, which can't find built-in and plugin skills on disk.
+                            if (ev.TryGetProperty("skills", out JsonElement skills) && skills.ValueKind == JsonValueKind.Array)
+                            {
+                                SkillCatalog.Remember(this.RepoRoot, skills.EnumerateArray().Where(s => s.ValueKind == JsonValueKind.String).Select(s => s.GetString()!).ToList());
+                            }
                         }
 
                         chatSink.SetStatus("Claude Code is working…");

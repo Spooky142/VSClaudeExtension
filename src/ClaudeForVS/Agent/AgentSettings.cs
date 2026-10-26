@@ -112,6 +112,13 @@ internal sealed record AgentSettings
     /// </summary>
     public bool ShowNotifications { get; init; } = true;
 
+    /// <summary>
+    /// Offer Claude Code the extension's Visual Studio tools (Error List, build, debugger, Roslyn, NuGet) through its
+    /// MCP server. Their definitions go with every request, so turning them off saves plan usage. The server itself
+    /// stays, as Claude Code's approvals go through it.
+    /// </summary>
+    public bool ClaudeCodeVisualStudioTools { get; init; } = true;
+
     /// <summary>Check this extension's GitHub releases when a chat window is shown (and daily after that), and offer to install a newer version.</summary>
     public bool CheckForExtensionUpdates { get; init; } = true;
 
