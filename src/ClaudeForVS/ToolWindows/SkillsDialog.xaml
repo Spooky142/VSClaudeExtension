@@ -32,7 +32,7 @@
             <Border Margin="0,0,0,6" Padding="10,8" CornerRadius="8" BorderThickness="1"
                     BorderBrush="{DynamicResource SubtleBorder}" Background="{DynamicResource SubtleFill}">
               <DockPanel>
-                <CheckBox DockPanel.Dock="Right" Content="On" IsChecked="{Binding IsEnabled, Mode=TwoWay}" VerticalAlignment="Center" Margin="10,0,0,0"
+                <CheckBox DockPanel.Dock="Right" Content="On" IsChecked="{Binding IsEnabled, Mode=TwoWay}" IsEnabled="{Binding CanChange}" VerticalAlignment="Center" Margin="10,0,0,0"
                           Foreground="{DynamicResource {x:Static vsshell:VsBrushes.ToolWindowTextKey}}"
                           AutomationProperties.Name="{Binding Name, StringFormat=Use the {0} skill}"
                           ToolTip="Whether Claude can use this skill in this repository" />
@@ -44,6 +44,8 @@
                   <TextBlock Text="{Binding Description}" ToolTip="{Binding Description}" Style="{StaticResource Muted}" FontSize="11.5"
                              TextWrapping="Wrap" MaxHeight="48" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"
                              Visibility="{Binding HasDescription, Converter={StaticResource BoolToVis}}" />
+                  <TextBlock Text="{Binding SettingNote}" Style="{StaticResource Muted}" FontSize="11" FontStyle="Italic" TextWrapping="Wrap" Margin="0,3,0,0"
+                             Visibility="{Binding HasSettingNote, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
               </DockPanel>
             </Border>

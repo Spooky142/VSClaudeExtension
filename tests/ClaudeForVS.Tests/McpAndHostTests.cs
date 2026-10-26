@@ -130,9 +130,7 @@ public sealed class McpConfigTests : IDisposable
     {
         Assert.Equal("mcp__github", DisabledNames.ToolRule("github"));
         Assert.Equal("mcp__my_server_v2", DisabledNames.ToolRule("my server.v2"));
-        Assert.Equal("mcp__claude_ai_Google_Drive", DisabledNames.ToolRule("claude.ai Google Drive"));
-        Assert.Equal("Skill(anthropic-skills:pdf)", DisabledNames.SkillRule("anthropic-skills:pdf"));
-    }
+        Assert.Equal("mcp__claude_ai_Google_Drive", DisabledNames.ToolRule("claude.ai Google Drive"));    }
 
     [Fact]
     public void ServerRowsShowWhetherTheyreOnAndApproved()
@@ -381,5 +379,78 @@ public sealed class SkillCatalogTests : IDisposable
         Assert.Equal(("The repository's.", SkillSource.Project), (skills[1].Description, skills[1].Source));
         Assert.Equal(SkillSource.Plugin, skills[3].Source);
         Assert.Equal(SkillSource.ClaudeCode, skills[5].Source);
+    }
+}
+
+public sealed class SkillOverridesTests : IDisposable
+{
+    private readonly string root = Path.Combine(Path.GetTempPath(), "ClaudeForVS.Tests", Guid.NewGuid().ToString("N"));
+
+    private string Repo => Path.Combine(this.root, "repo");
+
+    private string Home => Path.Combine(this.root, "home");
+
+    private string Managed => Path.Combine(this.root, "managed-settings.json");
+
+    private string Local => Path.Combine(this.Repo, ".claude", "settings.local.json");
+
+    public void Dispose()
+    {
+        if (Directory.Exists(this.root))
+        {
+            Directory.Delete(this.root, recursive: true);
+        }
+    }
+
+    private static void Write(string path, string json)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, json);
+    }
+
+    [Fact]
+    public void LocalBeatsProjectBeatsUserAndManagedSettingsLock()
+    {
+        Write(Path.Combine(this.Home, ".claude", "settings.json"), """{ "skillOverrides": { "a": "off", "b": "off", "c": "name-only", "bad": "maybe" } }""");
+        Write(Path.Combine(this.Repo, ".claude", "settings.json"), """{ "skillOverrides": { "b": "user-invocable-only" } }""");
+        Write(this.Local, """{ "skillOverrides": { "a": "on" } }""");
+        Write(this.Managed, """{ "skillOverrides": { "d": "off" } }""");
+
+        IReadOnlyDictionary<string, SkillOverride> overrides = SkillOverrides.Load(this.Repo, this.Home, this.Managed);
+
+        Assert.Equal(["a", "b", "c", "d"], overrides.Keys.OrderBy(k => k));
+        Assert.True(overrides["a"].ClaudeCanUse);
+        Assert.False(overrides["b"].ClaudeCanUse);
+        Assert.True(overrides["c"].ClaudeCanUse);
+        Assert.NotNull(overrides["d"].LockedBy);
+        Assert.Null(overrides["a"].LockedBy);
+    }
+
+    [Fact]
+    public void TurningOffAndOnEditsSettingsLocalJsonLikeSlashSkills()
+    {
+        Write(this.Local, """{ "permissions": { "allow": ["Bash(git status)"] } }""");
+
+        SkillOverrides.Set(this.Repo, "pdf", enabled: false, this.Home);
+        JsonNode written = JsonNode.Parse(File.ReadAllText(this.Local))!;
+        Assert.Equal("off", written["skillOverrides"]!["pdf"]!.GetValue<string>());
+        Assert.Equal("Bash(git status)", written["permissions"]!["allow"]![0]!.GetValue<string>());
+        Assert.Equal("pdf=off", SkillOverrides.Signature(this.Repo));
+
+        SkillOverrides.Set(this.Repo, "pdf", enabled: true, this.Home);
+        written = JsonNode.Parse(File.ReadAllText(this.Local))!;
+        Assert.Null(written["skillOverrides"]);
+        Assert.NotNull(written["permissions"]);
+    }
+
+    [Fact]
+    public void TurningOnASkillTheUsersSettingsTurnOffWritesOn()
+    {
+        Write(Path.Combine(this.Home, ".claude", "settings.json"), """{ "skillOverrides": { "pdf": "off" } }""");
+
+        SkillOverrides.Set(this.Repo, "pdf", enabled: true, this.Home);
+
+        Assert.Equal("on", JsonNode.Parse(File.ReadAllText(this.Local))!["skillOverrides"]!["pdf"]!.GetValue<string>());
+        Assert.True(SkillOverrides.Load(this.Repo, this.Home, this.Managed)["pdf"].ClaudeCanUse);
     }
 }

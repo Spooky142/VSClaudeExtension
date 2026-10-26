@@ -5,10 +5,10 @@ using ClaudeForVS.Agent;
 
 namespace ClaudeForVS.ToolWindows;
 
-/// <summary>One skill in the Skills window: its name, what it's for, where it comes from and whether it's on.</summary>
-internal sealed class SkillRow(SkillInfo skill, bool isEnabled) : INotifyPropertyChanged
+/// <summary>One skill in the Skills window: its name, what it's for, where it comes from and whether Claude can use it.</summary>
+internal sealed class SkillRow(SkillInfo skill, SkillOverride? setting) : INotifyPropertyChanged
 {
-    private bool isEnabled = isEnabled;
+    private SkillOverride? setting = setting;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -29,18 +29,34 @@ internal sealed class SkillRow(SkillInfo skill, bool isEnabled) : INotifyPropert
         _ => "Claude Code",
     };
 
+    /// <summary>False when managed settings decide it.</summary>
+    public bool CanChange => this.setting?.LockedBy == null;
+
+    /// <summary>A line about a setting the On box doesn't show: a lock, or one of skillOverrides' in-between values.</summary>
+    public string SettingNote => this.setting switch
+    {
+        { LockedBy: string by } => $"Set to \"{this.setting.Value}\" by {by}, so it can't be changed here.",
+        { Value: "name-only" } => "Listed to Claude without its description (set in Claude Code's settings).",
+        { Value: "user-invocable-only" } => $"Hidden from Claude; you can still run it as /{skill.Name} (set in Claude Code's settings).",
+        _ => string.Empty,
+    };
+
+    public bool HasSettingNote => this.SettingNote.Length > 0;
+
     public bool IsEnabled
     {
-        get => this.isEnabled;
+        get => this.setting?.ClaudeCanUse ?? true;
         set
         {
-            if (this.isEnabled == value)
+            if (this.IsEnabled == value || !this.CanChange)
             {
                 return;
             }
 
-            this.isEnabled = value;
+            this.setting = value ? null : new SkillOverride("off", null);
             this.OnChanged();
+            this.OnChanged(nameof(this.SettingNote));
+            this.OnChanged(nameof(this.HasSettingNote));
             this.EnabledChanged?.Invoke(this, EventArgs.Empty);
         }
     }

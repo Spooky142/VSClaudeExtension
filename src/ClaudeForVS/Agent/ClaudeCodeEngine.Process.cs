@@ -93,10 +93,11 @@ internal sealed partial class ClaudeCodeEngine
     private async Task<Process> EnsureProcessAsync(IChatSink chatSink)
     {
         // MCP servers turned off in the MCP servers window: Claude Code still loads them, but can't use their tools.
-        // Skills turned off in the Skills window are denied the same way.
-        string disallowed = string.Join(",", DisabledNames.McpServers.For(this.RepoRoot).Select(DisabledNames.ToolRule)
-            .Concat(DisabledNames.Skills.For(this.RepoRoot).Select(DisabledNames.SkillRule)));
-        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort, this.SubagentModel, disallowed, LowPriorityMode.IsActive, this.VisualStudioTools))
+        string disallowed = string.Join(",", DisabledNames.McpServers.For(this.RepoRoot).Select(DisabledNames.ToolRule));
+
+        // Skills turned on or off in the Skills window (or /skills) are in settings.local.json, which Claude Code reads as it starts.
+        string skillOverrides = SkillOverrides.Signature(this.RepoRoot);
+        if (this.process is { HasExited: false } running && !this.restartNeeded && this.processSettings == (this.Mode, this.Effort, this.SubagentModel, disallowed, skillOverrides, LowPriorityMode.IsActive, this.VisualStudioTools))
         {
             chatSink.SetStatus("Claude Code is working…");
             return running;
@@ -104,7 +105,7 @@ internal sealed partial class ClaudeCodeEngine
 
         await this.StopProcessAsync();
         this.restartNeeded = false;
-        this.processSettings = (this.Mode, this.Effort, this.SubagentModel, disallowed, LowPriorityMode.IsActive, this.VisualStudioTools);
+        this.processSettings = (this.Mode, this.Effort, this.SubagentModel, disallowed, skillOverrides, LowPriorityMode.IsActive, this.VisualStudioTools);
 
         // Claude Code lists the server's tools as it starts.
         this.approvalServer.OfferVisualStudioTools = this.VisualStudioTools;

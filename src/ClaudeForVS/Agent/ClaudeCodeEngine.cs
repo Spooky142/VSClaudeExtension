@@ -65,7 +65,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     // after a rewind, or after it was stopped.
     private Process? process;
     private Task<string>? processStderr;
-    private (AgentMode Mode, EffortLevel Effort, ClaudeModel? SubagentModel, string Disallowed, bool LowPriority, bool VisualStudioTools) processSettings;
+    private (AgentMode Mode, EffortLevel Effort, ClaudeModel? SubagentModel, string Disallowed, string SkillOverrides, bool LowPriority, bool VisualStudioTools) processSettings;
     private bool restartNeeded;
 
     // Its output is read between messages too (see DrainIdleOutputAsync). The read in progress then is handed to the

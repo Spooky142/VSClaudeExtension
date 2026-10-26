@@ -9,15 +9,12 @@ namespace ClaudeForVS.Agent.Mcp;
 
 /// <summary>
 /// Names the user turned off in a repository, in a JSON file under %LOCALAPPDATA%\ClaudeForVS: MCP servers (the
-/// Claude API engine doesn't start them; Claude Code is told not to use their tools) and Claude Code's skills.
+/// Claude API engine doesn't start them; Claude Code is told not to use their tools).
 /// </summary>
 internal sealed class DisabledNames(string file)
 {
     public static readonly DisabledNames McpServers = new(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClaudeForVS", "mcp-servers.json"));
-
-    public static readonly DisabledNames Skills = new(Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClaudeForVS", "skills.json"));
 
     private readonly object gate = new();
 
@@ -68,9 +65,6 @@ internal sealed class DisabledNames(string file)
     /// cleans it for tool names.
     /// </summary>
     public static string ToolRule(string server) => "mcp__" + Regex.Replace(server, "[^A-Za-z0-9_-]", "_");
-
-    /// <summary>Claude Code's deny rule for a skill, e.g. "Skill(pdf)" or "Skill(anthropic-skills:docx)".</summary>
-    public static string SkillRule(string skill) => "Skill(" + skill + ")";
 
     private static string Key(string repoRoot) => repoRoot.Trim().TrimEnd('\\', '/').ToLowerInvariant();
 
