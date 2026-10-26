@@ -102,7 +102,7 @@ internal sealed class ApprovalServer : IDisposable
     /// Whether tools/list offers the Visual Studio tools alongside <c>approve</c>. Each tool's definition is sent with
     /// every request Claude Code makes, so leaving them out saves usage. Claude Code lists the tools when it starts.
     /// </summary>
-    public bool OfferVisualStudioTools { get; set; } = true;
+    public bool OfferVisualStudioTools { get; set; }
 
     public void Dispose()
     {
@@ -304,14 +304,15 @@ internal static class VisualStudioTools
             ["name"] = "get_diagnostics",
             ["description"] =
                 "List the errors and warnings in Visual Studio's Error List: errors from the last build, and the live (IntelliSense) " +
-                "errors in files open in the editor. Use it after editing code to check for mistakes, before or instead of a full build.",
+                "errors in files open in the editor. Use it once you've finished a set of edits to check for mistakes, before or instead of a full build. " +
+                "Files with uncommitted changes are listed first.",
             ["inputSchema"] = new JsonObject
             {
                 ["type"] = "object",
                 ["properties"] = new JsonObject
                 {
                     ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Only list problems in this file or folder (relative to the repository root)." },
-                    ["severity"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("error", "warning"), ["description"] = "\"error\" for errors only; \"warning\" (default) for errors and warnings." },
+                    ["severity"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("error", "warning"), ["description"] = "\"error\" (default) for errors only; \"warning\" for errors and warnings." },
                 },
             },
             ["annotations"] = new JsonObject { ["readOnlyHint"] = true },
@@ -321,7 +322,7 @@ internal static class VisualStudioTools
             ["name"] = "build_solution",
             ["description"] =
                 "Build the solution open in Visual Studio (Build > Build Solution), wait for it to finish, and return the result with the " +
-                "Error List's errors and warnings. Works for projects `dotnet build` can't build, such as C++ or older .NET Framework ones.",
+                "Error List's errors (and a count of its warnings; list them with get_diagnostics). Works for projects `dotnet build` can't build, such as C++ or older .NET Framework ones.",
             ["inputSchema"] = new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() },
         },
         new JsonObject

@@ -128,7 +128,8 @@ internal sealed partial class ClaudeAgent : IChatEngine
             - `run_tests` runs the tests and reports the counts and each failure compactly; prefer it to `run_command`
               for running tests. The user approves test runs.
             - `get_diagnostics` lists Visual Studio's Error List: build errors and the live (IntelliSense) errors in
-              open files. Check it after changing code. `build_solution` builds the open solution in Visual Studio, which
+              open files. Once you've finished a set of edits, check the files you changed with it (pass their
+              folder as `path`), not after every edit. `build_solution` builds the open solution in Visual Studio, which
               also works for projects `dotnet build` can't handle (C++, older .NET Framework, solutions that need
               Visual Studio's MSBuild); the user approves builds.
             - `go_to_definition`, `find_references` and `find_symbols` use Visual Studio's code model (Roslyn) for C#

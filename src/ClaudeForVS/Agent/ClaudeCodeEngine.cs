@@ -28,7 +28,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     /// <summary>Added to <see cref="ExtraSystemPrompt"/> when the Visual Studio tools are offered.</summary>
     private const string VisualStudioToolsPrompt =
         "The " + ApprovalServer.DiagnosticsTool + " tool lists Visual Studio's Error List (build errors and live IntelliSense errors in open files); " +
-        "check it after changing code. " + ApprovalServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
+        "once you've finished a set of edits, check the files you changed with it (pass their folder as path), not after every edit. " + ApprovalServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
         "projects `dotnet build` can't build. " + ApprovalServer.DebugTool + " reads Visual Studio's debugger (the exception, call stack and locals when the " +
         "user has paused at a breakpoint or exception). " + ApprovalServer.ActiveDocumentTool + " shows the file, caret line and selection the user " +
         "has in the editor; use it when they say \"this\" or \"here\" without naming a file. " + ApprovalServer.CodeFixesTool + " lists the light bulb's " +
@@ -111,7 +111,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     public ClaudeModel? SubagentModel { get; set; }
 
     /// <summary>Whether Claude Code is offered the Visual Studio tools. Used from the next message on (Claude Code is restarted for it).</summary>
-    public bool VisualStudioTools { get; set; } = true;
+    public bool VisualStudioTools { get; set; }
 
     /// <summary>The model ID Claude Code reported running for <see cref="Model"/>'s alias, e.g. "claude-opus-5-5"; null before it starts.</summary>
     public string? ResolvedModelId { get; private set; }

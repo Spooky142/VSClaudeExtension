@@ -135,14 +135,14 @@ internal sealed partial class ClaudeAgent
             Description =
                 "List the errors and warnings in Visual Studio's Error List: errors from the last build, and the live " +
                 "(IntelliSense) errors in files open in the editor, which update a moment after a file changes. Each line " +
-                "is \"path:line: severity code: message [project] (source)\". Use it after editing code to check for " +
-                "mistakes, before or instead of a full build.",
+                "is \"path:line: severity code: message [project] (source)\". Use it once you've finished a set of edits to " +
+                "check for mistakes, before or instead of a full build. Files with uncommitted changes are listed first.",
             InputSchema = new()
             {
                 Properties = new Dictionary<string, JsonElement>
                 {
                     ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Only list problems in this file or folder (relative to the repository root). Default: everything." }),
-                    ["severity"] = JsonSerializer.SerializeToElement(new { type = "string", @enum = new[] { "error", "warning" }, description = "\"error\" lists errors only; \"warning\" (default) lists errors and warnings." }),
+                    ["severity"] = JsonSerializer.SerializeToElement(new { type = "string", @enum = new[] { "error", "warning" }, description = "\"error\" (default) lists errors only; \"warning\" lists errors and warnings." }),
                 },
             },
             EagerInputStreaming = true,
@@ -179,7 +179,7 @@ internal sealed partial class ClaudeAgent
             Name = "build_solution",
             Description =
                 "Build the solution open in Visual Studio (Build > Build Solution) and wait for it to finish, then return " +
-                "the result and the Error List's errors and warnings. Works for any project Visual Studio can build, " +
+                "the result and the Error List's errors (and a count of its warnings; list them with get_diagnostics). Works for any project Visual Studio can build, " +
                 "including C++ and older .NET Framework projects that `dotnet build` can't. The user approves each build " +
                 "unless they've allowed builds already.",
             InputSchema = new() { Properties = new Dictionary<string, JsonElement>() },

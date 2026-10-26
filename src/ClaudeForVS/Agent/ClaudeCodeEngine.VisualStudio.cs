@@ -28,7 +28,8 @@ internal sealed partial class ClaudeCodeEngine
                     ? this.Relative(this.FullPath(JsonSerializer.SerializeToElement(new { file_path = path })) ?? path).Replace('\\', '/')
                     : string.Empty;
                 IReadOnlyList<ErrorListItem> items = await vs.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
-                return (Diagnostics.Format(items, this.RepoRoot, scope, includeWarnings: Str(input, "severity") != "error"), false);
+                IReadOnlyCollection<string> changed = await Diagnostics.ChangedFilesAsync(this.RepoRoot, cancellationToken).ConfigureAwait(false);
+                return (Diagnostics.Format(items, this.RepoRoot, scope, includeWarnings: Str(input, "severity") == "warning", changed), false);
 
             case "build_solution":
                 string solution = await vs.GetSolutionDirectoryAsync(cancellationToken).ConfigureAwait(false) ?? throw new InvalidOperationException("No solution is open in Visual Studio.");
@@ -41,7 +42,8 @@ internal sealed partial class ClaudeCodeEngine
 
                 BuildOutcome outcome = await vs.BuildSolutionAsync(cancellationToken).ConfigureAwait(false);
                 IReadOnlyList<ErrorListItem> after = await vs.GetDiagnosticsAsync(cancellationToken).ConfigureAwait(false);
-                return ($"{outcome.Summary}\n{Diagnostics.Format(after, this.RepoRoot, string.Empty, includeWarnings: true)}", !outcome.Succeeded);
+                IReadOnlyCollection<string> touched = await Diagnostics.ChangedFilesAsync(this.RepoRoot, cancellationToken).ConfigureAwait(false);
+                return ($"{outcome.Summary}\n{Diagnostics.Format(after, this.RepoRoot, string.Empty, includeWarnings: false, touched)}", !outcome.Succeeded);
 
             case "get_debug_state":
                 DebugState state = await vs.GetDebugStateAsync(cancellationToken).ConfigureAwait(false);

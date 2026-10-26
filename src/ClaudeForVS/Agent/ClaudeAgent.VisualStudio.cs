@@ -36,11 +36,12 @@ internal sealed partial class ClaudeAgent
     {
         IVisualStudioHost vs = VisualStudioHost.Current ?? throw new ToolInputException("Visual Studio's Error List isn't available.");
         string scope = this.OptionalRepoPath(input, "path", folderOnly: false);
-        bool includeWarnings = !(input.TryGetValue("severity", out JsonElement s) && s.ValueKind == JsonValueKind.String && s.GetString() == "error");
+        bool includeWarnings = input.TryGetValue("severity", out JsonElement s) && s.ValueKind == JsonValueKind.String && s.GetString() == "warning";
 
         sink.SetStatus("Reading Visual Studio's Error List…");
         IReadOnlyList<ErrorListItem> items = await vs.GetDiagnosticsAsync(cancellationToken);
-        string result = Diagnostics.Format(items, this.RepoRoot, scope, includeWarnings);
+        IReadOnlyCollection<string> changed = await Diagnostics.ChangedFilesAsync(this.RepoRoot, cancellationToken);
+        string result = Diagnostics.Format(items, this.RepoRoot, scope, includeWarnings, changed);
         string note = await this.SolutionNoteAsync(vs, cancellationToken);
         sink.ToolActivity(ActivityKind.Search, "Checked the Error List" + (scope.Length > 0 ? $" for {scope}" : string.Empty), result);
         return result + note;
@@ -112,7 +113,8 @@ internal sealed partial class ClaudeAgent
         }
 
         IReadOnlyList<ErrorListItem> items = await vs.GetDiagnosticsAsync(cancellationToken);
-        string diagnostics = Diagnostics.Format(items, this.RepoRoot, string.Empty, includeWarnings: true);
+        IReadOnlyCollection<string> changed = await Diagnostics.ChangedFilesAsync(this.RepoRoot, cancellationToken);
+        string diagnostics = Diagnostics.Format(items, this.RepoRoot, string.Empty, includeWarnings: false, changed);
         string result = $"{outcome.Summary}\n{diagnostics}";
         sink.ToolActivity(outcome.Succeeded ? ActivityKind.Shell : ActivityKind.Failed, outcome.Succeeded ? "Built the solution" : "Build failed", result);
         return result;

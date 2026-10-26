@@ -193,9 +193,31 @@ public class DiagnosticsTests
     [Fact]
     public void FiltersByPathAndSeverity()
     {
-        Assert.Equal("1 error in src:\nsrc/A.cs:12: error CS1002: ; expected [App] (IntelliSense)", Diagnostics.Format(Items, Root, "src", includeWarnings: false));
+        Assert.Equal("1 error in src: (1 warning not listed; pass severity \"warning\" to see them.)\nsrc/A.cs:12: error CS1002: ; expected [App] (IntelliSense)", Diagnostics.Format(Items, Root, "src", includeWarnings: false));
         Assert.Equal("No errors or warnings in docs.", Diagnostics.Format(Items, Root, "docs", includeWarnings: true));
         Assert.Equal("No errors.", Diagnostics.Format([], Root, string.Empty, includeWarnings: false));
+    }
+
+    [Fact]
+    public void CountsTheWarningsItLeavesOut()
+    {
+        Assert.StartsWith("3 errors: (1 warning not listed; pass severity \"warning\" to see them.)\n", Diagnostics.Format(Items, Root, string.Empty, includeWarnings: false));
+        List<ErrorListItem> warningsOnly = [Items[0]];
+        Assert.Equal("No errors. (1 warning not listed; pass severity \"warning\" to see them.)", Diagnostics.Format(warningsOnly, Root, string.Empty, includeWarnings: false));
+    }
+
+    [Fact]
+    public void ListsChangedFilesFirst()
+    {
+        string[] lines = Diagnostics.Format(Items, Root, string.Empty, includeWarnings: false, ["tests/T.cs"]).Split('\n');
+        Assert.Equal("tests/T.cs:7: error CS0103: name does not exist [Tests] (Build)", lines[1]);
+    }
+
+    [Fact]
+    public void ParsesGitStatus()
+    {
+        Assert.Equal(["src/A.cs", "new.cs", "b.cs"], Diagnostics.ParseStatus(" M src/A.cs\0?? new.cs\0R  b.cs\0a.cs\0"));
+        Assert.Empty(Diagnostics.ParseStatus(string.Empty));
     }
 }
 

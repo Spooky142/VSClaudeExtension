@@ -130,35 +130,44 @@ internal static class VisualStudioHost
 /// <summary>Formats Error List rows for Claude.</summary>
 internal static class Diagnostics
 {
-    public const int MaxItems = 200;
+    // Every row stays in the conversation and is sent again with each later request, so the list is kept short.
+    public const int MaxItems = 50;
 
     /// <param name="scope">A repository-relative file or folder to limit the list to; empty for everything.</param>
-    /// <param name="includeWarnings">False to list errors only.</param>
-    public static string Format(IReadOnlyList<ErrorListItem> items, string repoRoot, string scope, bool includeWarnings)
+    /// <param name="includeWarnings">False to list errors only (the warnings are counted).</param>
+    /// <param name="changedFiles">Repository-relative files (either slash) with uncommitted changes, listed first within each severity.</param>
+    public static string Format(IReadOnlyList<ErrorListItem> items, string repoRoot, string scope, bool includeWarnings, IReadOnlyCollection<string>? changedFiles = null)
     {
         string root = repoRoot.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
         string prefix = scope.Replace('/', Path.DirectorySeparatorChar).Trim(Path.DirectorySeparatorChar);
+        var changed = new HashSet<string>((changedFiles ?? []).Select(f => f.Replace('/', Path.DirectorySeparatorChar)), StringComparer.OrdinalIgnoreCase);
 
-        List<ErrorListItem> shown = items
-            .Where(i => includeWarnings ? i.Severity is "error" or "warning" : i.Severity == "error")
+        List<ErrorListItem> inScope = items
+            .Where(i => i.Severity is "error" or "warning")
             .Where(i => prefix.Length == 0 || (i.File is string f && Relative(f, root) is string rel
                 && (rel.Equals(prefix, StringComparison.OrdinalIgnoreCase) || rel.StartsWith(prefix + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))))
             .Distinct()
+            .ToList();
+        List<ErrorListItem> shown = inScope
+            .Where(i => includeWarnings || i.Severity == "error")
             .OrderBy(i => i.Severity == "error" ? 0 : 1)
+            .ThenBy(i => i.File is string f && Relative(f, root) is string rel && changed.Contains(rel) ? 0 : 1)
             .ThenBy(i => i.File, StringComparer.OrdinalIgnoreCase)
             .ThenBy(i => i.Line)
             .ToList();
 
         int errors = shown.Count(i => i.Severity == "error");
         int warnings = shown.Count - errors;
+        int hiddenWarnings = includeWarnings ? 0 : inScope.Count(i => i.Severity == "warning");
         string where = prefix.Length > 0 ? $" in {scope}" : string.Empty;
+        string hidden = hiddenWarnings > 0 ? $" ({Count(hiddenWarnings, "warning")} not listed; pass severity \"warning\" to see them.)" : string.Empty;
         if (shown.Count == 0)
         {
-            return includeWarnings ? $"No errors or warnings{where}." : $"No errors{where}.";
+            return includeWarnings ? $"No errors or warnings{where}." : $"No errors{where}.{hidden}";
         }
 
         var sb = new StringBuilder();
-        sb.Append($"{Count(errors, "error")}{(includeWarnings ? ", " + Count(warnings, "warning") : string.Empty)}{where}:\n");
+        sb.Append($"{Count(errors, "error")}{(includeWarnings ? ", " + Count(warnings, "warning") : string.Empty)}{where}:{hidden}\n");
         foreach (ErrorListItem item in shown.Take(MaxItems))
         {
             string file = item.File is string path ? (Relative(path, root) ?? path).Replace('\\', '/') : "(no file)";
@@ -175,6 +184,41 @@ internal static class Diagnostics
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>The repository-relative files git sees as changed or new, for <see cref="Format"/> to list first; empty if git can't tell.</summary>
+    public static async Task<IReadOnlyCollection<string>> ChangedFilesAsync(string repoRoot, CancellationToken cancellationToken)
+    {
+        try
+        {
+            (int exitCode, string output) = await Git.GitRunner.RunAsync(repoRoot, ["status", "--porcelain", "-z", "--untracked-files=all"], cancellationToken, includeStderr: false).ConfigureAwait(false);
+            return exitCode == 0 ? ParseStatus(output) : [];
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>The paths in <c>git status --porcelain -z</c> output: "XY path" entries, renames and copies followed by their old path.</summary>
+    internal static IReadOnlyCollection<string> ParseStatus(string output)
+    {
+        var files = new List<string>();
+        string[] entries = output.Split('\0');
+        for (int i = 0; i < entries.Length; i++)
+        {
+            string entry = entries[i];
+            if (entry.Length > 3)
+            {
+                files.Add(entry.Substring(3));
+                if (entry[0] is 'R' or 'C')
+                {
+                    i++; // the old path
+                }
+            }
+        }
+
+        return files;
     }
 
     private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
