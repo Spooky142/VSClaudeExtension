@@ -13,9 +13,51 @@ using Microsoft.VisualStudio.Shell;
 
 namespace ClaudeForVS.Agent;
 
-/// <summary>The Visual Studio tools Claude Code reaches through the approval server.</summary>
+/// <summary>The Visual Studio tools Claude Code reaches through <see cref="VisualStudioToolServer"/>.</summary>
 internal sealed partial class ClaudeCodeEngine
 {
+    /// <summary>Starts the Visual Studio tools' MCP server, if it isn't running; returns the --mcp-config file naming it.</summary>
+    private string StartToolServer()
+    {
+        if (this.toolServer is null || this.mcpConfigPath is null)
+        {
+            this.toolServer?.Dispose();
+            this.toolServer = new VisualStudioToolServer(this.RunVisualStudioToolAsync);
+            string dir = Path.Combine(Path.GetTempPath(), "ClaudeForVS");
+            Directory.CreateDirectory(dir);
+            this.mcpConfigPath = Path.Combine(dir, $"mcp-{Guid.NewGuid():N}.json");
+            File.WriteAllText(this.mcpConfigPath, JsonSerializer.Serialize(new
+            {
+                mcpServers = new Dictionary<string, object>
+                {
+                    // Claude Code gives up on a call to an HTTP server that's quiet for 5 minutes; a build, or a rename
+                    // or code fix waiting for the user's approval, can take longer. The server's own timeout raises that.
+                    [VisualStudioToolServer.ServerName] = new { type = "http", url = this.toolServer.Url, timeout = VisualStudioToolServer.CallTimeoutMilliseconds },
+                },
+            }));
+        }
+
+        return this.mcpConfigPath;
+    }
+
+    /// <summary>Stops the Visual Studio tools' MCP server, if it's running, and deletes its config file.</summary>
+    private void StopToolServer()
+    {
+        this.toolServer?.Dispose();
+        this.toolServer = null;
+        if (this.mcpConfigPath is string path)
+        {
+            this.mcpConfigPath = null;
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     /// <summary>Runs one of the extension's Visual Studio tools for Claude Code (called on a thread-pool thread).</summary>
     private async Task<(string Text, bool IsError)> RunVisualStudioToolAsync(string name, JsonElement input)
     {

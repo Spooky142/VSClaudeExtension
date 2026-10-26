@@ -10,23 +10,19 @@ using System.Threading.Tasks;
 namespace ClaudeForVS.Agent;
 
 /// <summary>
-/// A minimal MCP server (Streamable HTTP, JSON responses only) for Claude Code. Its <c>approve</c> tool is what Claude
-/// Code calls through <c>--permission-prompt-tool</c> whenever it needs permission; its other tools give Claude
-/// things only Visual Studio knows (see <see cref="VisualStudioTools"/>). Bound to localhost under a random path so
-/// other local processes can't find it by guessing.
+/// A minimal MCP server (Streamable HTTP, JSON responses only) that gives Claude Code things only Visual Studio knows
+/// (see <see cref="VisualStudioTools"/>). Only started while the Visual Studio tools are turned on; Claude Code's
+/// permission requests don't come through it (see <see cref="ClaudeCodeEngine"/>). Bound to localhost under a random
+/// path so other local processes can't find it by guessing.
 /// </summary>
-internal sealed class ApprovalServer : IDisposable
+internal sealed class VisualStudioToolServer : IDisposable
 {
     public const string ServerName = "visualstudio";
-    public const string ToolName = "approve";
 
-    /// <summary>How long Claude Code waits for one call (an approval or question the user hasn't answered yet, or a build): 24 hours.</summary>
+    /// <summary>How long Claude Code waits for one call (a build, or a rename waiting for the user's approval): 24 hours.</summary>
     public const int CallTimeoutMilliseconds = 24 * 60 * 60 * 1000;
 
-    /// <summary>The name Claude Code knows the tool by.</summary>
-    public const string QualifiedToolName = "mcp__" + ServerName + "__" + ToolName;
-
-    /// <summary>The Visual Studio tools offered alongside <c>approve</c>, as Claude Code names them.</summary>
+    /// <summary>The Visual Studio tools, as Claude Code names them.</summary>
     public const string DiagnosticsTool = "mcp__" + ServerName + "__get_diagnostics";
 
     public const string BuildTool = "mcp__" + ServerName + "__build_solution";
@@ -54,14 +50,11 @@ internal sealed class ApprovalServer : IDisposable
     public const string RemovePackageTool = "mcp__" + ServerName + "__remove_package";
 
     private readonly HttpListener listener;
-    private readonly Func<string, JsonElement, string?, Task<PermissionDecision>> decide;
     private readonly Func<string, JsonElement, Task<(string Text, bool IsError)>> runTool;
 
-    /// <param name="decide">Called with Claude Code's tool name, input and tool call ID (if given); returns the user's decision.</param>
     /// <param name="runTool">Runs one of the Visual Studio tools by its short name (e.g. "get_diagnostics").</param>
-    public ApprovalServer(Func<string, JsonElement, string?, Task<PermissionDecision>> decide, Func<string, JsonElement, Task<(string Text, bool IsError)>> runTool)
+    public VisualStudioToolServer(Func<string, JsonElement, Task<(string Text, bool IsError)>> runTool)
     {
-        this.decide = decide;
         this.runTool = runTool;
         byte[] secret = new byte[18];
         using (var rng = RandomNumberGenerator.Create())
@@ -97,12 +90,6 @@ internal sealed class ApprovalServer : IDisposable
     }
 
     public string Url { get; } = string.Empty;
-
-    /// <summary>
-    /// Whether tools/list offers the Visual Studio tools alongside <c>approve</c>. Each tool's definition is sent with
-    /// every request Claude Code makes, so leaving them out saves usage. Claude Code lists the tools when it starts.
-    /// </summary>
-    public bool OfferVisualStudioTools { get; set; }
 
     public void Dispose()
     {
@@ -169,7 +156,7 @@ internal sealed class ApprovalServer : IDisposable
                 return;
             }
 
-            // Whatever goes wrong from here (a cancelled approval, a COM error from Visual Studio, an odd request), Claude
+            // Whatever goes wrong from here (a cancelled build, a COM error from Visual Studio, an odd request), Claude
             // Code gets a JSON-RPC error for this id, not an empty reply it can't make sense of.
             JsonObject reply;
             try
@@ -184,7 +171,7 @@ internal sealed class ApprovalServer : IDisposable
                         ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = "1.0.0" },
                     },
                     "ping" => new JsonObject(),
-                    "tools/list" => new JsonObject { ["tools"] = this.OfferVisualStudioTools ? new JsonArray([ToolDefinition(), .. VisualStudioTools.Definitions()]) : new JsonArray(ToolDefinition()) },
+                    "tools/list" => new JsonObject { ["tools"] = new JsonArray(VisualStudioTools.Definitions()) },
                     "tools/call" => await this.CallToolAsync(request?["params"]).ConfigureAwait(false),
                     _ => null,
                 };
@@ -225,74 +212,25 @@ internal sealed class ApprovalServer : IDisposable
 
     private async Task<JsonNode> CallToolAsync(JsonNode? parameters)
     {
-        JsonNode? args = parameters?["arguments"];
-        string called = parameters?["name"] is JsonValue n && n.TryGetValue(out string? calledName) ? calledName! : ToolName;
-        if (called != ToolName)
+        string called = parameters?["name"] is JsonValue n && n.TryGetValue(out string? calledName) ? calledName! : string.Empty;
+        (string text, bool isError) result;
+        try
         {
-            (string text, bool isError) result = ($"Unknown tool: {called}", true);
-            try
-            {
-                // Turned off, the Visual Studio tools aren't listed, so Claude Code shouldn't call them; if it does, they don't run.
-                if (this.OfferVisualStudioTools)
-                {
-                    using JsonDocument argsDoc = JsonDocument.Parse(args?.ToJsonString() ?? "{}");
-                    result = await this.runTool(called, argsDoc.RootElement.Clone()).ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or ToolInputException or IOException or OperationCanceledException or System.Runtime.InteropServices.COMException)
-            {
-                result = (ex.Message, true);
-            }
-
-            return new JsonObject
-            {
-                ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = result.text }),
-                ["isError"] = result.isError,
-            };
+            using JsonDocument argsDoc = JsonDocument.Parse(parameters?["arguments"]?.ToJsonString() ?? "{}");
+            result = await this.runTool(called, argsDoc.RootElement.Clone()).ConfigureAwait(false);
         }
-
-        string toolName = args?["tool_name"]?.GetValue<string>() ?? "unknown";
-        JsonNode input = args?["input"]?.DeepClone() ?? new JsonObject();
-        string? toolUseId = args?["tool_use_id"] is JsonValue id && id.TryGetValue(out string? value) ? value : null;
-
-        PermissionDecision decision;
-        using (JsonDocument doc = JsonDocument.Parse(input.ToJsonString()))
+        catch (Exception ex) when (ex is InvalidOperationException or ToolInputException or IOException or OperationCanceledException or System.Runtime.InteropServices.COMException)
         {
-            decision = await this.decide(toolName, doc.RootElement.Clone(), toolUseId).ConfigureAwait(false);
+            result = (ex.Message, true);
         }
-
-        // Answered questions come back as a modified input (the original questions plus "answers").
-        JsonNode updatedInput = decision.UpdatedInputJson is string json ? JsonNode.Parse(json) ?? input : input;
-        JsonObject payload = decision.Allow
-            ? new JsonObject { ["behavior"] = "allow", ["updatedInput"] = updatedInput }
-            : new JsonObject { ["behavior"] = "deny", ["message"] = decision.Message ?? "The user declined this action." };
 
         return new JsonObject
         {
-            ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = payload.ToJsonString() }),
+            ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = result.text }),
+            ["isError"] = result.isError,
         };
     }
-
-    private static JsonObject ToolDefinition() => new()
-    {
-        ["name"] = ToolName,
-        ["description"] = "Asks the Visual Studio user to approve or deny a tool call.",
-        ["inputSchema"] = new JsonObject
-        {
-            ["type"] = "object",
-            ["properties"] = new JsonObject
-            {
-                ["tool_name"] = new JsonObject { ["type"] = "string" },
-                ["input"] = new JsonObject { ["type"] = "object" },
-                ["tool_use_id"] = new JsonObject { ["type"] = "string" },
-            },
-            ["required"] = new JsonArray("tool_name", "input"),
-        },
-    };
 }
-
-/// <param name="UpdatedInputJson">Replacement tool input to run with, as JSON; null runs the original input.</param>
-internal readonly record struct PermissionDecision(bool Allow, string? Message = null, string? UpdatedInputJson = null);
 
 /// <summary>The Visual Studio tools the extension's MCP server offers Claude Code: the Error List, and building the solution.</summary>
 internal static class VisualStudioTools

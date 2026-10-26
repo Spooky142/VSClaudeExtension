@@ -294,19 +294,12 @@ public class TestExplorerTextTests
     }
 }
 
-public class ApprovalServerTests
+public class VisualStudioToolServerTests
 {
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async System.Threading.Tasks.Task ListsTheVisualStudioToolsOnlyWhenOffered(bool offered)
+    [Fact]
+    public async System.Threading.Tasks.Task ListsAndRunsTheVisualStudioTools()
     {
-        using var server = new ApprovalServer(
-            (_, _, _) => System.Threading.Tasks.Task.FromResult(new PermissionDecision(true)),
-            (_, _) => System.Threading.Tasks.Task.FromResult(("ran", false)))
-        {
-            OfferVisualStudioTools = offered,
-        };
+        using var server = new VisualStudioToolServer((name, _) => System.Threading.Tasks.Task.FromResult(($"ran {name}", false)));
         using var http = new System.Net.Http.HttpClient();
 
         async System.Threading.Tasks.Task<JsonNode> CallAsync(string method, JsonObject? parameters = null)
@@ -318,11 +311,44 @@ public class ApprovalServerTests
         }
 
         List<string> names = (await CallAsync("tools/list"))["tools"]!.AsArray().Select(t => t!["name"]!.GetValue<string>()).ToList();
-        Assert.Contains(ApprovalServer.ToolName, names);
-        Assert.Equal(offered, names.Contains("get_diagnostics"));
+        Assert.Contains("get_diagnostics", names);
+        Assert.DoesNotContain("approve", names); // permission requests go over Claude Code's stdio, not MCP
 
         JsonNode called = await CallAsync("tools/call", new JsonObject { ["name"] = "get_diagnostics", ["arguments"] = new JsonObject() });
-        Assert.Equal(!offered, called["isError"]!.GetValue<bool>());
+        Assert.False(called["isError"]!.GetValue<bool>());
+        Assert.Equal("ran get_diagnostics", called["content"]![0]!["text"]!.GetValue<string>());
+    }
+}
+
+public class ControlResponseTests
+{
+    private static readonly JsonElement Input = JsonDocument.Parse("""{"file_path":"a.txt","content":"hi"}""").RootElement;
+
+    [Fact]
+    public void AllowsWithTheOriginalInput()
+    {
+        JsonNode reply = JsonNode.Parse(ClaudeCodeEngine.ControlResponse("req-1", new PermissionDecision(true), Input))!;
+        Assert.Equal("control_response", reply["type"]!.GetValue<string>());
+        Assert.Equal("success", reply["response"]!["subtype"]!.GetValue<string>());
+        Assert.Equal("req-1", reply["response"]!["request_id"]!.GetValue<string>());
+        Assert.Equal("allow", reply["response"]!["response"]!["behavior"]!.GetValue<string>());
+        Assert.Equal("hi", reply["response"]!["response"]!["updatedInput"]!["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void AllowsWithAnUpdatedInput()
+    {
+        var decision = new PermissionDecision(true, UpdatedInputJson: """{"questions":[],"answers":{"Q":"A"}}""");
+        JsonNode reply = JsonNode.Parse(ClaudeCodeEngine.ControlResponse("req-2", decision, Input))!;
+        Assert.Equal("A", reply["response"]!["response"]!["updatedInput"]!["answers"]!["Q"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void DeniesWithTheMessage()
+    {
+        JsonNode reply = JsonNode.Parse(ClaudeCodeEngine.ControlResponse("req-3", new PermissionDecision(false, "No."), Input))!;
+        Assert.Equal("deny", reply["response"]!["response"]!["behavior"]!.GetValue<string>());
+        Assert.Equal("No.", reply["response"]!["response"]!["message"]!.GetValue<string>());
     }
 }
 

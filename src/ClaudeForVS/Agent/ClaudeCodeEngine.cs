@@ -15,8 +15,9 @@ namespace ClaudeForVS.Agent;
 
 /// <summary>
 /// Runs each message through the Claude Code CLI (<c>claude -p</c>) in the repository, signed in with the user's
-/// own plan. Follow-up messages resume the same Claude Code session. Claude Code's permission prompts come back
-/// through <see cref="ApprovalServer"/> and are shown in the extension's approval card.
+/// own plan. Follow-up messages resume the same Claude Code session. Claude Code's permission prompts come in on its
+/// output as control requests (<c>--permission-prompt-tool stdio</c>), are shown in the extension's approval card,
+/// and are answered on its input.
 /// </summary>
 internal sealed partial class ClaudeCodeEngine : IChatEngine
 {
@@ -27,16 +28,16 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
 
     /// <summary>Added to <see cref="ExtraSystemPrompt"/> when the Visual Studio tools are offered.</summary>
     private const string VisualStudioToolsPrompt =
-        "The " + ApprovalServer.DiagnosticsTool + " tool lists Visual Studio's Error List (build errors and live IntelliSense errors in open files); " +
-        "once you've finished a set of edits, check the files you changed with it (pass their folder as path), not after every edit. " + ApprovalServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
-        "projects `dotnet build` can't build. " + ApprovalServer.DebugTool + " reads Visual Studio's debugger (the exception, call stack and locals when the " +
-        "user has paused at a breakpoint or exception). " + ApprovalServer.ActiveDocumentTool + " shows the file, caret line and selection the user " +
-        "has in the editor; use it when they say \"this\" or \"here\" without naming a file. " + ApprovalServer.CodeFixesTool + " lists the light bulb's " +
-        "fixes for a line's errors and warnings, and " + ApprovalServer.ApplyCodeFixTool + " applies one; prefer them to hand edits for things like " +
-        "missing usings or unimplemented interface members. " + ApprovalServer.DefinitionTool + ", " + ApprovalServer.ReferencesTool + " and " + ApprovalServer.SymbolsTool +
+        "The " + VisualStudioToolServer.DiagnosticsTool + " tool lists Visual Studio's Error List (build errors and live IntelliSense errors in open files); " +
+        "once you've finished a set of edits, check the files you changed with it (pass their folder as path), not after every edit. " + VisualStudioToolServer.BuildTool + " builds the open solution in Visual Studio, which also works for " +
+        "projects `dotnet build` can't build. " + VisualStudioToolServer.DebugTool + " reads Visual Studio's debugger (the exception, call stack and locals when the " +
+        "user has paused at a breakpoint or exception). " + VisualStudioToolServer.ActiveDocumentTool + " shows the file, caret line and selection the user " +
+        "has in the editor; use it when they say \"this\" or \"here\" without naming a file. " + VisualStudioToolServer.CodeFixesTool + " lists the light bulb's " +
+        "fixes for a line's errors and warnings, and " + VisualStudioToolServer.ApplyCodeFixTool + " applies one; prefer them to hand edits for things like " +
+        "missing usings or unimplemented interface members. " + VisualStudioToolServer.DefinitionTool + ", " + VisualStudioToolServer.ReferencesTool + " and " + VisualStudioToolServer.SymbolsTool +
         " use Visual Studio's code model (Roslyn) for C# and Visual Basic, which knows what a name really refers to; prefer them to grep for " +
-        "\"where is this declared\" or \"what calls this\", and " + ApprovalServer.RenameTool + " to rename a symbol everywhere with one approval. " +
-        ApprovalServer.ListPackagesTool + ", " + ApprovalServer.AddPackageTool + " and " + ApprovalServer.RemovePackageTool + " manage NuGet packages " +
+        "\"where is this declared\" or \"what calls this\", and " + VisualStudioToolServer.RenameTool + " to rename a symbol everywhere with one approval. " +
+        VisualStudioToolServer.ListPackagesTool + ", " + VisualStudioToolServer.AddPackageTool + " and " + VisualStudioToolServer.RemovePackageTool + " manage NuGet packages " +
         "through Visual Studio so the project is restored; prefer them to editing a project file or `dotnet add package`.";
 
     private static readonly TimeSpan PlanUsagePollInterval = TimeSpan.FromSeconds(15);
@@ -44,9 +45,14 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     private static readonly HashSet<string> EditTools = new(StringComparer.Ordinal) { "Edit", "MultiEdit", "Write", "NotebookEdit" };
 
     private readonly string executable;
-    private readonly ApprovalServer approvalServer;
-    private readonly string mcpConfigPath;
     private readonly SemaphoreSlim approvalGate = new(1, 1);
+
+    // Prompts and answers to permission requests share Claude Code's stdin, one line at a time.
+    private readonly SemaphoreSlim inputGate = new(1, 1);
+
+    // Only while the Visual Studio tools are turned on: the MCP server offering them, and the --mcp-config file naming it.
+    private VisualStudioToolServer? toolServer;
+    private string? mcpConfigPath;
     private readonly Dictionary<string, (string Name, JsonElement Input, string? Before)> pendingTools = new();
 
     // The rows of subagents at work, by the ID of the tool call that started each.
@@ -60,7 +66,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
     private CancellationToken runToken;
 
     // One Claude Code process answers every message in the chat, reading them from stdin, so each message doesn't
-    // pay for starting it and reconnecting the approval server. It's replaced when something on its command line
+    // pay for starting it and connecting its MCP servers. It's replaced when something on its command line
     // changes (mode, effort, subagent model, MCP servers or skills turned off, lower priority, the Visual Studio tools),
     // after a rewind, or after it was stopped.
     private Process? process;
@@ -81,20 +87,6 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
         this.Model = model;
         this.Effort = effort;
         this.Mode = mode;
-        this.approvalServer = new ApprovalServer(this.DecideAsync, this.RunVisualStudioToolAsync);
-
-        string dir = Path.Combine(Path.GetTempPath(), "ClaudeForVS");
-        Directory.CreateDirectory(dir);
-        this.mcpConfigPath = Path.Combine(dir, $"mcp-{Guid.NewGuid():N}.json");
-        File.WriteAllText(this.mcpConfigPath, JsonSerializer.Serialize(new
-        {
-            mcpServers = new Dictionary<string, object>
-            {
-                // Claude Code gives up on a call to an HTTP server that's quiet for 5 minutes, and the approval tool is
-                // quiet for as long as an approval or question waits for the user. The server's own timeout raises that.
-                [ApprovalServer.ServerName] = new { type = "http", url = this.approvalServer.Url, timeout = ApprovalServer.CallTimeoutMilliseconds },
-            },
-        }));
     }
 
     public ChatEngineKind Kind => ChatEngineKind.ClaudeCode;
@@ -238,7 +230,11 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
                     try
                     {
                         using JsonDocument doc = JsonDocument.Parse(line);
-                        if (this.HandleEvent(doc.RootElement, chatSink) is { } outcome)
+                        if (Str(doc.RootElement, "type") == "control_request")
+                        {
+                            this.AnswerControlRequest(process, doc.RootElement);
+                        }
+                        else if (this.HandleEvent(doc.RootElement, chatSink) is { } outcome)
                         {
                             gotResult = true;
                             resultError = outcome.Error;
@@ -321,14 +317,7 @@ internal sealed partial class ClaudeCodeEngine : IChatEngine
             });
         }
 
-        this.approvalServer.Dispose();
-        try
-        {
-            File.Delete(this.mcpConfigPath);
-        }
-        catch (IOException)
-        {
-        }
+        this.StopToolServer();
     }
 
     private static string? Str(JsonElement element, string name) =>

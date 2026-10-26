@@ -143,8 +143,8 @@ public sealed class EditorFeatureTests
     }
 
     [Fact]
-    public void TheApprovalServerWaitsLongerThanClaudeCodesDefault()
+    public void TheToolServerWaitsLongerThanClaudeCodesDefault()
     {
-        Assert.True(ApprovalServer.CallTimeoutMilliseconds >= 60 * 60 * 1000); // Claude Code gives up after 5 minutes otherwise
+        Assert.True(VisualStudioToolServer.CallTimeoutMilliseconds >= 60 * 60 * 1000); // Claude Code gives up after 5 minutes otherwise
     }
 }

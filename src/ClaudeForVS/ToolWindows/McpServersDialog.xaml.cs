@@ -182,7 +182,7 @@ public partial class McpServersDialog : DialogWindow
     {
         IReadOnlyCollection<string> disabled = DisabledNames.McpServers.For(this.repoRoot);
         foreach (ReportedMcpServer server in servers
-            .Where(s => s.Name != ApprovalServer.ServerName)
+            .Where(s => s.Name != VisualStudioToolServer.ServerName)
             .OrderBy(s => s.IsConnector)
             .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
         {

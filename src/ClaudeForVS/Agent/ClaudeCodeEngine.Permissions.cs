@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using ClaudeForVS.Git;
@@ -17,13 +18,80 @@ namespace ClaudeForVS.Agent;
 internal sealed partial class ClaudeCodeEngine
 {
     // Tool calls the extension refused (the user said no, plan mode, unsaved changes...), so their failed results show
-    // as declined rather than as errors. Written by the approval server's threads.
+    // as declined rather than as errors. Written by the threads answering permission requests.
     private readonly ConcurrentDictionary<string, bool> deniedTools = new(StringComparer.Ordinal);
 
     // Edits the user approved only some of: the extension wrote the kept changes itself (before → what was written).
     private readonly ConcurrentDictionary<string, FileChange> partlyApplied = new(StringComparer.Ordinal);
 
-    /// <summary>Called by the approval server (on a thread-pool thread) when Claude Code needs permission.</summary>
+    /// <summary>
+    /// Answers one of Claude Code's control requests (a <c>can_use_tool</c> permission request) on a thread-pool thread,
+    /// so its output keeps being read while the user decides. Between messages (<paramref name="idle"/>) there's no
+    /// one to ask, so the request is declined.
+    /// </summary>
+    private void AnswerControlRequest(Process process, JsonElement message, bool idle = false)
+    {
+        string requestId = Str(message, "request_id") ?? string.Empty;
+        JsonElement request = message.TryGetProperty("request", out JsonElement r) ? r.Clone() : default;
+        _ = Task.Run(async () =>
+        {
+            string reply;
+            if (Str(request, "subtype") != "can_use_tool")
+            {
+                reply = ControlError(requestId, $"Unsupported control request: {Str(request, "subtype")}");
+            }
+            else
+            {
+                JsonElement input = request.TryGetProperty("input", out JsonElement i) && i.ValueKind == JsonValueKind.Object ? i : JsonDocument.Parse("{}").RootElement;
+                PermissionDecision decision;
+                try
+                {
+                    decision = idle
+                        ? new PermissionDecision(false, "No one is available to approve this.")
+                        : await this.DecideAsync(Str(request, "tool_name") ?? "unknown", input, Str(request, "tool_use_id")).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    // Claude Code waits for an answer however this goes wrong.
+                    decision = new PermissionDecision(false, ex is OperationCanceledException ? "Cancelled by the user." : ex.Message);
+                }
+
+                reply = ControlResponse(requestId, decision, input);
+            }
+
+            try
+            {
+                await this.WriteAsync(process, new UTF8Encoding(false).GetBytes(reply + "\n"), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+            {
+                // It was stopped while the user decided.
+            }
+        });
+    }
+
+    /// <summary>The control_response line answering a <c>can_use_tool</c> request with the user's decision. Internal for tests.</summary>
+    internal static string ControlResponse(string requestId, PermissionDecision decision, JsonElement input)
+    {
+        // Answered questions come back as a modified input (the original questions plus "answers").
+        JsonNode updatedInput = (decision.UpdatedInputJson is string json ? JsonNode.Parse(json) : JsonNode.Parse(input.GetRawText())) ?? new JsonObject();
+        JsonObject result = decision.Allow
+            ? new JsonObject { ["behavior"] = "allow", ["updatedInput"] = updatedInput }
+            : new JsonObject { ["behavior"] = "deny", ["message"] = decision.Message ?? "The user declined this action." };
+        return new JsonObject
+        {
+            ["type"] = "control_response",
+            ["response"] = new JsonObject { ["subtype"] = "success", ["request_id"] = requestId, ["response"] = result },
+        }.ToJsonString();
+    }
+
+    private static string ControlError(string requestId, string error) => new JsonObject
+    {
+        ["type"] = "control_response",
+        ["response"] = new JsonObject { ["subtype"] = "error", ["request_id"] = requestId, ["error"] = error },
+    }.ToJsonString();
+
+    /// <summary>Called on a thread-pool thread when Claude Code needs permission.</summary>
     private async Task<PermissionDecision> DecideAsync(string toolName, JsonElement input, string? toolUseId)
     {
         PermissionDecision decision = await this.DecideCoreAsync(toolName, input, toolUseId).ConfigureAwait(false);
@@ -38,21 +106,21 @@ internal sealed partial class ClaudeCodeEngine
     private async Task<PermissionDecision> DecideCoreAsync(string toolName, JsonElement input, string? toolUseId)
     {
         // Reading the Error List, the debugger, the code model or the package list never needs asking; a build is treated like a command.
-        if (toolName is ApprovalServer.DiagnosticsTool or ApprovalServer.DebugTool or ApprovalServer.ActiveDocumentTool or ApprovalServer.CodeFixesTool
-            or ApprovalServer.DefinitionTool or ApprovalServer.ReferencesTool or ApprovalServer.SymbolsTool or ApprovalServer.ListPackagesTool)
+        if (toolName is VisualStudioToolServer.DiagnosticsTool or VisualStudioToolServer.DebugTool or VisualStudioToolServer.ActiveDocumentTool or VisualStudioToolServer.CodeFixesTool
+            or VisualStudioToolServer.DefinitionTool or VisualStudioToolServer.ReferencesTool or VisualStudioToolServer.SymbolsTool or VisualStudioToolServer.ListPackagesTool)
         {
             return new PermissionDecision(true);
         }
 
         // A rename or code fix asks for approval itself, once its changes are known and shown together.
-        if (toolName is ApprovalServer.RenameTool or ApprovalServer.ApplyCodeFixTool)
+        if (toolName is VisualStudioToolServer.RenameTool or VisualStudioToolServer.ApplyCodeFixTool)
         {
             return this.Mode == AgentMode.Plan
                 ? new PermissionDecision(false, "Plan mode is on, so no files can be changed. Describe the change as text instead; the user can switch modes from the model menu above the chat.")
                 : new PermissionDecision(true);
         }
 
-        if (toolName == ApprovalServer.BuildTool)
+        if (toolName == VisualStudioToolServer.BuildTool)
         {
             if (this.Mode == AgentMode.Plan)
             {
@@ -65,7 +133,7 @@ internal sealed partial class ClaudeCodeEngine
             }
         }
 
-        if (toolName is ApprovalServer.AddPackageTool or ApprovalServer.RemovePackageTool)
+        if (toolName is VisualStudioToolServer.AddPackageTool or VisualStudioToolServer.RemovePackageTool)
         {
             if (this.Mode == AgentMode.Plan)
             {
@@ -136,8 +204,8 @@ internal sealed partial class ClaudeCodeEngine
                 ? FileChange.ForClaudeCodeTool(toolName, input, path, FileChange.ReadOrEmpty(path))
                 : null;
             WithDiff(toolName, change, ref kind, ref detail);
-            bool isBuild = toolName == ApprovalServer.BuildTool;
-            bool isPackage = toolName is ApprovalServer.AddPackageTool or ApprovalServer.RemovePackageTool;
+            bool isBuild = toolName == VisualStudioToolServer.BuildTool;
+            bool isPackage = toolName is VisualStudioToolServer.AddPackageTool or VisualStudioToolServer.RemovePackageTool;
             string? rule = command is null ? null : CommandRules.RuleFor(command, viaShell: true);
             string? allowAllLabel = isEdit ? "Allow all edits" : isBuild ? "Always allow builds here" : isPackage ? "Always allow package changes here" : rule != null ? $"Always allow \"{rule}\" here" : null;
 
@@ -267,3 +335,6 @@ internal sealed partial class ClaudeCodeEngine
             (folder is null ? this.RepoRoot.TrimEnd('\\', '/') : Path.Combine(this.RepoRoot, folder)) + Path.DirectorySeparatorChar,
             StringComparison.OrdinalIgnoreCase);
 }
+
+/// <param name="UpdatedInputJson">Replacement tool input to run with, as JSON; null runs the original input.</param>
+internal readonly record struct PermissionDecision(bool Allow, string? Message = null, string? UpdatedInputJson = null);

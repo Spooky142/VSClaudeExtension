@@ -74,6 +74,19 @@ internal sealed partial class ClaudeCodeEngine
                 {
                     return; // it exited
                 }
+
+                // A permission request left unanswered would leave Claude Code waiting for good.
+                if (line.Contains("\"control_request\""))
+                {
+                    try
+                    {
+                        using JsonDocument doc = JsonDocument.Parse(line);
+                        this.AnswerControlRequest(process, doc.RootElement, idle: true);
+                    }
+                    catch (JsonException)
+                    {
+                    }
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
@@ -82,11 +95,20 @@ internal sealed partial class ClaudeCodeEngine
         }
     }
 
-    private static async Task WriteAsync(Process process, byte[] bytes, CancellationToken cancellationToken)
+    /// <summary>Writes one stream-json line (a prompt, or the answer to a permission request) to Claude Code's stdin.</summary>
+    private async Task WriteAsync(Process process, byte[] bytes, CancellationToken cancellationToken)
     {
-        Stream stdin = process.StandardInput.BaseStream;
-        await stdin.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
-        await stdin.FlushAsync(cancellationToken);
+        await this.inputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Stream stdin = process.StandardInput.BaseStream;
+            await stdin.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            await stdin.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.inputGate.Release();
+        }
     }
 
     /// <summary>The Claude Code process for the next message: the running one if it still fits the chat's settings, otherwise a new one.</summary>
@@ -107,9 +129,8 @@ internal sealed partial class ClaudeCodeEngine
         this.restartNeeded = false;
         this.processSettings = (this.Mode, this.Effort, this.SubagentModel, disallowed, skillOverrides, LowPriorityMode.IsActive, this.VisualStudioTools);
 
-        // Claude Code lists the server's tools as it starts.
-        this.approvalServer.OfferVisualStudioTools = this.VisualStudioTools;
-
+        // Permission requests come in on stdout and are answered on stdin (see AnswerControlRequest), so the only MCP
+        // server the extension runs is the one offering the Visual Studio tools, and only while they're turned on.
         var args = new List<string>
         {
             "-p",
@@ -119,11 +140,20 @@ internal sealed partial class ClaudeCodeEngine
             "--include-partial-messages",
             "--model", AgentSettings.ClaudeCodeAlias(this.Model),
             "--permission-mode", this.Mode == AgentMode.Plan ? "plan" : "default",
-            "--mcp-config", this.mcpConfigPath,
-            "--permission-prompt-tool", ApprovalServer.QualifiedToolName,
+            "--permission-prompt-tool", "stdio",
             "--append-system-prompt", ExtraSystemPrompt + " " + (this.VisualStudioTools ? VisualStudioToolsPrompt + " " : string.Empty) + AgentSettings.ModeInstructions(this.Mode),
             "--effort", AgentSettings.EffortApiName(this.Effort),
         };
+
+        if (this.VisualStudioTools)
+        {
+            args.Add("--mcp-config");
+            args.Add(this.StartToolServer());
+        }
+        else
+        {
+            this.StopToolServer();
+        }
 
         // Passed as command-line settings rather than an environment variable, which an env block in the user's
         // ~/.claude/settings.json can replace; settings from the command line take precedence over the user's.
@@ -165,11 +195,6 @@ internal sealed partial class ClaudeCodeEngine
         };
         ClaudeCodeCli.RemoveApiKeyVariables(psi); // use the subscription login, not a stray API key
         LowPriorityMode.Apply(psi); // past the 5-hour limit, carry on against the weekly one
-
-        // The approval tool's reply echoes the tool's whole input back (e.g. a file being written), JSON-escaped inside a
-        // text block. Past Claude Code's default MCP output limit (25k tokens) the reply gets truncated, which Claude Code
-        // then rejects as an invalid permission result, so large writes would always fail.
-        psi.EnvironmentVariables["MAX_MCP_OUTPUT_TOKENS"] = "2000000";
 
         // Left to itself, Claude Code runs subagents (and long commands) in the background and ends its reply while they
         // work, and a scheduled prompt starts a reply of its own later. Either way the output comes when no message is
