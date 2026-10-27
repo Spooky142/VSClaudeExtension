@@ -166,7 +166,8 @@ internal static class SlashCommands
         "Resolve the current git merge conflicts in this repository. Use `git status` to find the conflicted files (from a "
         + "merge, rebase, cherry-pick or stash), and `git log` on both sides if it helps to understand what each change was "
         + "for. In each file, resolve every conflict so the result keeps the intent of both sides where possible, and "
-        + "remove all the conflict markers. Don't stage, commit or continue the merge or rebase; leave that to me. Finish "
+        + "remove all the conflict markers. Then stage each file you resolved with `git add` (only those files, and only "
+        + "once no conflict markers remain in them). Don't commit or continue the merge or rebase; leave that to me. Finish "
         + "with a short summary of how you resolved each file, calling out any conflict where you had to choose one side "
         + "over the other. If there are no conflicts, say so.";
 
